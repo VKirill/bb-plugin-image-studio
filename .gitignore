@@ -1,0 +1,10 @@
+dist/
+node_modules/
+.bb/
+.DS_Store
+.env
+.env.*
+*.pem
+data.db
+data.db-*
+/image-studio/
