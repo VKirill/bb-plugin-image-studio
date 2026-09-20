@@ -34,9 +34,10 @@ Assembled Banana prompt (plugin + agent):
 ```
 Subject identity: Kirill is a 34-year-old man, 168 cm tall, 90 kg, athletic build.
 Images 1–2 are selfie reference photos of this person. Keep the same face and identity. Do not invent a different person.
-Write the user task as labeled clauses in this order when they fit: Subject, Composition, Action, Location, Style. Put any on-image words in double quotes. If a part is missing, infer a simple photographic default rather than a collage.
-Task: Subject: the referenced person in a navy single-breasted wool suit...
+Subject: the referenced person in a navy single-breasted wool suit...
 ```
+
+The plugin does **not** wrap Banana (or the other models) in extra “clause order” instructions. Put the template labels in `prompt` yourself.
 
 Woman with bust `C (size 3)`, two selfies and a manicure: the plugin adds `bust C (size 3)` on the identity line, then:
 
@@ -48,4 +49,4 @@ One selfie + manicure → Image 2 is the manicure. Three selfies + manicure → 
 
 ## What the agent still writes
 
-Clothes, action, place, lighting, camera — as labeled clauses in [nano-banana.md](nano-banana.md) or [muse.md](muse.md). Do not re-describe the face, body numbers, or figure type. Do not invent a different person. Do not add medical or sexual detail the user did not ask for. Aspect and size are picker buttons, not prompt text.
+Clothes, action, place, lighting, camera — using the template for the **enabled model**: [nano-banana.md](nano-banana.md), [muse.md](muse.md), [gpt-image.md](gpt-image.md), [flux-2.md](flux-2.md), [seedream.md](seedream.md), or [grok-imagine.md](grok-imagine.md). Do not re-describe the face, body numbers, or figure type. Do not invent a different person. Do not add medical or sexual detail the user did not ask for. Aspect and size are picker buttons, not prompt text.

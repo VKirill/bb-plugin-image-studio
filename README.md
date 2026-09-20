@@ -41,7 +41,7 @@ Then:
 
 ## For agents
 
-The bundled skill `image-studio` tells the agent to open the Nano Banana or Muse prompt template, then call `image_studio_generate` with the scene (and a profile name if you named a person). Do not pass model, aspect, or size unless the user named them in that turn. Wait until the user presses Send.
+The bundled skill `image-studio` tells the agent to open the prompt template for the chosen model (Nano Banana, Muse, GPT Image 2.5, FLUX.2, Seedream, or Grok Imagine), then call `image_studio_generate` with the scene (and a profile name if you named a person). Do not pass model, aspect, or size unless the user named them in that turn. Wait until the user presses Send.
 
 CLI (scripts, terminals, and hidden Agency workers; skips the chat picker). Preferred Nano Banana gateway is **kie**. Muse Image always uses **fal**. GPT Image 2.5, FLUX.2, Seedream, and Grok follow the preferred gateway. Pass `--gateway fal` only when you want Banana (or another dual model) on fal.ai.
 
