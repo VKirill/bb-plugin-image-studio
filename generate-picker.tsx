@@ -13,7 +13,7 @@ import {
   type LastChoice,
   type ModelId,
 } from "./src/formats";
-import { MODEL_IDS } from "./src/models";
+import { MODEL_IDS, modelFalOnly } from "./src/models";
 
 function ChoiceButtons<T extends string>({
   label,
@@ -65,9 +65,14 @@ function ChoiceButtons<T extends string>({
   );
 }
 
-function modelLabel(id: ModelId, locale: Locale): string {
+export function modelLabel(id: ModelId, locale: Locale): string {
   if (id === "nano-banana-2") return t("modelNano2", {}, locale);
   if (id === "nano-banana-pro") return t("modelNanoPro", {}, locale);
+  if (id === "gpt-image-2.5-flare") return t("modelGptFlare", {}, locale);
+  if (id === "gpt-image-2.5-sunburst") return t("modelGptSunburst", {}, locale);
+  if (id === "flux-2-pro") return t("modelFlux", {}, locale);
+  if (id === "seedream-5") return t("modelSeedream", {}, locale);
+  if (id === "grok-imagine") return t("modelGrok", {}, locale);
   return t("modelMuse", {}, locale);
 }
 
@@ -88,9 +93,9 @@ export function GeneratePickerForm({
   showAspect?: boolean;
   compact?: boolean;
 }) {
-  const models = MODEL_IDS.filter((id) => enabledModels[id] !== false);
+  const models = MODEL_IDS.filter((id) => enabledModels[id] === true);
   const showResolution = modelUsesResolution(value.model);
-  const showGateway = value.model !== "muse-image";
+  const showGateway = !modelFalOnly(value.model);
 
   return (
     <div className={cn("flex flex-col", compact ? "gap-2" : "gap-3")}>
@@ -104,7 +109,7 @@ export function GeneratePickerForm({
           onChange({
             ...value,
             model,
-            gateway: model === "muse-image" ? "fal" : value.gateway,
+            gateway: modelFalOnly(model) ? "fal" : modelFalOnly(value.model) ? "kie" : value.gateway,
           })
         }
         nameFor={(id) => modelLabel(id, locale)}
@@ -113,14 +118,14 @@ export function GeneratePickerForm({
         <ChoiceButtons
           compact={compact}
           label={t("gateway", {}, locale)}
-          values={["fal", "kie"] as const}
+          values={["kie", "fal"] as const}
           selected={value.gateway}
           disabled={busy}
           onSelect={(gateway) => onChange({ ...value, gateway })}
           nameFor={(id) => (id === "fal" ? t("gatewayFal", {}, locale) : t("gatewayKie", {}, locale))}
         />
       ) : (
-        <p className="text-xs text-muted-foreground">{t("museFalOnly", {}, locale)}</p>
+        <p className="text-xs text-muted-foreground">{t("falOnlyModels", {}, locale)}</p>
       )}
       {showAspect ? (
         <ChoiceButtons

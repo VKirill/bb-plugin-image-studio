@@ -7,14 +7,17 @@ import {
   FAL_ENDPOINTS,
   KIE_MODELS,
   MODEL_IDS,
+  MODEL_SETTING,
+  modelEnabled,
+  modelFalOnly,
   pickSecret,
   resolveRoute,
 } from "./src/models.js";
 import { findProfile, parseProfiles, profileSchema, type PersonProfile } from "./src/profiles.js";
 import { composePrompt } from "./src/prompt.js";
-import { falGenerate, kieGenerate } from "./src/providers.js";
+import { formatUnknownError, falGenerate, kieGenerate } from "./src/providers.js";
 import { encodeWebp, imageSize, WEBP_FULL, WEBP_THUMB } from "./src/encode-webp.js";
-import { enabledFromSettings, mergeSettings, type StudioSettings } from "./src/settings.js";
+import { enabledFromSettings, mergeSettings, settingsSchema, type StudioSettings } from "./src/settings.js";
 import {
   GENERATE_PICKER_ID,
   lastChoiceSchema,
@@ -30,6 +33,7 @@ const SETTINGS_KEY = "settings";
 const PROFILES_KEY = "profiles";
 const LAST_GENERATE_KEY = "last-generate";
 const LAST_GENERATE_RES_2K = "last-generate-res-default-2k";
+const DEFAULT_GATEWAY_KIE = "default-gateway-kie";
 const CHANGED = "image-studio-changed";
 
 const generationSchema = z.object({
@@ -59,15 +63,7 @@ export const rpcContract = defineRpcContract({
   snapshot: {
     input: z.object({ projectId: z.string().nullable() }),
     output: z.object({
-      settings: z.object({
-        nanoBanana2: z.boolean(),
-        nanoBananaPro: z.boolean(),
-        museImage: z.boolean(),
-        defaultGateway: z.enum(["fal", "kie"]),
-        falKeyCatalog: z.string(),
-        kieKeyCatalog: z.string(),
-        uiLocale: z.enum(["auto", "en", "ru"]),
-      }),
+      settings: settingsSchema,
       secrets: z.object({
         falConfigured: z.boolean(),
         kieConfigured: z.boolean(),
@@ -79,15 +75,7 @@ export const rpcContract = defineRpcContract({
     }),
   },
   update_settings: {
-    input: z.object({
-      nanoBanana2: z.boolean().optional(),
-      nanoBananaPro: z.boolean().optional(),
-      museImage: z.boolean().optional(),
-      defaultGateway: z.enum(["fal", "kie"]).optional(),
-      falKeyCatalog: z.string().optional(),
-      kieKeyCatalog: z.string().optional(),
-      uiLocale: z.enum(["auto", "en", "ru"]).optional(),
-    }),
+    input: settingsSchema.partial(),
     output: z.object({ saved: z.boolean() }),
   },
   set_secret: {
@@ -159,7 +147,7 @@ export const rpcContract = defineRpcContract({
 });
 
 function describe(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  return formatUnknownError(error);
 }
 
 function flag(argv: string[], name: string): string | undefined {
@@ -194,7 +182,22 @@ export default async function plugin(bb: BbPluginApi) {
     await mkdir(rootDir, { recursive: true });
   }
 
+  async function migrateNanoBananaGatewayKie(): Promise<void> {
+    const moved = await bb.storage.kv.get<boolean>(DEFAULT_GATEWAY_KIE);
+    if (moved === true) return;
+    await bb.storage.kv.set(DEFAULT_GATEWAY_KIE, true);
+    const settings = mergeSettings(await bb.storage.kv.get<unknown>(SETTINGS_KEY));
+    if (settings.defaultGateway !== "kie") {
+      await writeSettings({ ...settings, defaultGateway: "kie" });
+    }
+    const last = parseLastChoice(await bb.storage.kv.get<unknown>(LAST_GENERATE_KEY));
+    if (last && !modelFalOnly(last.model) && last.gateway === "fal") {
+      await writeLastGenerate({ ...last, gateway: "kie" });
+    }
+  }
+
   async function readSettings(): Promise<StudioSettings> {
+    await migrateNanoBananaGatewayKie();
     return mergeSettings(await bb.storage.kv.get<unknown>(SETTINGS_KEY));
   }
 
@@ -279,6 +282,7 @@ export default async function plugin(bb: BbPluginApi) {
   }
 
   async function readLastGenerate(): Promise<LastChoice | null> {
+    await migrateNanoBananaGatewayKie();
     const last = parseLastChoice(await bb.storage.kv.get<unknown>(LAST_GENERATE_KEY));
     const moved = await bb.storage.kv.get<boolean>(LAST_GENERATE_RES_2K);
     if (moved === true) return last;
@@ -482,9 +486,13 @@ export default async function plugin(bb: BbPluginApi) {
 
     const falEndpoint =
       references.length > 0 ? FAL_ENDPOINTS[route.model].edit : FAL_ENDPOINTS[route.model].generate;
+    const kie = KIE_MODELS[route.model];
     const result =
       route.gateway === "kie"
-        ? await kieGenerate(keys.kie!, KIE_MODELS[route.model]!, job)
+        ? await kieGenerate(keys.kie!, references.length > 0 ? kie!.edit : kie!.generate, {
+            ...job,
+            kieRefField: kie!.refField,
+          })
         : await falGenerate(keys.fal!, falEndpoint, job);
 
     const imageResponse = await fetch(result.url);
@@ -583,9 +591,11 @@ export default async function plugin(bb: BbPluginApi) {
     update_settings: async (patch) => {
       const current = await readSettings();
       const next = { ...current };
-      if (patch.nanoBanana2 !== undefined) next.nanoBanana2 = patch.nanoBanana2;
-      if (patch.nanoBananaPro !== undefined) next.nanoBananaPro = patch.nanoBananaPro;
-      if (patch.museImage !== undefined) next.museImage = patch.museImage;
+      for (const id of MODEL_IDS) {
+        const key = MODEL_SETTING[id];
+        const value = patch[key];
+        if (typeof value === "boolean") next[key] = value;
+      }
       if (patch.defaultGateway !== undefined) next.defaultGateway = patch.defaultGateway;
       if (patch.falKeyCatalog !== undefined) next.falKeyCatalog = patch.falKeyCatalog;
       if (patch.kieKeyCatalog !== undefined) next.kieKeyCatalog = patch.kieKeyCatalog;
@@ -715,7 +725,7 @@ export default async function plugin(bb: BbPluginApi) {
 
   const usage = [
     "Usage:",
-    "  bb image-studio generate --prompt <text> [--model nano-banana-2|nano-banana-pro|muse-image]",
+    "  bb image-studio generate --prompt <text> [--model nano-banana-2|nano-banana-pro|muse-image|gpt-image-2.5-flare|…]",
     "                           [--gateway fal|kie] [--profile <name>] [--aspect 1:1] [--json]",
     "  bb image-studio profiles [--json]",
     "  bb image-studio models [--json]",
@@ -784,9 +794,7 @@ export default async function plugin(bb: BbPluginApi) {
           return reply(
             payload,
             [
-              `Nano Banana 2: ${settings.nanoBanana2 ? "on" : "off"}`,
-              `Nano Banana Pro: ${settings.nanoBananaPro ? "on" : "off"}`,
-              `Muse Image: ${settings.museImage ? "on" : "off"}`,
+              ...MODEL_IDS.map((id) => `${id}: ${settings[MODEL_SETTING[id]] ? "on" : "off"}`),
               `Preferred gateway: ${settings.defaultGateway}`,
               `fal.ai key: ${keys.fal ? "yes" : "no"}`,
               `kie.ai key: ${keys.kie ? "yes" : "no"}`,
@@ -868,12 +876,7 @@ export default async function plugin(bb: BbPluginApi) {
                 profileName: profile?.name ?? null,
                 models: MODEL_IDS.map((id) => ({
                   id,
-                  enabled:
-                    id === "nano-banana-2"
-                      ? settings.nanoBanana2
-                      : id === "nano-banana-pro"
-                        ? settings.nanoBananaPro
-                        : settings.museImage,
+                  enabled: modelEnabled(id, enabledFromSettings(settings)),
                 })),
                 selected,
                 locale: settings.uiLocale === "auto" ? undefined : settings.uiLocale,

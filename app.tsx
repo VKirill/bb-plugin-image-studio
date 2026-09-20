@@ -4,7 +4,6 @@ import { definePluginApp, useBbContext, useRealtime, useRpc } from "@get-bb/plug
 import type { rpcContract } from "./server";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -14,11 +13,13 @@ import {
 import { Icon, preloadExtendedIcons } from "@/components/ui/icon";
 import { Input } from "@/components/ui/input";
 import { GeneratePickerForm, GeneratePickerInteraction } from "./generate-picker";
+import { ModelCatalogField } from "./model-catalog";
 import { detectLocale, t } from "./i18n";
 import type { I18nKey, Locale } from "./i18n";
 import { selfieAt, BODY_OPTIONS, BUST_OPTIONS, type PersonProfile } from "./src/profiles";
-import type { StudioSettings } from "./src/settings";
 import { aspectLabel, DEFAULT_LAST_CHOICE, GENERATE_PICKER_ID, type LastChoice } from "./src/formats";
+import { MODEL_IDS, modelFalOnly } from "./src/models";
+import { enabledFromSettings, type StudioSettings } from "./src/settings";
 
 type Tab = "settings" | "people" | "gallery";
 type UiLocale = "auto" | "en" | "ru";
@@ -727,7 +728,7 @@ function StudioPage({ initialView = "gallery" }: { initialView?: Tab }) {
     load();
   };
 
-  const museSelected = model === "muse-image";
+  const falOnlySelected = modelFalOnly((model || "nano-banana-2") as LastChoice["model"]);
 
   const navItems: Array<{ id: Tab; icon: "GridView" | "UserRound" | "Settings"; label: string }> = [
     { id: "gallery", icon: "GridView", label: t("tabGallery", {}, locale) },
@@ -737,14 +738,14 @@ function StudioPage({ initialView = "gallery" }: { initialView?: Tab }) {
 
   const pickerValue = {
     model: (model || "nano-banana-2") as LastChoice["model"],
-    gateway: (museSelected ? "fal" : gateway || "fal") as LastChoice["gateway"],
+    gateway: (falOnlySelected ? "fal" : gateway || "kie") as LastChoice["gateway"],
     resolution,
   };
-  const pickerEnabled = {
-    "nano-banana-2": settings?.nanoBanana2 !== false,
-    "nano-banana-pro": settings?.nanoBananaPro !== false,
-    "muse-image": settings?.museImage !== false,
-  };
+  const pickerEnabled = settings
+    ? enabledFromSettings(settings)
+    : Object.fromEntries(
+        MODEL_IDS.map((id) => [id, id === "nano-banana-2" || id === "nano-banana-pro" || id === "muse-image"]),
+      );
   const onPickerChange = (next: LastChoice) => {
     setModel(next.model);
     setGateway(next.gateway);
@@ -846,9 +847,9 @@ function StudioPage({ initialView = "gallery" }: { initialView?: Tab }) {
                     projectId: projectId ?? null,
                     prompt: prompt.trim(),
                     model: model || undefined,
-                    gateway: museSelected ? "fal" : gateway || undefined,
+                    gateway: falOnlySelected ? "fal" : gateway || undefined,
                     profile: profileId || undefined,
-                    resolution: museSelected ? undefined : resolution,
+                    resolution: falOnlySelected && model === "muse-image" ? undefined : resolution,
                   })
                   .then(() => {
                     setPrompt("");
@@ -976,33 +977,8 @@ function StudioPage({ initialView = "gallery" }: { initialView?: Tab }) {
           <div className="mt-5 flex flex-col gap-5">
             <section>
               <h2 className="mb-3 text-sm font-medium">{t("modelsHeading", {}, locale)}</h2>
-              <div className="flex flex-col gap-2">
-                <label className="flex items-center gap-2 text-sm">
-                  <Checkbox
-                    checked={settings.nanoBanana2}
-                    onCheckedChange={(checked) => saveSettings({ nanoBanana2: checked === true })}
-                  />
-                  {t("modelNano2", {}, locale)}
-                </label>
-                <label className="flex items-center gap-2 text-sm">
-                  <Checkbox
-                    checked={settings.nanoBananaPro}
-                    onCheckedChange={(checked) => saveSettings({ nanoBananaPro: checked === true })}
-                  />
-                  {t("modelNanoPro", {}, locale)}
-                </label>
-                <label className="flex items-center gap-2 text-sm">
-                  <Checkbox
-                    checked={settings.museImage}
-                    onCheckedChange={(checked) => saveSettings({ museImage: checked === true })}
-                  />
-                  <span>
-                    {t("modelMuse", {}, locale)}
-                    <span className="block text-xs font-normal text-muted-foreground">fal.ai</span>
-                  </span>
-                </label>
-              </div>
-              <p className="mt-2 text-xs text-muted-foreground">{t("museFalOnly", {}, locale)}</p>
+              <ModelCatalogField settings={settings} locale={locale} onChange={saveSettings} />
+              <p className="mt-2 text-xs text-muted-foreground">{t("falOnlyModels", {}, locale)}</p>
               <label className="mt-4 block text-sm">
                 {t("defaultGateway", {}, locale)}
                 <select
@@ -1012,8 +988,8 @@ function StudioPage({ initialView = "gallery" }: { initialView?: Tab }) {
                     saveSettings({ defaultGateway: event.target.value === "kie" ? "kie" : "fal" })
                   }
                 >
-                  <option value="fal">{t("gatewayFal", {}, locale)}</option>
                   <option value="kie">{t("gatewayKie", {}, locale)}</option>
+                  <option value="fal">{t("gatewayFal", {}, locale)}</option>
                 </select>
               </label>
               <p className="mt-1 text-xs text-muted-foreground">{t("gatewayNanoOnly", {}, locale)}</p>

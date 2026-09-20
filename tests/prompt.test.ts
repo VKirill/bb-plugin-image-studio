@@ -28,14 +28,13 @@ test("profile line includes bust only for women", () => {
   assert.doesNotMatch(man, /bust/);
 });
 
-test("banana injects Google clause order", () => {
+test("banana sends the scene, not agent clause instructions", () => {
   const prompt = composePrompt({
     userPrompt: "Subject: a ceramic mug.\nComposition: close-up, 50mm.",
     model: "nano-banana-2",
   });
-  assert.match(prompt, /Subject, Composition, Action, Location, Style/);
-  assert.match(prompt, /double quotes/);
-  assert.match(prompt, /ceramic mug/);
+  assert.equal(prompt, "Subject: a ceramic mug.\nComposition: close-up, 50mm.");
+  assert.doesNotMatch(prompt, /Write the user task/);
 });
 
 test("muse prompt asks to change only what was requested", () => {

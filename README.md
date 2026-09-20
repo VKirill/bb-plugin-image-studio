@@ -18,7 +18,7 @@ Generate project photos in BB through [fal.ai](https://fal.ai/) and [kie.ai](htt
 
 ![Person profile with selfie slots and body fields](screenshots/profiles.png)
 
-- **Settings** — enable models, English or Russian UI, API keys. A key typed in settings overrides Env Catalog. **Muse Image is fal.ai only**; kie.ai does not host it.
+- **Settings** — searchable dropdown to enable models, English or Russian UI, API keys. A key typed in settings overrides Env Catalog. **Muse Image is fal.ai only.** GPT Image 2.5, FLUX.2 Pro, Seedream 5, and Grok Imagine are off until you tick them.
 
 ![Settings: models, language, and API keys](screenshots/settings.png)
 
@@ -35,7 +35,7 @@ Or install **Image Studio** from the BB Community marketplace once the listing i
 Then:
 
 1. Open **Image Studio** in the BB sidebar.
-2. In **Settings**, turn on the models you want and add a fal.ai and/or kie.ai key (or pick one from Env Catalog).
+2. In **Settings**, open the models list, search if needed, tick the ones you want, and add a fal.ai and/or kie.ai key (or pick one from Env Catalog).
 3. Optionally add a person under **Profiles**.
 4. Generate from the gallery form, or ask an agent in a project thread for a photo.
 
@@ -43,12 +43,17 @@ Then:
 
 The bundled skill `image-studio` tells the agent to open the Nano Banana or Muse prompt template, then call `image_studio_generate` with the scene (and a profile name if you named a person). Do not pass model, aspect, or size unless the user named them in that turn. Wait until the user presses Send.
 
-CLI (scripts and terminals; skips the chat picker):
+CLI (scripts, terminals, and hidden Agency workers; skips the chat picker). Preferred Nano Banana gateway is **kie**. Muse Image always uses **fal**. GPT Image 2.5, FLUX.2, Seedream, and Grok follow the preferred gateway. Pass `--gateway fal` only when you want Banana (or another dual model) on fal.ai.
 
 ```sh
 bb image-studio generate --prompt "…"
+bb image-studio generate --prompt "…" --gateway fal
+bb image-studio generate --prompt "…" --model muse-image
+bb image-studio generate --prompt "…" --model gpt-image-2.5-flare
 bb image-studio profiles
 ```
+
+A worker that cannot press Send must use this CLI, not `image_studio_generate`. Failures print on stderr (and as the RPC error text). After a failed fal call you should see an HTTP status and JSON from fal.ai, not `[object Object]`. Look at the CLI stderr or `bb plugin rpc call image-studio generate`.
 
 ## Requirements
 

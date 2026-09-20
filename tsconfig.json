@@ -24,6 +24,7 @@
     "server.ts",
     "app.tsx",
     "generate-picker.tsx",
+    "model-catalog.tsx",
     "i18n.ts",
     "src",
     "components",

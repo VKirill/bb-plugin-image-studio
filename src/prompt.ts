@@ -55,15 +55,10 @@ export function composePrompt(input: {
     blocks.push(
       "Follow the instruction literally. For a new scene name objects, materials, lighting, and any on-image text exactly. For an edit, change only what the user asked for and keep unmentioned details stable.",
     );
-  } else {
-    blocks.push(
-      "Write the user task as labeled clauses in this order when they fit: Subject, Composition, Action, Location, Style. Put any on-image words in double quotes. If a part is missing, infer a simple photographic default rather than a collage.",
-    );
-    if (input.model === "nano-banana-pro") {
-      blocks.push("Render any requested text in the image as readable typography.");
-    }
+  } else if (input.model === "nano-banana-pro") {
+    blocks.push("Render any requested text in the image as readable typography.");
   }
 
-  blocks.push(`Task: ${task}`);
+  blocks.push(task);
   return blocks.join("\n");
 }

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { GatewayId, ModelId } from "./models.js";
+import type { EnabledModels, GatewayId, ModelId } from "./models.js";
 
 export type { ModelId };
 
@@ -11,7 +11,16 @@ export type AspectRatio = (typeof ASPECT_RATIOS)[number];
 export const RESOLUTIONS = ["1K", "2K", "4K"] as const;
 export type Resolution = (typeof RESOLUTIONS)[number];
 
-const MODEL_VALUES = ["nano-banana-2", "nano-banana-pro", "muse-image"] as const;
+const MODEL_VALUES = [
+  "nano-banana-2",
+  "nano-banana-pro",
+  "muse-image",
+  "gpt-image-2.5-flare",
+  "gpt-image-2.5-sunburst",
+  "flux-2-pro",
+  "seedream-5",
+  "grok-imagine",
+] as const;
 
 export const lastChoiceSchema = z.object({
   model: z.enum(MODEL_VALUES),
@@ -23,7 +32,7 @@ export type LastChoice = z.infer<typeof lastChoiceSchema>;
 
 export const DEFAULT_LAST_CHOICE: LastChoice = {
   model: "nano-banana-2",
-  gateway: "fal",
+  gateway: "kie",
   aspectRatio: "4:5",
   resolution: "2K",
 };
@@ -46,12 +55,33 @@ export function aspectLabel(width: number, height: number): string {
 }
 
 export function parseLastChoice(raw: unknown): LastChoice | null {
-  const parsed = lastChoiceSchema.safeParse(raw);
+  let value = raw;
+  if (value && typeof value === "object" && "model" in value) {
+    const model = (value as { model?: unknown }).model;
+    if (model === "gpt-image" || model === "gpt-image-1.5") {
+      value = { ...(value as object), model: "gpt-image-2.5-flare" };
+    }
+  }
+  const parsed = lastChoiceSchema.safeParse(value);
   return parsed.success ? parsed.data : null;
 }
 
 export function modelUsesResolution(model: ModelId): boolean {
-  return model !== "muse-image";
+  return model.startsWith("nano-banana") || model.startsWith("gpt-image");
+}
+
+export function gptImageSize(aspect?: string): "square_hd" | "portrait_4_3" | "portrait_16_9" | "landscape_4_3" | "landscape_16_9" {
+  if (!aspect || aspect === "1:1") return "square_hd";
+  if (aspect === "9:16") return "portrait_16_9";
+  if (aspect === "4:5" || aspect === "3:4" || aspect === "2:3") return "portrait_4_3";
+  if (aspect === "16:9" || aspect === "21:9") return "landscape_16_9";
+  return "landscape_4_3";
+}
+
+export function gptImageQuality(resolution?: string): "medium" | "high" | "xhigh" {
+  if (resolution === "1K") return "medium";
+  if (resolution === "4K") return "xhigh";
+  return "high";
 }
 
 function parseAspect(value: string | undefined): AspectRatio | null {
@@ -71,21 +101,27 @@ function parseSuggestedModel(value: string | undefined): ModelId | null {
   if (id === "nano-banana-2" || id === "nanobanana2" || id === "nb2") return "nano-banana-2";
   if (id === "nano-banana-pro" || id === "nanobananapro" || id === "nbpro") return "nano-banana-pro";
   if (id === "muse-image" || id === "muse") return "muse-image";
+  if (
+    id === "gpt-image-2.5-flare" ||
+    id === "gpt-image-2.5" ||
+    id === "gpt-image" ||
+    id === "gpt" ||
+    id === "gptimage" ||
+    id === "gpt-image-1.5"
+  ) {
+    return "gpt-image-2.5-flare";
+  }
+  if (id === "gpt-image-2.5-sunburst" || id === "sunburst") return "gpt-image-2.5-sunburst";
+  if (id === "flux-2-pro" || id === "flux" || id === "flux-2") return "flux-2-pro";
+  if (id === "seedream-5" || id === "seedream") return "seedream-5";
+  if (id === "grok-imagine" || id === "grok") return "grok-imagine";
   return null;
 }
 
-export type PickerEnabled = {
-  nanoBanana2: boolean;
-  nanoBananaPro: boolean;
-  museImage: boolean;
-};
+export type PickerEnabled = EnabledModels;
 
 function availableModels(enabled: PickerEnabled): ModelId[] {
-  const ids: ModelId[] = [];
-  if (enabled.nanoBanana2) ids.push("nano-banana-2");
-  if (enabled.nanoBananaPro) ids.push("nano-banana-pro");
-  if (enabled.museImage) ids.push("muse-image");
-  return ids;
+  return MODEL_VALUES.filter((id) => enabled[id]);
 }
 
 export function resolvePickerSelection(input: {
@@ -111,8 +147,6 @@ export function resolvePickerSelection(input: {
     gateway = "fal";
   } else if (input.suggestedGateway === "fal" || input.suggestedGateway === "kie") {
     gateway = input.suggestedGateway;
-  } else if (input.last?.gateway) {
-    gateway = input.last.gateway;
   } else {
     gateway = input.defaultGateway;
   }
