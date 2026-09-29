@@ -9,3 +9,4 @@ data.db
 data.db-*
 /image-studio/
 .gitnexus/
+bb-plugin-image-generator/

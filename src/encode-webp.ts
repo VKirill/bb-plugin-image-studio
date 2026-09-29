@@ -1,6 +1,6 @@
 import { createRequire } from "node:module";
 
-type SharpFn = typeof import("sharp").default;
+type SharpFn = typeof import("sharp");
 
 let sharpCached: SharpFn | null | undefined;
 

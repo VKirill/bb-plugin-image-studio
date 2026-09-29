@@ -18,7 +18,7 @@
 ## Установка
 
 ```sh
-bb plugin install https://github.com/VKirill/bb-plugin-image-studio.git --yes
+bb plugin install git:https://github.com/VKirill/bb-plugin-image-studio.git@^0.1.19 --yes
 ```
 
 Дальше: боковая панель **Image Studio** → настройки (модели и ключ) → при желании профиль → генерация внизу галереи или просьба в чате проекта.
