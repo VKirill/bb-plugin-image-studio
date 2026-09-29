@@ -16,7 +16,7 @@ import {
 import { findProfile, parseProfiles, profileSchema, type PersonProfile } from "./src/profiles.js";
 import { composePrompt } from "./src/prompt.js";
 import { formatUnknownError, falGenerate, kieGenerate } from "./src/providers.js";
-import { encodeWebp, imageSize, WEBP_FULL, WEBP_THUMB } from "./src/encode-webp.js";
+import { encodeWebp, imageSize, sniffImageMime, WEBP_FULL, WEBP_THUMB } from "./src/encode-webp.js";
 import { enabledFromSettings, mergeSettings, settingsSchema, type StudioSettings } from "./src/settings.js";
 import {
   GENERATE_PICKER_ID,
@@ -387,23 +387,23 @@ export default async function plugin(bb: BbPluginApi) {
     if (variant === "thumb") {
       try {
         const bytes = await readFile(thumbPath);
-        return { mimeType: "image/webp", base64: bytes.toString("base64") };
+        return { mimeType: sniffImageMime(bytes), base64: bytes.toString("base64") };
       } catch {
         const source = await readFile(sourcePath);
         const thumb = await encodeWebp(source, WEBP_THUMB);
         await writeFile(thumbPath, thumb);
-        return { mimeType: "image/webp", base64: thumb.toString("base64") };
+        return { mimeType: sniffImageMime(thumb), base64: thumb.toString("base64") };
       }
     }
 
     try {
       const bytes = await readFile(webpPath);
-      return { mimeType: "image/webp", base64: bytes.toString("base64") };
+      return { mimeType: sniffImageMime(bytes), base64: bytes.toString("base64") };
     } catch {
       const source = await readFile(sourcePath);
       const webp = await encodeWebp(source, WEBP_FULL);
       await writeFile(webpPath, webp);
-      return { mimeType: "image/webp", base64: webp.toString("base64") };
+      return { mimeType: sniffImageMime(webp), base64: webp.toString("base64") };
     }
   }
 
@@ -537,7 +537,7 @@ export default async function plugin(bb: BbPluginApi) {
       profileId: profile?.id ?? null,
       profileName: profile?.name ?? null,
       filename,
-      mimeType: "image/webp",
+      mimeType: sniffImageMime(display),
       projectPath,
       width: size?.width,
       height: size?.height,
