@@ -30,21 +30,32 @@ export function composePrompt(input: {
   userPrompt: string;
   profile?: ProfilePrompt;
   model: ModelId;
+  sourceCount?: number;
 }): string {
   const task = input.userPrompt.trim();
   const blocks: string[] = [];
+  const offset = input.sourceCount ?? 0;
+
+  if (offset > 0) {
+    blocks.push(
+      offset === 1
+        ? "Image 1 is the source picture to edit."
+        : `Images 1–${offset} are the source pictures to edit.`,
+    );
+  }
 
   if (input.profile) {
     blocks.push(`Subject identity: ${profileSubjectLine(input.profile)}`);
     const selfieCount = input.profile.photoCount;
     if (selfieCount > 0) {
-      const lastSelfie = selfieCount === 1 ? "Image 1" : `Images 1–${selfieCount}`;
+      const lastSelfie =
+        selfieCount === 1 ? `Image ${offset + 1}` : `Images ${offset + 1}–${offset + selfieCount}`;
       blocks.push(
         `${lastSelfie} ${selfieCount === 1 ? "is" : "are"} selfie reference ${selfieCount === 1 ? "photo" : "photos"} of this person. Keep the same face and identity. Do not invent a different person.`,
       );
     }
     if (input.profile.hasManicure) {
-      const manicureIndex = selfieCount + 1;
+      const manicureIndex = offset + selfieCount + 1;
       blocks.push(
         `Image ${manicureIndex} is a close-up of this person's manicure. When any hand is visible, put that exact nail shape, length, and polish on every visible finger and thumbnail. Do not leave some nails bare or invent a different manicure.`,
       );

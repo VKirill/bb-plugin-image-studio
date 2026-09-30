@@ -25,6 +25,8 @@ Read this skill only when the user wants an image.
    `bb image-studio generate --prompt "…" [--gateway fal|kie] [--model …] [--aspect …] [--resolution …] [--json]`.
    Default Nano Banana gateway is kie. Muse Image always uses fal. GPT Image 2.5, FLUX.2, Seedream, and Grok follow the preferred gateway. Pass `--gateway fal` to send a dual-gateway model through fal.ai. A fal failure must show a readable HTTP status and JSON on stderr, not `[object Object]`.
 
+**Editing an existing picture** (any model — Nano Banana, GPT Image, Muse, FLUX, Seedream, Grok): pass it in `images` (tool) or `--image` (CLI, repeatable). Each entry is a file path (relative to the project root or absolute), an Image Studio gallery id, or an `https://` URL. Source pictures become Image 1…N; profile selfies follow them. Use the model's **edit** template. Never call fal/kie directly — only a run through Image Studio lands in the gallery.
+
 Pass `prompt` and `profile` when a person was named. Pass `model` / `aspectRatio` / `resolution` **only** if the user named them this turn.
 
 5. After a successful generate, tell the user the saved path. Do not paste API keys.

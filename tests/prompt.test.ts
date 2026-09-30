@@ -95,3 +95,29 @@ test("manicure image index follows selfie count", () => {
   assert.match(oneSelfie, /Image 1 is selfie/);
   assert.match(oneSelfie, /Image 2 is a close-up of this person's manicure/);
 });
+
+test("source pictures come first and shift profile image numbers", () => {
+  const prompt = composePrompt({
+    userPrompt: "Change: put a red scarf on the person.",
+    model: "nano-banana-2",
+    sourceCount: 1,
+    profile: {
+      name: "Vika",
+      gender: "female",
+      age: 28,
+      heightCm: 168,
+      weightKg: 58,
+      bodyType: "slim",
+      photoCount: 2,
+      hasManicure: true,
+    },
+  });
+  assert.match(prompt, /^Image 1 is the source picture to edit\./);
+  assert.match(prompt, /Images 2–3 are selfie reference photos/);
+  assert.match(prompt, /Image 4 is a close-up of this person's manicure/);
+});
+
+test("several source pictures without a profile", () => {
+  const prompt = composePrompt({ userPrompt: "Compose both.", model: "gpt-image-2.5-flare", sourceCount: 2 });
+  assert.equal(prompt, "Images 1–2 are the source pictures to edit.\nCompose both.");
+});

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { defineRpcContract, type BbPluginApi } from "@get-bb/plugin-sdk";
 import { z } from "zod";
 import {
@@ -131,6 +131,7 @@ export const rpcContract = defineRpcContract({
       model: z.string().optional(),
       gateway: z.string().optional(),
       profile: z.string().optional(),
+      images: z.array(z.string().min(1)).max(8).optional(),
       aspectRatio: z.string().optional(),
       resolution: z.string().optional(),
     }),
@@ -156,8 +157,17 @@ function flag(argv: string[], name: string): string | undefined {
   return argv[index + 1];
 }
 
+function flags(argv: string[], name: string): string[] {
+  const out: string[] = [];
+  argv.forEach((token, index) => {
+    const value = argv[index + 1];
+    if (token === name && value) out.push(value);
+  });
+  return out;
+}
+
 function restAfter(argv: string[], command: string): string {
-  const skip = new Set(["--model", "--gateway", "--profile", "--aspect", "--resolution", "--json"]);
+  const skip = new Set(["--model", "--gateway", "--profile", "--image", "--aspect", "--resolution", "--json"]);
   const out: string[] = [];
   for (let i = 0; i < argv.length; i++) {
     const token = argv[i]!;
@@ -429,12 +439,48 @@ export default async function plugin(bb: BbPluginApi) {
     return uris;
   }
 
+  async function sourceDataUris(
+    images: string[],
+    projectId: string | null,
+    cwd?: string,
+    hostId?: string,
+  ): Promise<string[]> {
+    const gallery = [
+      ...(await readStudioGallery(projectId)),
+      ...(projectId ? await readGenerations(projectId) : []),
+    ];
+    const uris: string[] = [];
+    for (const image of images) {
+      const ref = image.trim();
+      let bytes: Buffer;
+      const item = gallery.find((entry) => entry.id === ref);
+      if (item) {
+        bytes = await readFile(generationPath(item.projectId, item.filename));
+      } else if (/^https?:\/\//i.test(ref)) {
+        const response = await fetch(ref);
+        if (!response.ok) throw new Error(`Could not download the source image ${ref} (${response.status})`);
+        bytes = Buffer.from(await response.arrayBuffer());
+      } else {
+        const path = isAbsolute(ref) || !cwd ? ref : join(cwd, ref);
+        try {
+          const file = await bb.sdk.files.read({ path, hostId });
+          bytes = Buffer.from(file.content, file.contentEncoding === "base64" ? "base64" : "utf8");
+        } catch (error) {
+          throw new Error(`Could not read the source image ${path}: ${describe(error)}`);
+        }
+      }
+      uris.push(`data:${sniffImageMime(bytes)};base64,${bytes.toString("base64")}`);
+    }
+    return uris;
+  }
+
   async function runGenerate(input: {
     projectId: string | null;
     prompt: string;
     model?: string;
     gateway?: string;
     profile?: string;
+    images?: string[];
     aspectRatio?: string;
     resolution?: string;
     cwd?: string;
@@ -458,9 +504,11 @@ export default async function plugin(bb: BbPluginApi) {
       throw new Error(`No person profile named "${input.profile}".`);
     }
 
+    const sources = await sourceDataUris(input.images ?? [], input.projectId, input.cwd, input.hostId);
     const composedPrompt = composePrompt({
       userPrompt: input.prompt,
       model: route.model,
+      sourceCount: sources.length,
       profile: profile
         ? {
             name: profile.name,
@@ -476,7 +524,7 @@ export default async function plugin(bb: BbPluginApi) {
         : undefined,
     });
 
-    const references = profile ? await photoDataUris(profile) : [];
+    const references = [...sources, ...(profile ? await photoDataUris(profile) : [])];
     const job = {
       prompt: composedPrompt,
       aspectRatio: input.aspectRatio,
@@ -726,7 +774,7 @@ export default async function plugin(bb: BbPluginApi) {
   const usage = [
     "Usage:",
     "  bb image-studio generate --prompt <text> [--model nano-banana-2|nano-banana-pro|muse-image|gpt-image-2.5-flare|…]",
-    "                           [--gateway fal|kie] [--profile <name>] [--aspect 1:1] [--json]",
+    "                           [--gateway fal|kie] [--profile <name>] [--image <path|gallery id|url>]… [--aspect 1:1] [--json]",
     "  bb image-studio profiles [--json]",
     "  bb image-studio models [--json]",
   ].join("\n");
@@ -737,8 +785,8 @@ export default async function plugin(bb: BbPluginApi) {
     commands: [
       {
         name: "generate",
-        summary: "Generate an image and save it under the project",
-        usage: "bb image-studio generate --prompt <text> [--model nano-banana-2] [--profile Name]",
+        summary: "Generate or edit an image and save it under the project",
+        usage: "bb image-studio generate --prompt <text> [--model nano-banana-2] [--profile Name] [--image path]",
       },
       {
         name: "profiles",
@@ -811,6 +859,7 @@ export default async function plugin(bb: BbPluginApi) {
               model: flag(argv, "--model"),
               gateway: flag(argv, "--gateway"),
               profile: flag(argv, "--profile"),
+              images: flags(argv, "--image"),
               aspectRatio: flag(argv, "--aspect"),
               resolution: flag(argv, "--resolution"),
               cwd: ctx.cwd,
@@ -831,9 +880,9 @@ export default async function plugin(bb: BbPluginApi) {
   bb.agents.registerTool({
     name: "image_studio_generate",
     description:
-      "Generate a project photo through Image Studio. Always call this instead of the CLI when chatting with the user: it opens buttons for model, aspect ratio, and size with the last choice preselected. Nano Banana size defaults to 2K. Wait for Send.",
+      "Generate a project photo through Image Studio, or edit existing pictures passed in images (file path, gallery id, or URL). Always call this instead of the CLI when chatting with the user: it opens buttons for model, aspect ratio, and size with the last choice preselected. Nano Banana size defaults to 2K. Wait for Send.",
     instructions:
-      "When the user wants a photo, call image_studio_generate with the scene prompt (and profile name if they named a person). Do not pass model/aspect/size unless the user named them this turn. Do not run bb image-studio generate in chat — that skips the picker. Wait until the user presses Send.",
+      "When the user wants a photo, call image_studio_generate with the scene prompt (and profile name if they named a person). To change an existing picture, pass it in images and write an edit prompt. Do not pass model/aspect/size unless the user named them this turn. Do not run bb image-studio generate in chat — that skips the picker. Wait until the user presses Send.",
     presentation: {
       label: { pending: "Waiting to generate a photo", completed: "Generated a photo" },
       icon: { glyph: "Palette" },
@@ -841,6 +890,7 @@ export default async function plugin(bb: BbPluginApi) {
     parameters: z.object({
       prompt: z.string().min(1),
       profile: z.string().optional(),
+      images: z.array(z.string().min(1)).max(8).optional(),
       model: z.string().optional(),
       gateway: z.string().optional(),
       aspectRatio: z.string().optional(),
@@ -874,6 +924,7 @@ export default async function plugin(bb: BbPluginApi) {
               JSON.stringify({
                 prompt: input.prompt,
                 profileName: profile?.name ?? null,
+                sourceImages: input.images ?? [],
                 models: MODEL_IDS.map((id) => ({
                   id,
                   enabled: modelEnabled(id, enabledFromSettings(settings)),
@@ -935,6 +986,7 @@ export default async function plugin(bb: BbPluginApi) {
           model: choice.data.model,
           gateway: choice.data.gateway,
           profile: profile?.name ?? input.profile,
+          images: input.images,
           aspectRatio: choice.data.aspectRatio,
           resolution: modelUsesResolution(choice.data.model) ? choice.data.resolution : undefined,
           cwd,

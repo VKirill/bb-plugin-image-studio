@@ -27,7 +27,7 @@ On a phone, Gallery / Profiles / Settings sit in a bottom bar so the prompt fiel
 ## Install
 
 ```sh
-bb plugin install git:https://github.com/VKirill/bb-plugin-image-studio.git@^0.1.19 --yes
+bb plugin install git:https://github.com/VKirill/bb-plugin-image-studio.git@^0.1.20 --yes
 ```
 
 Or install **Image Studio** from the BB Community marketplace once the listing is merged.

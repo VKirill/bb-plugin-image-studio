@@ -167,6 +167,7 @@ export function resolvePickerSelection(input: {
 export const pickerPayloadSchema = z.object({
   prompt: z.string(),
   profileName: z.string().nullable(),
+  sourceImages: z.array(z.string()).default([]),
   models: z.array(
     z.object({
       id: z.enum(MODEL_VALUES),

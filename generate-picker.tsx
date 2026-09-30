@@ -192,6 +192,11 @@ export function GeneratePickerInteraction({
             {t("profile", {}, locale)}: {parsed.data.profileName}
           </p>
         ) : null}
+        {parsed.data.sourceImages.length > 0 ? (
+          <p className="mt-1 truncate text-xs text-muted-foreground">
+            {t("sourceImages", {}, locale)}: {parsed.data.sourceImages.join(", ")}
+          </p>
+        ) : null}
         <p className="mt-2 line-clamp-3 text-xs text-muted-foreground">{parsed.data.prompt}</p>
       </div>
       <GeneratePickerForm
