@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 import { defineRpcContract, type BbPluginApi } from "@get-bb/plugin-sdk";
 import { z } from "zod";
@@ -12,9 +12,45 @@ import {
   modelFalOnly,
   pickSecret,
   resolveRoute,
+  type ModelId,
 } from "./src/models.js";
-import { findProfile, parseProfiles, profileSchema, type PersonProfile } from "./src/profiles.js";
+import {
+  candidateSlots,
+  filledSlots,
+  findProfile,
+  profileSchema,
+  type PersonProfile,
+} from "./src/profiles.js";
 import { composePrompt } from "./src/prompt.js";
+import { QWEN_GENERATE_CAP, parseRefsOption, refLimit, selectRefs } from "./src/refs.js";
+import {
+  EXIT_RELOADED,
+  Limiter,
+  Mutex,
+  clampConcurrency,
+  isStaleHandleError,
+  mapParallel,
+  MAX_CONCURRENCY,
+} from "./src/queue.js";
+import { GALLERY_MAX, attachCandidate, createGalleryStore, createProfileStore, generationsKey, STUDIO_GALLERY } from "./src/store.js";
+import {
+  SHEET_ASPECT,
+  SHEET_RESOLUTION,
+  SHEET_SLOTS,
+  isSheetSlot,
+  missingSheetSlots,
+  sheetModelFor,
+  sheetWaves,
+  sheetPrompt,
+  sheetRefCap,
+  sheetRefOrder,
+  sheetRouteError,
+} from "./src/sheet.js";
+import { SLOT_IDS, isNudeSlot, modelAllowsNude, parseSlotId, sortSlots, type SlotId } from "./src/slots.js";
+import { MAX_BATCH, parseBatchLines, type BatchJob } from "./src/batch.js";
+import { generationSchema, type Generation } from "./src/generation.js";
+import { TYPESAFE_BASE_URL, jevCues, runJevAttempts, type JevAttempt, type JevCues } from "./src/jev.js";
+import { atomicWrite, createJournal } from "./src/journal.js";
 import { formatUnknownError, falGenerate, kieGenerate } from "./src/providers.js";
 import { encodeWebp, imageSize, sniffImageMime, WEBP_FULL, WEBP_THUMB } from "./src/encode-webp.js";
 import { enabledFromSettings, mergeSettings, settingsSchema, type StudioSettings } from "./src/settings.js";
@@ -34,25 +70,13 @@ const PROFILES_KEY = "profiles";
 const LAST_GENERATE_KEY = "last-generate";
 const LAST_GENERATE_RES_2K = "last-generate-res-default-2k";
 const DEFAULT_GATEWAY_KIE = "default-gateway-kie";
+const ENABLE_QWEN_21 = "enable-qwen-21";
 const CHANGED = "image-studio-changed";
 
-const generationSchema = z.object({
-  id: z.string(),
-  projectId: z.string(),
-  createdAt: z.string(),
-  prompt: z.string(),
-  composedPrompt: z.string(),
-  model: z.string(),
-  gateway: z.string(),
-  profileId: z.string().nullable(),
-  profileName: z.string().nullable(),
-  filename: z.string(),
-  mimeType: z.string(),
-  projectPath: z.string().nullable(),
-  width: z.number().int().positive().optional(),
-  height: z.number().int().positive().optional(),
-});
-export type Generation = z.infer<typeof generationSchema>;
+export type { Generation } from "./src/generation.js";
+
+/** Slot names the RPC takes: the new ids plus the old selfie-0..2 / manicure names. */
+const slotInputSchema = z.enum([...SLOT_IDS, "selfie-0", "selfie-1", "selfie-2", "manicure"]);
 
 const secretFileSchema = z.object({
   falApiKey: z.string().default(""),
@@ -105,7 +129,7 @@ export const rpcContract = defineRpcContract({
   add_photo: {
     input: z.object({
       profileId: z.string(),
-      slot: z.enum(["selfie-0", "selfie-1", "selfie-2", "manicure"]),
+      slot: slotInputSchema,
       filename: z.string().max(120),
       mimeType: z.enum(["image/jpeg", "image/png", "image/webp"]),
       base64: z.string().min(1).max(12_000_000),
@@ -116,8 +140,27 @@ export const rpcContract = defineRpcContract({
     input: z.object({
       profileId: z.string(),
       photoId: z.string(),
+      /** Ignored: the photo is found by id in any slot. Kept so older callers still validate. */
       kind: z.enum(["selfie", "manicure"]).default("selfie"),
     }),
+    output: profileSchema,
+  },
+  sheet_slot: {
+    input: z.object({
+      profileId: z.string(),
+      slot: slotInputSchema,
+      /** Replaces the built-in English prompt for this slot. */
+      prompt: z.string().trim().max(2000).optional(),
+      model: z.string().optional(),
+    }),
+    output: profileSchema,
+  },
+  sheet_accept: {
+    input: z.object({ profileId: z.string(), slot: slotInputSchema }),
+    output: profileSchema,
+  },
+  sheet_discard: {
+    input: z.object({ profileId: z.string(), slot: slotInputSchema }),
     output: profileSchema,
   },
   profile_photo_preview: {
@@ -134,6 +177,8 @@ export const rpcContract = defineRpcContract({
       images: z.array(z.string().min(1)).max(8).optional(),
       aspectRatio: z.string().optional(),
       resolution: z.string().optional(),
+      /** auto (default) | all | comma list of slot ids, e.g. "face-front,body-back". */
+      refs: z.string().optional(),
     }),
     output: generationSchema,
   },
@@ -167,7 +212,7 @@ function flags(argv: string[], name: string): string[] {
 }
 
 function restAfter(argv: string[], command: string): string {
-  const skip = new Set(["--model", "--gateway", "--profile", "--image", "--aspect", "--resolution", "--json"]);
+  const skip = new Set(["--model", "--gateway", "--profile", "--image", "--aspect", "--resolution", "--refs", "--seed", "--count", "--batch", "--parallel", "--slots", "--json"]);
   const out: string[] = [];
   for (let i = 0; i < argv.length; i++) {
     const token = argv[i]!;
@@ -202,13 +247,38 @@ export default async function plugin(bb: BbPluginApi) {
     }
     const last = parseLastChoice(await bb.storage.kv.get<unknown>(LAST_GENERATE_KEY));
     if (last && !modelFalOnly(last.model) && last.gateway === "fal") {
-      await writeLastGenerate({ ...last, gateway: "kie" });
+      await bb.storage.kv.set(LAST_GENERATE_KEY, { ...last, gateway: "kie" });
     }
   }
 
+  async function migrateEnableQwen21(): Promise<void> {
+    const moved = await bb.storage.kv.get<boolean>(ENABLE_QWEN_21);
+    if (moved === true) return;
+    await bb.storage.kv.set(ENABLE_QWEN_21, true);
+    const settings = mergeSettings(await bb.storage.kv.get<unknown>(SETTINGS_KEY));
+    if (settings.qwenImage21 !== true) {
+      await writeSettings({ ...settings, qwenImage21: true });
+    }
+  }
+
+  // One-time migrations run once per load, not once per parallel job.
+  let migrations: Promise<void> | null = null;
+  function migrationsReady(): Promise<void> {
+    migrations ??= (async () => {
+      await migrateNanoBananaGatewayKie();
+      await migrateEnableQwen21();
+    })().catch((error) => {
+      migrations = null;
+      throw error;
+    });
+    return migrations;
+  }
+
   async function readSettings(): Promise<StudioSettings> {
-    await migrateNanoBananaGatewayKie();
-    return mergeSettings(await bb.storage.kv.get<unknown>(SETTINGS_KEY));
+    await migrationsReady();
+    const settings = mergeSettings(await bb.storage.kv.get<unknown>(SETTINGS_KEY));
+    providerLimiter.setLimit(settings.concurrency);
+    return settings;
   }
 
   async function writeSettings(next: StudioSettings): Promise<void> {
@@ -266,14 +336,14 @@ export default async function plugin(bb: BbPluginApi) {
       try {
         falCatalog = await catalogValue(settings.falKeyCatalog);
       } catch (error) {
-        bb.log.warn(`fal catalog key: ${describe(error)}`);
+        warn(`fal catalog key: ${describe(error)}`);
       }
     }
     if (settings.kieKeyCatalog) {
       try {
         kieCatalog = await catalogValue(settings.kieKeyCatalog);
       } catch (error) {
-        bb.log.warn(`kie catalog key: ${describe(error)}`);
+        warn(`kie catalog key: ${describe(error)}`);
       }
     }
     return {
@@ -282,37 +352,49 @@ export default async function plugin(bb: BbPluginApi) {
     };
   }
 
-  async function readProfileList(): Promise<PersonProfile[]> {
-    return parseProfiles(await bb.storage.kv.get<unknown>(PROFILES_KEY));
+  // Profiles, gallery lists and the last choice are single KV values: every change is read-modify-write
+  // inside a lock, so parallel jobs cannot overwrite each other.
+  const profileStore = createProfileStore(bb.storage.kv, () => bb.realtime.publish(CHANGED, { kind: "profiles" }));
+  const readProfileList = (): Promise<PersonProfile[]> => profileStore.list();
+  const withProfiles = <T>(work: (profiles: PersonProfile[]) => Promise<T> | T): Promise<T> => profileStore.mutate(work);
+  const galleryStore = createGalleryStore<Generation>(bb.storage.kv, GALLERY_MAX);
+  const lastChoiceLock = new Mutex();
+  const settingsLock = new Mutex();
+  /** Provider calls running at once, across the panel, chat, CLI and sheet builds. */
+  const providerLimiter = new Limiter(clampConcurrency(undefined));
+
+  async function removeProfileFile(profileId: string, filename: string): Promise<void> {
+    try {
+      await unlink(join(profileDir(profileId), filename));
+    } catch {
+      // already gone
+    }
   }
 
-  async function writeProfileList(profiles: PersonProfile[]): Promise<void> {
-    await bb.storage.kv.set(PROFILES_KEY, profiles);
-    bb.realtime.publish(CHANGED, { kind: "profiles" });
-  }
-
-  async function readLastGenerate(): Promise<LastChoice | null> {
-    await migrateNanoBananaGatewayKie();
+  async function readLastUnlocked(): Promise<LastChoice | null> {
+    await migrationsReady();
     const last = parseLastChoice(await bb.storage.kv.get<unknown>(LAST_GENERATE_KEY));
     const moved = await bb.storage.kv.get<boolean>(LAST_GENERATE_RES_2K);
     if (moved === true) return last;
     await bb.storage.kv.set(LAST_GENERATE_RES_2K, true);
     if (last?.resolution === "1K") {
       const next = { ...last, resolution: "2K" as const };
-      await writeLastGenerate(next);
+      await bb.storage.kv.set(LAST_GENERATE_KEY, next);
       return next;
     }
     return last;
   }
 
-  async function writeLastGenerate(choice: LastChoice): Promise<void> {
-    await bb.storage.kv.set(LAST_GENERATE_KEY, choice);
+  function readLastGenerate(): Promise<LastChoice | null> {
+    return lastChoiceLock.run(readLastUnlocked);
   }
 
-  const STUDIO_GALLERY = "studio";
-
-  function generationsKey(projectId: string): string {
-    return `generations:${projectId}`;
+  /** The "last choice" the picker preselects. Parallel jobs: the last finished one wins, none corrupts it. */
+  function rememberChoice(work: (last: LastChoice | null) => LastChoice | null): Promise<void> {
+    return lastChoiceLock.run(async () => {
+      const next = work(await readLastUnlocked());
+      if (next) await bb.storage.kv.set(LAST_GENERATE_KEY, next);
+    });
   }
 
   async function readGenerations(projectId: string): Promise<Generation[]> {
@@ -327,8 +409,29 @@ export default async function plugin(bb: BbPluginApi) {
       if (next.width !== parsed.data.width || next.height !== parsed.data.height) dirty = true;
       items.push(next);
     }
-    if (dirty) await bb.storage.kv.set(generationsKey(projectId), items);
+    if (dirty) void persistDimensions(projectId).catch(() => undefined);
     return items;
+  }
+
+  /** Writes sizes of old records back. Re-reads inside the gallery lock, so a record added meanwhile is kept. */
+  function persistDimensions(projectId: string): Promise<void> {
+    return galleryStore.withLock(async () => {
+      const raw = await bb.storage.kv.get<unknown>(generationsKey(projectId));
+      if (!Array.isArray(raw)) return;
+      let changed = false;
+      const next: unknown[] = [];
+      for (const item of raw) {
+        const parsed = generationSchema.safeParse(item);
+        if (!parsed.success || (parsed.data.width && parsed.data.height)) {
+          next.push(item);
+          continue;
+        }
+        const sized = await withDimensions(parsed.data);
+        if (sized.width && sized.height) changed = true;
+        next.push(sized);
+      }
+      if (changed) await bb.storage.kv.set(generationsKey(projectId), next);
+    });
   }
 
   async function withDimensions(item: Generation): Promise<Generation> {
@@ -364,17 +467,14 @@ export default async function plugin(bb: BbPluginApi) {
       }
     }
     if (collected.length === 0) return [];
-    await bb.storage.kv.set(generationsKey(STUDIO_GALLERY), collected);
+    // Seed only if still empty once we hold the lock: a job may have added a record meanwhile.
+    await galleryStore.withLock(async () => {
+      const again = await bb.storage.kv.get<unknown>(generationsKey(STUDIO_GALLERY));
+      if (!Array.isArray(again) || again.length === 0) {
+        await bb.storage.kv.set(generationsKey(STUDIO_GALLERY), collected);
+      }
+    });
     return collected;
-  }
-
-  async function writeGenerations(projectId: string, items: Generation[]): Promise<void> {
-    await bb.storage.kv.set(generationsKey(projectId), items);
-    const studio = await readGenerations(STUDIO_GALLERY);
-    const incoming = new Set(items.map((item) => item.id));
-    const merged = [...items, ...studio.filter((item) => !incoming.has(item.id))].slice(0, 80);
-    await bb.storage.kv.set(generationsKey(STUDIO_GALLERY), merged);
-    bb.realtime.publish(CHANGED, { kind: "generations", projectId });
   }
 
   function profileDir(id: string): string {
@@ -417,26 +517,27 @@ export default async function plugin(bb: BbPluginApi) {
     }
   }
 
-  async function photoDataUris(profile: PersonProfile): Promise<string[]> {
+  /** Reads the files of the chosen slots. A slot whose file is gone is dropped, so Image numbers stay right. */
+  async function refDataUris(
+    profile: PersonProfile,
+    slots: SlotId[],
+  ): Promise<{ slots: SlotId[]; uris: string[]; missing: SlotId[] }> {
+    const used: SlotId[] = [];
+    const missing: SlotId[] = [];
     const uris: string[] = [];
-    const selfies = [...profile.photos].sort((a, b) => (a.slot ?? 0) - (b.slot ?? 0));
-    for (const photo of selfies) {
+    for (const slot of slots) {
+      const photo = profile.refs[slot];
+      if (!photo) continue;
       try {
         const bytes = await readFile(join(profileDir(profile.id), photo.filename));
         uris.push(`data:${photo.mimeType};base64,${bytes.toString("base64")}`);
+        used.push(slot);
       } catch (error) {
-        bb.log.warn(`profile photo missing: ${describe(error)}`);
+        missing.push(slot);
+        warn(`profile photo ${slot} missing: ${describe(error)}`);
       }
     }
-    if (profile.gender === "female" && profile.manicurePhoto) {
-      try {
-        const bytes = await readFile(join(profileDir(profile.id), profile.manicurePhoto.filename));
-        uris.push(`data:${profile.manicurePhoto.mimeType};base64,${bytes.toString("base64")}`);
-      } catch (error) {
-        bb.log.warn(`manicure photo missing: ${describe(error)}`);
-      }
-    }
-    return uris;
+    return { slots: used, uris, missing };
   }
 
   async function sourceDataUris(
@@ -474,8 +575,64 @@ export default async function plugin(bb: BbPluginApi) {
     return uris;
   }
 
-  async function runGenerate(input: {
-    projectId: string | null;
+  /** How the reference slots were chosen, for the generation record. */
+  type SelectionNote = {
+    selector: "jev" | "keywords";
+    scores?: Record<string, number | string>;
+    provider?: string;
+    ms?: number;
+    error?: string;
+  };
+
+  function selectionFields(note: SelectionNote): Partial<Generation> {
+    return {
+      refsSelector: note.selector,
+      ...(note.scores ? { refsScores: note.scores } : {}),
+      ...(note.provider ? { refsJevProvider: note.provider } : {}),
+      ...(note.ms !== undefined ? { refsJevMs: note.ms } : {}),
+      ...(note.error ? { refsJevError: note.error } : {}),
+    };
+  }
+
+  /**
+   * One Jev request for the whole generate call. Primary: the configured endpoint (OpenLux). If it fails and a TypeSafe
+   * key exists, TypeSafe direct. Timeout, error or no key: null, and the keyword rules choose. Keys come from Env Catalog
+   * and are never logged.
+   */
+  async function chooseWithJev(
+    settings: StudioSettings,
+    input: { prompt: string; model: ModelId; gender: "male" | "female"; sourceCount: number; filled: SlotId[] },
+  ): Promise<{ cues: JevCues | null; used: SelectionNote } | null> {
+    if (!settings.jevRefs) return null;
+    const attempts: JevAttempt[] = [];
+    if (settings.jevKeyCatalog) {
+      attempts.push({
+        provider: settings.jevBaseUrl.includes("typesafe.ai") ? "typesafe" : "openlux",
+        baseUrl: settings.jevBaseUrl,
+        model: settings.jevModel,
+        keyName: settings.jevKeyCatalog,
+        apiKey: () => catalogValue(settings.jevKeyCatalog),
+      });
+    }
+    if (settings.jevFallbackKeyCatalog) {
+      attempts.push({
+        provider: "typesafe",
+        baseUrl: TYPESAFE_BASE_URL,
+        model: settings.jevModel,
+        keyName: settings.jevFallbackKeyCatalog,
+        apiKey: () => catalogValue(settings.jevFallbackKeyCatalog),
+      });
+    }
+    const run = await runJevAttempts(input, attempts);
+    if (run.ok) {
+      const cues = jevCues(run.answers, { model: input.model, filled: input.filled });
+      return { cues, used: { selector: "jev", scores: cues.scores, provider: run.provider, ms: run.ms } };
+    }
+    warn(`Jev not used, keyword rules instead: ${run.errors.join("; ") || "no endpoint configured"}`);
+    return run.errors.length > 0 ? { cues: null, used: { selector: "keywords", error: run.errors.join("; ") } } : null;
+  }
+
+  type RenderInput = {
     prompt: string;
     model?: string;
     gateway?: string;
@@ -483,9 +640,38 @@ export default async function plugin(bb: BbPluginApi) {
     images?: string[];
     aspectRatio?: string;
     resolution?: string;
+    /** auto | all | comma list of slot ids. */
+    refs?: string;
+    /** Explicit slots in priority order. Replaces `refs` (used by the sheet builder). */
+    refSlots?: SlotId[];
+    /** Most reference photos to send, below the model's own cap (sheet builds on Qwen). */
+    refCap?: number;
+    /** A sheet build: Qwen gets a description of the figure without height and weight. */
+    sheet?: boolean;
+    seed?: number;
+    projectId: string | null;
     cwd?: string;
     hostId?: string;
-  }): Promise<Generation> {
+  };
+
+  type Rendered = {
+    original: Buffer;
+    display: Buffer;
+    thumb: Buffer;
+    size: { width: number; height: number } | null;
+    composedPrompt: string;
+    model: ModelId;
+    gateway: "fal" | "kie";
+    profile: PersonProfile | null;
+    refsUsed: SlotId[];
+    refsDropped: SlotId[];
+    selection: SelectionNote;
+    seed?: number;
+    settings: StudioSettings;
+  };
+
+  /** Route, compose the prompt, attach the references, call the provider, encode the result. Nothing is stored. */
+  async function renderImage(input: RenderInput): Promise<Rendered> {
     const settings = await readSettings();
     const keys = await resolvedKeys();
     const route = resolveRoute({
@@ -505,11 +691,65 @@ export default async function plugin(bb: BbPluginApi) {
     }
 
     const sources = await sourceDataUris(input.images ?? [], input.projectId, input.cwd, input.hostId);
+
+    let refsUsed: SlotId[] = [];
+    let refsDropped: SlotId[] = [];
+    let refUris: string[] = [];
+    let selection: SelectionNote = { selector: "keywords" };
+    let noPerson = false;
+    if (profile) {
+      const parsed = input.refSlots
+        ? ({ ok: true, mode: { kind: "list", slots: input.refSlots } } as const)
+        : parseRefsOption(input.refs);
+      if (!parsed.ok) throw new Error(parsed.error);
+      const limit = refLimit(route.model, route.gateway);
+      const budget = Math.min(limit, input.refCap ?? (route.model === "qwen-image-2.1" ? QWEN_GENERATE_CAP : limit)) - sources.length;
+      // `auto` and `all` ask Jev which photos the picture needs; a hand-written list bypasses it.
+      const jev =
+        parsed.mode.kind === "list" || filledSlots(profile).length === 0
+          ? null
+          : await chooseWithJev(settings, {
+              prompt: input.prompt,
+              model: route.model,
+              gender: profile.gender,
+              sourceCount: sources.length,
+              filled: filledSlots(profile),
+            });
+      selection = jev?.used ?? { selector: "keywords" };
+      const picked = selectRefs({
+        prompt: input.prompt,
+        filled: filledSlots(profile),
+        mode: parsed.mode,
+        budget,
+        model: route.model,
+        ...(jev?.cues ? { cues: jev.cues.cues, noPerson: jev.cues.noPerson } : {}),
+      });
+      noPerson = Boolean(jev?.cues?.noPerson);
+      if (picked.rejected.length > 0) {
+        throw new Error(
+          `${picked.rejected.join(", ")} can only be sent to qwen-image-2.1 or wan-2.7 (bare-skin references). Pick one of them or remove ${picked.rejected.length > 1 ? "them" : "it"} from refs.`,
+        );
+      }
+      if (picked.used.length === 0 && picked.dropped.length > 0 && budget < 1) {
+        throw new Error(
+          `${route.model} takes at most ${limit} images and ${sources.length} source image${sources.length === 1 ? "" : "s"} leave no room for ${profile.name}'s reference photos. Pass fewer images or pick another model.`,
+        );
+      }
+      // Last line of defence for the hard rule: no nude slot reaches any model but Qwen.
+      if (!modelAllowsNude(route.model) && picked.used.some(isNudeSlot)) {
+        throw new Error("Bare-skin references are for Qwen and Wan only; refusing to attach them to " + route.model + ".");
+      }
+      const loaded = await refDataUris(profile, picked.used);
+      refsUsed = loaded.slots;
+      refsDropped = sortSlots([...picked.dropped, ...loaded.missing]);
+      refUris = loaded.uris;
+    }
+
     const composedPrompt = composePrompt({
       userPrompt: input.prompt,
       model: route.model,
       sourceCount: sources.length,
-      profile: profile
+      profile: profile && !noPerson
         ? {
             name: profile.name,
             gender: profile.gender,
@@ -518,30 +758,32 @@ export default async function plugin(bb: BbPluginApi) {
             weightKg: profile.weightKg,
             bodyType: profile.bodyType,
             bust: profile.bust,
-            photoCount: profile.photos.length,
-            hasManicure: Boolean(profile.gender === "female" && profile.manicurePhoto),
+            refs: refsUsed,
+            withNumbers: !(input.sheet && route.model === "qwen-image-2.1"),
           }
         : undefined,
     });
 
-    const references = [...sources, ...(profile ? await photoDataUris(profile) : [])];
+    const references = [...sources, ...refUris];
     const job = {
       prompt: composedPrompt,
       aspectRatio: input.aspectRatio,
       resolution: input.resolution,
       referenceDataUris: references,
+      seed: input.seed,
     };
 
-    const falEndpoint =
-      references.length > 0 ? FAL_ENDPOINTS[route.model].edit : FAL_ENDPOINTS[route.model].generate;
+    const fal = FAL_ENDPOINTS[route.model];
     const kie = KIE_MODELS[route.model];
-    const result =
+    // Every provider call waits for a free slot: the limit is shared by the panel, chat, CLI and sheet builds.
+    const result = await providerLimiter.run(() =>
       route.gateway === "kie"
-        ? await kieGenerate(keys.kie!, references.length > 0 ? kie!.edit : kie!.generate, {
+        ? kieGenerate(keys.kie!, references.length > 0 ? kie!.edit : kie!.generate, {
             ...job,
             kieRefField: kie!.refField,
           })
-        : await falGenerate(keys.fal!, falEndpoint, job);
+        : falGenerate(keys.fal!, references.length > 0 ? fal!.edit : fal!.generate, job),
+    );
 
     const imageResponse = await fetch(result.url);
     if (!imageResponse.ok) throw new Error(`Could not download the generated image (${imageResponse.status})`);
@@ -549,12 +791,99 @@ export default async function plugin(bb: BbPluginApi) {
     const display = await encodeWebp(original, WEBP_FULL);
     const thumb = await encodeWebp(display, WEBP_THUMB);
     const size = (await imageSize(display)) ?? (await imageSize(original));
+    return {
+      original,
+      display,
+      thumb,
+      size,
+      composedPrompt,
+      model: route.model,
+      gateway: route.gateway,
+      profile,
+      refsUsed,
+      refsDropped,
+      selection,
+      seed: result.seed,
+      settings,
+    };
+  }
+
+  // ---- jobs, journal, reload safety -----------------------------------------------
+
+  const pendingDir = join(rootDir, "pending");
+  const inFlight = new Set<Promise<unknown>>();
+  let draining = false;
+  const DRAIN_MS = 45_000;
+  const RECOVER_EVERY_MS = 15_000;
+  const RECOVER_MIN_AGE_MS = 8_000;
+
+  /** Raised for jobs that arrive while the plugin is being reloaded. Nothing was spent. */
+  class ReloadingError extends Error {
+    constructor() {
+      super("Image Studio is reloading. Nothing was generated or charged. Run the command again.");
+    }
+  }
+
+  function trackJob<T>(job: () => Promise<T>): Promise<T> {
+    if (draining) return Promise.reject(new ReloadingError());
+    const running = job();
+    inFlight.add(running);
+    const done = () => void inFlight.delete(running);
+    running.then(done, done);
+    return running;
+  }
+
+  /** Logging must never fail a job: after a reload the old `bb` handle throws on every call. */
+  function warn(message: string): void {
+    try {
+      warn(message);
+    } catch {
+      // stale handle
+    }
+  }
+
+  const journal = createJournal({
+    dir: pendingDir,
+    generationFile: (record) => generationPath(record.projectId, record.filename),
+    candidateFile: (profileId, candidate) => join(profileDir(profileId), candidate.filename),
+    gallery: galleryStore,
+    profiles: profileStore,
+    onAdopted: (entry) => {
+      bb.realtime.publish(CHANGED, entry.kind === "generation" ? { kind: "generations", projectId: entry.record.projectId } : { kind: "profiles" });
+    },
+    warn,
+  });
+  const writePending = journal.write;
+  const clearPending = journal.clear;
+  const recoverPending = (minAgeMs = RECOVER_MIN_AGE_MS): Promise<number> => journal.recover(minAgeMs);
+
+  /** Thrown when a reload cut the job off after the image was saved to disk: the image is safe and will be adopted. */
+  class SavedAfterReload extends Error {
+    constructor(
+      readonly record: Generation,
+      cause: unknown,
+    ) {
+      super(
+        `The plugin was reloaded while saving ${record.filename}. The image is on disk and will appear in the gallery within about ${RECOVER_EVERY_MS / 1000} seconds.`,
+        { cause },
+      );
+    }
+  }
+
+  function runGenerate(input: RenderInput): Promise<Generation> {
+    return trackJob(() => generateAndStore(input));
+  }
+
+  async function generateAndStore(input: RenderInput): Promise<Generation> {
+    const rendered = await renderImage(input);
+    const { display, thumb, size, settings } = rendered;
     const id = randomUUID().slice(0, 8);
     const filename = `${id}.webp`;
     const projectId = input.projectId ?? "unscoped";
+    // Files first, plain fs: they survive a reload. Records come after.
     await mkdir(join(rootDir, "generations", projectId), { recursive: true });
-    await writeFile(generationPath(projectId, filename), display);
-    await writeFile(generationPath(projectId, `${id}.thumb.webp`), thumb);
+    await atomicWrite(generationPath(projectId, filename), display);
+    await atomicWrite(generationPath(projectId, `${id}.thumb.webp`), thumb);
 
     let projectPath: string | null = null;
     if (input.cwd) {
@@ -570,7 +899,7 @@ export default async function plugin(bb: BbPluginApi) {
         });
         projectPath = dest;
       } catch (error) {
-        bb.log.warn(`project copy skipped: ${describe(error)}`);
+        warn(`project copy skipped: ${describe(error)}`);
       }
     }
 
@@ -579,39 +908,201 @@ export default async function plugin(bb: BbPluginApi) {
       projectId,
       createdAt: new Date().toISOString(),
       prompt: input.prompt,
-      composedPrompt,
-      model: route.model,
-      gateway: route.gateway,
-      profileId: profile?.id ?? null,
-      profileName: profile?.name ?? null,
+      composedPrompt: rendered.composedPrompt,
+      model: rendered.model,
+      gateway: rendered.gateway,
+      profileId: rendered.profile?.id ?? null,
+      profileName: rendered.profile?.name ?? null,
       filename,
       mimeType: sniffImageMime(display),
       projectPath,
       width: size?.width,
       height: size?.height,
+      ...(rendered.seed !== undefined ? { seed: rendered.seed } : {}),
+      ...(rendered.profile ? { refsUsed: rendered.refsUsed } : {}),
+      ...(rendered.refsDropped.length > 0 ? { refsDropped: rendered.refsDropped } : {}),
+      ...(rendered.profile ? selectionFields(rendered.selection) : {}),
     };
-    await writeGenerations(projectId, [record, ...(await readGenerations(projectId))].slice(0, 80));
-    const remembered = parseLastChoice({
-      model: record.model,
-      gateway: record.gateway,
-      aspectRatio: input.aspectRatio,
-      resolution: input.resolution,
-    });
-    if (remembered) await writeLastGenerate(remembered);
-    else {
-      const last = await readLastGenerate();
-      const merged = resolvePickerSelection({
-        enabled: enabledFromSettings(settings),
-        defaultGateway: settings.defaultGateway,
-        last,
-        suggestedModel: record.model,
-        suggestedGateway: record.gateway,
-        suggestedAspect: input.aspectRatio,
-        suggestedResolution: input.resolution,
+    try {
+      await writePending(id, { kind: "generation", record });
+      await galleryStore.add(projectId, record);
+      bb.realtime.publish(CHANGED, { kind: "generations", projectId });
+      await clearPending(id);
+    } catch (error) {
+      if (isStaleHandleError(error)) throw new SavedAfterReload(record, error);
+      throw error;
+    }
+    try {
+      await rememberChoice((last) => {
+        const remembered = parseLastChoice({
+          model: record.model,
+          gateway: record.gateway,
+          aspectRatio: input.aspectRatio,
+          resolution: input.resolution,
+        });
+        if (remembered) return remembered;
+        return resolvePickerSelection({
+          enabled: enabledFromSettings(settings),
+          defaultGateway: settings.defaultGateway,
+          last,
+          suggestedModel: record.model,
+          suggestedGateway: record.gateway,
+          suggestedAspect: input.aspectRatio,
+          suggestedResolution: input.resolution,
+        });
       });
-      await writeLastGenerate(merged);
+    } catch (error) {
+      // The image and its record are saved; only the picker's memory failed.
+      warn(`last choice not saved: ${describe(error)}`);
     }
     return record;
+  }
+
+  // ---- reference sheet -------------------------------------------------------------
+
+  /** Plan for one slot: model, or a readable reason it cannot run. No network. */
+  async function planSheetSlot(
+    profile: PersonProfile,
+    slot: SlotId,
+    modelOverride?: string,
+  ): Promise<{ ok: true; model: ModelId; gateway: "fal" | "kie" } | { ok: false; error: string }> {
+    if (!isSheetSlot(slot)) {
+      return { ok: false, error: `Slot ${slot} is not generated: moles, tattoos and birthmarks must come from a real photo.` };
+    }
+    if (isNudeSlot(slot) && profile.age < 18) {
+      return { ok: false, error: `Slot ${slot} is only built for adult profiles (18+).` };
+    }
+    if (!profile.refs["face-front"] && slot !== "face-front") {
+      return { ok: false, error: `Add the front face photo of ${profile.name} first (slot face-front).` };
+    }
+    if (slot === "face-front" && Object.keys(profile.refs).length === 0) {
+      return { ok: false, error: `Upload at least one real photo of ${profile.name} (face-front) before building the sheet.` };
+    }
+    const settings = await readSettings();
+    const chosen = sheetModelFor(slot, enabledFromSettings(settings), modelOverride);
+    if (!chosen.ok) return chosen;
+    const keys = await resolvedKeys();
+    const route = resolveRoute({
+      requestedModel: chosen.model,
+      enabled: enabledFromSettings(settings),
+      defaultGateway: settings.defaultGateway,
+      hasFalKey: Boolean(keys.fal),
+      hasKieKey: Boolean(keys.kie),
+    });
+    if (!route.ok) return { ok: false, error: sheetRouteError(slot, chosen.model, route.error) };
+    return { ok: true, model: route.model, gateway: route.gateway };
+  }
+
+  /** Builds one slot as a candidate (not yet the slot photo). Costs one generation. */
+  function buildSheetSlot(
+    profileId: string,
+    slot: SlotId,
+    options: { prompt?: string; model?: string } = {},
+  ): Promise<{ profile: PersonProfile; model: ModelId; gateway: "fal" | "kie" }> {
+    return trackJob(() => buildSheetSlotNow(profileId, slot, options));
+  }
+
+  async function buildSheetSlotNow(
+    profileId: string,
+    slot: SlotId,
+    options: { prompt?: string; model?: string },
+  ): Promise<{ profile: PersonProfile; model: ModelId; gateway: "fal" | "kie" }> {
+    const before = (await readProfileList()).find((item) => item.id === profileId);
+    if (!before) throw new Error("Profile not found");
+    const plan = await planSheetSlot(before, slot, options.model);
+    if (!plan.ok) throw new Error(plan.error);
+
+    const prompt =
+      options.prompt && options.prompt.trim() !== ""
+        ? options.prompt.trim()
+        : sheetPrompt(
+            slot,
+            before.gender,
+            {
+              bodyType: before.bodyType,
+              bust: before.bust,
+              heightCm: before.heightCm,
+              weightKg: before.weightKg,
+              age: before.age,
+            },
+            plan.model,
+          );
+    const rendered = await renderImage({
+      projectId: null,
+      prompt,
+      model: plan.model,
+      profile: before.id,
+      refSlots: sheetRefOrder(slot, plan.model),
+      refCap: sheetRefCap(plan.model),
+      sheet: true,
+      aspectRatio: SHEET_ASPECT,
+      resolution: modelUsesResolution(plan.model) ? SHEET_RESOLUTION : undefined,
+    });
+
+    const id = randomUUID().slice(0, 8);
+    const filename = `${id}-sheet-${slot}.webp`;
+    const candidate = {
+      id,
+      filename,
+      mimeType: sniffImageMime(rendered.display),
+      model: rendered.model,
+      gateway: rendered.gateway,
+      prompt,
+      createdAt: new Date().toISOString(),
+      refsUsed: rendered.refsUsed,
+    };
+    // File and journal first (plain fs), then the profile record under the profile lock.
+    await mkdir(profileDir(before.id), { recursive: true });
+    await atomicWrite(join(profileDir(before.id), filename), rendered.display);
+    try {
+      await writePending(id, { kind: "candidate", profileId, slot, candidate });
+      const updated = await withProfiles((profiles) => {
+        const profile = profiles.find((item) => item.id === profileId);
+        if (!profile) throw new Error("Profile not found");
+        const previous = attachCandidate(profile, slot, candidate);
+        return { profile, previous };
+      });
+      if (updated.previous) await removeProfileFile(profileId, updated.previous.filename);
+      await clearPending(id);
+      return { profile: updated.profile, model: rendered.model, gateway: rendered.gateway };
+    } catch (error) {
+      if (isStaleHandleError(error)) {
+        throw new Error(
+          `The plugin was reloaded while saving the ${slot} candidate. The image is on disk and will appear in Profiles within about ${RECOVER_EVERY_MS / 1000} seconds.`,
+          { cause: error },
+        );
+      }
+      throw error;
+    }
+  }
+
+  function acceptSheetSlot(profileId: string, slot: SlotId): Promise<PersonProfile> {
+    return withProfiles(async (profiles) => {
+      const profile = profiles.find((item) => item.id === profileId);
+      if (!profile) throw new Error("Profile not found");
+      const candidate = profile.candidates[slot];
+      if (!candidate) throw new Error(`Nothing to accept in slot ${slot}.`);
+      const previous = profile.refs[slot];
+      profile.refs[slot] = { id: candidate.id, filename: candidate.filename, mimeType: candidate.mimeType };
+      delete profile.candidates[slot];
+      if (previous) await removeProfileFile(profile.id, previous.filename);
+      profile.updatedAt = new Date().toISOString();
+      return profile;
+    });
+  }
+
+  function discardSheetSlot(profileId: string, slot: SlotId): Promise<PersonProfile> {
+    return withProfiles(async (profiles) => {
+      const profile = profiles.find((item) => item.id === profileId);
+      if (!profile) throw new Error("Profile not found");
+      const candidate = profile.candidates[slot];
+      if (candidate) {
+        delete profile.candidates[slot];
+        await removeProfileFile(profile.id, candidate.filename);
+        profile.updatedAt = new Date().toISOString();
+      }
+      return profile;
+    });
   }
 
   bb.rpc.register(rpcContract, {
@@ -636,7 +1127,8 @@ export default async function plugin(bb: BbPluginApi) {
         lastGenerate,
       };
     },
-    update_settings: async (patch) => {
+    update_settings: (patch) =>
+      settingsLock.run(async () => {
       const current = await readSettings();
       const next = { ...current };
       for (const id of MODEL_IDS) {
@@ -648,9 +1140,16 @@ export default async function plugin(bb: BbPluginApi) {
       if (patch.falKeyCatalog !== undefined) next.falKeyCatalog = patch.falKeyCatalog;
       if (patch.kieKeyCatalog !== undefined) next.kieKeyCatalog = patch.kieKeyCatalog;
       if (patch.uiLocale !== undefined) next.uiLocale = patch.uiLocale;
+      if (patch.concurrency !== undefined) next.concurrency = clampConcurrency(patch.concurrency);
+      if (typeof patch.jevRefs === "boolean") next.jevRefs = patch.jevRefs;
+      if (patch.jevBaseUrl !== undefined && patch.jevBaseUrl.trim() !== "") next.jevBaseUrl = patch.jevBaseUrl.trim();
+      if (patch.jevModel !== undefined && patch.jevModel.trim() !== "") next.jevModel = patch.jevModel.trim();
+      if (patch.jevKeyCatalog !== undefined) next.jevKeyCatalog = patch.jevKeyCatalog;
+      if (patch.jevFallbackKeyCatalog !== undefined) next.jevFallbackKeyCatalog = patch.jevFallbackKeyCatalog;
       await writeSettings(next);
+      providerLimiter.setLimit(next.concurrency);
       return { saved: true };
-    },
+      }),
     set_secret: async ({ slot, value }) => {
       const current = await readSecrets();
       current[slot] = value.trim();
@@ -658,92 +1157,97 @@ export default async function plugin(bb: BbPluginApi) {
       bb.realtime.publish(CHANGED, { kind: "secrets" });
       return { saved: true };
     },
-    save_profile: async (input) => {
-      const profiles = await readProfileList();
-      const now = new Date().toISOString();
-      if (input.id) {
-        const existing = profiles.find((item) => item.id === input.id);
-        if (!existing) throw new Error("Profile not found");
-        existing.name = input.name;
-        existing.gender = input.gender;
-        existing.age = input.age;
-        existing.heightCm = input.heightCm;
-        existing.weightKg = input.weightKg;
-        existing.bodyType = input.bodyType;
-        existing.bust = input.bust ?? "";
-        if (input.gender === "male") existing.manicurePhoto = null;
-        existing.updatedAt = now;
-        await writeProfileList(profiles);
-        return existing;
-      }
-      const created: PersonProfile = {
-        id: randomUUID().slice(0, 8),
-        name: input.name,
-        gender: input.gender,
-        age: input.age,
-        heightCm: input.heightCm,
-        weightKg: input.weightKg,
-        bodyType: input.bodyType,
-        bust: input.bust ?? "",
-        photos: [],
-        manicurePhoto: null,
-        createdAt: now,
-        updatedAt: now,
-      };
-      await writeProfileList([...profiles, created]);
-      return created;
+    save_profile: async (input) =>
+      withProfiles(async (profiles) => {
+        const now = new Date().toISOString();
+        if (input.id) {
+          const existing = profiles.find((item) => item.id === input.id);
+          if (!existing) throw new Error("Profile not found");
+          existing.name = input.name;
+          existing.gender = input.gender;
+          existing.age = input.age;
+          existing.heightCm = input.heightCm;
+          existing.weightKg = input.weightKg;
+          existing.bodyType = input.bodyType;
+          existing.bust = input.bust ?? "";
+          existing.updatedAt = now;
+          return existing;
+        }
+        const created: PersonProfile = {
+          id: randomUUID().slice(0, 8),
+          name: input.name,
+          gender: input.gender,
+          age: input.age,
+          heightCm: input.heightCm,
+          weightKg: input.weightKg,
+          bodyType: input.bodyType,
+          bust: input.bust ?? "",
+          refs: {},
+          candidates: {},
+          photos: [],
+          manicurePhoto: null,
+          createdAt: now,
+          updatedAt: now,
+        };
+        profiles.push(created);
+        return created;
+      }),
+    delete_profile: async ({ id }) =>
+      withProfiles(async (profiles) => {
+        const index = profiles.findIndex((item) => item.id === id);
+        if (index === -1) return { removed: false };
+        profiles.splice(index, 1);
+        return { removed: true };
+      }),
+    add_photo: async ({ profileId, slot: slotName, filename, mimeType, base64 }) => {
+      const slot = parseSlotId(slotName);
+      if (!slot) throw new Error(`Unknown reference slot "${slotName}".`);
+      return withProfiles(async (profiles) => {
+        const profile = profiles.find((item) => item.id === profileId);
+        if (!profile) throw new Error("Profile not found");
+        const id = randomUUID().slice(0, 8);
+        const safeName = `${id}-${filename.replace(/[^a-zA-Z0-9._-]+/g, "_").slice(0, 80)}`;
+        await mkdir(profileDir(profile.id), { recursive: true });
+        await writeFile(join(profileDir(profile.id), safeName), Buffer.from(base64, "base64"));
+        const previous = profile.refs[slot];
+        profile.refs[slot] = { id, filename: safeName, mimeType };
+        if (previous) await removeProfileFile(profile.id, previous.filename);
+        profile.updatedAt = new Date().toISOString();
+        return profile;
+      });
     },
-    delete_profile: async ({ id }) => {
-      const profiles = await readProfileList();
-      const next = profiles.filter((item) => item.id !== id);
-      if (next.length === profiles.length) return { removed: false };
-      await writeProfileList(next);
-      return { removed: true };
+    remove_photo: async ({ profileId, photoId }) =>
+      withProfiles(async (profiles) => {
+        const profile = profiles.find((item) => item.id === profileId);
+        if (!profile) throw new Error("Profile not found");
+        for (const slot of SLOT_IDS) {
+          if (profile.refs[slot]?.id === photoId) delete profile.refs[slot];
+        }
+        profile.updatedAt = new Date().toISOString();
+        return profile;
+      }),
+    sheet_slot: async ({ profileId, slot: slotName, prompt, model }) => {
+      const slot = parseSlotId(slotName);
+      if (!slot) throw new Error(`Unknown reference slot "${slotName}".`);
+      return (await buildSheetSlot(profileId, slot, { prompt, model })).profile;
     },
-    add_photo: async ({ profileId, slot, filename, mimeType, base64 }) => {
-      const profiles = await readProfileList();
-      const profile = profiles.find((item) => item.id === profileId);
-      if (!profile) throw new Error("Profile not found");
-      if (slot === "manicure" && profile.gender !== "female") {
-        throw new Error("Manicure photos are only stored on female profiles.");
-      }
-      const id = randomUUID().slice(0, 8);
-      const safeName = `${id}-${filename.replace(/[^a-zA-Z0-9._-]+/g, "_").slice(0, 80)}`;
-      await mkdir(profileDir(profile.id), { recursive: true });
-      await writeFile(join(profileDir(profile.id), safeName), Buffer.from(base64, "base64"));
-      const record = { id, filename: safeName, mimeType };
-      if (slot === "manicure") {
-        profile.manicurePhoto = record;
-      } else {
-        const selfieSlot = Number(slot.slice(-1)) as 0 | 1 | 2;
-        profile.photos = profile.photos.filter((photo) => (photo.slot ?? 0) !== selfieSlot);
-        profile.photos.push({ ...record, slot: selfieSlot });
-        profile.photos.sort((a, b) => (a.slot ?? 0) - (b.slot ?? 0));
-      }
-      profile.updatedAt = new Date().toISOString();
-      await writeProfileList(profiles);
-      return profile;
+    sheet_accept: async ({ profileId, slot: slotName }) => {
+      const slot = parseSlotId(slotName);
+      if (!slot) throw new Error(`Unknown reference slot "${slotName}".`);
+      return acceptSheetSlot(profileId, slot);
     },
-    remove_photo: async ({ profileId, photoId, kind }) => {
-      const profiles = await readProfileList();
-      const profile = profiles.find((item) => item.id === profileId);
-      if (!profile) throw new Error("Profile not found");
-      if (kind === "manicure") {
-        if (profile.manicurePhoto?.id === photoId) profile.manicurePhoto = null;
-      } else {
-        profile.photos = profile.photos.filter((photo) => photo.id !== photoId);
-      }
-      profile.updatedAt = new Date().toISOString();
-      await writeProfileList(profiles);
-      return profile;
+    sheet_discard: async ({ profileId, slot: slotName }) => {
+      const slot = parseSlotId(slotName);
+      if (!slot) throw new Error(`Unknown reference slot "${slotName}".`);
+      return discardSheetSlot(profileId, slot);
     },
     profile_photo_preview: async ({ profileId, photoId }) => {
       const profiles = await readProfileList();
       const profile = profiles.find((item) => item.id === profileId);
       if (!profile) throw new Error("Profile not found");
       const photo =
-        profile.photos.find((item) => item.id === photoId) ??
-        (profile.manicurePhoto?.id === photoId ? profile.manicurePhoto : null);
+        SLOT_IDS.map((slot) => profile.refs[slot]).find((item) => item?.id === photoId) ??
+        SLOT_IDS.map((slot) => profile.candidates[slot]).find((item) => item?.id === photoId);
       if (!photo) throw new Error("Photo not found");
       const bytes = await readFile(join(profileDir(profile.id), photo.filename));
       return { mimeType: photo.mimeType, base64: bytes.toString("base64") };
@@ -758,7 +1262,7 @@ export default async function plugin(bb: BbPluginApi) {
           cwd = source?.path;
           hostId = source?.hostId;
         } catch (error) {
-          bb.log.warn(`project path: ${describe(error)}`);
+          warn(`project path: ${describe(error)}`);
         }
       }
       return runGenerate({ ...input, cwd, hostId });
@@ -773,9 +1277,12 @@ export default async function plugin(bb: BbPluginApi) {
 
   const usage = [
     "Usage:",
-    "  bb image-studio generate --prompt <text> [--model nano-banana-2|nano-banana-pro|muse-image|gpt-image-2.5-flare|…]",
-    "                           [--gateway fal|kie] [--profile <name>] [--image <path|gallery id|url>]… [--aspect 1:1] [--json]",
+    "  bb image-studio generate --prompt <text> [--model nano-banana-2|nano-banana-2.1|nano-banana-pro|muse-image|gpt-image-2.5-flare|…]",
+    "                           [--gateway fal|kie] [--profile <name>] [--refs auto|all|<slot,slot>]",
+    "                           [--image <path|gallery id|url>]… [--aspect 1:1] [--count N] [--batch jobs.jsonl] [--seed N] [--json]",
     "  bb image-studio profiles [--json]",
+    "  bb image-studio refs --profile <name> --prompt <text> [--model <id>] [--image <n>]… [--json]   (preview of the reference choice; free)",
+    "  bb image-studio sheet --profile <name> [--slots a,b] [--model <id>] [--accept] [--parallel N] [--dry-run] [--json]   (paid: one generation per slot)",
     "  bb image-studio models [--json]",
   ].join("\n");
 
@@ -786,12 +1293,22 @@ export default async function plugin(bb: BbPluginApi) {
       {
         name: "generate",
         summary: "Generate or edit an image and save it under the project",
-        usage: "bb image-studio generate --prompt <text> [--model nano-banana-2] [--profile Name] [--image path]",
+        usage: "bb image-studio generate --prompt <text> [--model nano-banana-2] [--profile Name] [--refs auto|all|face-front,body-back] [--count N] [--batch jobs.jsonl] [--image path]",
       },
       {
         name: "profiles",
-        summary: "List people profiles",
+        summary: "List people profiles and their filled reference slots",
         usage: "bb image-studio profiles [--json]",
+      },
+      {
+        name: "refs",
+        summary: "Preview which reference photos a prompt would send (Jev or keyword rules); generates nothing",
+        usage: "bb image-studio refs --profile <name> --prompt <text> [--model nano-banana-2.1] [--json]",
+      },
+      {
+        name: "sheet",
+        summary: "Build the missing reference-sheet slots of a profile (costs one generation per slot)",
+        usage: "bb image-studio sheet --profile <name> [--slots body-back,chest] [--model <id>] [--accept] [--parallel N] [--dry-run] [--json]",
       },
       {
         name: "models",
@@ -800,6 +1317,26 @@ export default async function plugin(bb: BbPluginApi) {
       },
     ],
     async run(argv, ctx) {
+      try {
+        return await runCommand(argv, ctx);
+      } catch (error) {
+        // A reload cut this run short before anything was saved. The old plugin cannot call the new one,
+        // so the caller runs the command again; the exit code says so.
+        if (isStaleHandleError(error) || error instanceof ReloadingError) {
+          return {
+            exitCode: EXIT_RELOADED,
+            stderr: `Image Studio was reloaded while this command ran. No image from this run was saved. Run the same command again (exit code ${EXIT_RELOADED}).`,
+          };
+        }
+        return { exitCode: 1, stderr: describe(error) };
+      }
+    },
+  });
+
+  type CliCtx = { projectId?: string | null; cwd?: string };
+
+  async function runCommand(argv: string[], ctx: CliCtx) {
+    {
       const json = argv.includes("--json");
       const [command] = argv.filter((token) => token !== "--json" && !token.startsWith("--"));
       const reply = (value: unknown, text: string) => ({
@@ -813,22 +1350,172 @@ export default async function plugin(bb: BbPluginApi) {
         case "profiles": {
           const profiles = await readProfileList();
           return reply(
-            profiles.map((profile) => ({
-              id: profile.id,
-              name: profile.name,
-              gender: profile.gender,
-              selfies: profile.photos.length,
-              manicure: Boolean(profile.manicurePhoto),
-            })),
+            profiles.map((profile) => {
+              const slots = filledSlots(profile);
+              return {
+                id: profile.id,
+                name: profile.name,
+                gender: profile.gender,
+                selfies: slots.filter((slot) => slot.startsWith("face-")).length,
+                manicure: slots.includes("hands"),
+                slots,
+                candidates: candidateSlots(profile),
+              };
+            }),
             profiles.length === 0
               ? "No people profiles."
               : profiles
                   .map((profile) => {
-                    const nails = profile.manicurePhoto ? ", manicure" : "";
-                    return `${profile.name} (${profile.id}, ${profile.photos.length} selfies${nails})`;
+                    const slots = filledSlots(profile);
+                    const waiting = candidateSlots(profile);
+                    return `${profile.name} (${profile.id}): ${slots.length > 0 ? slots.join(", ") : "no reference photos"}${waiting.length > 0 ? `; candidates: ${waiting.join(", ")}` : ""}`;
                   })
                   .join("\n"),
           );
+        }
+        case "refs": {
+          // Preview of the reference choice for a prompt: nothing is generated and nothing is charged
+          // (only the few Jev tokens). Shows what `generate --refs auto` would send, and what the keyword rules would send.
+          const profileName = flag(argv, "--profile");
+          const previewPrompt = flag(argv, "--prompt") || restAfter(argv, "refs");
+          if (!profileName || !previewPrompt) return { exitCode: 1, stderr: usage };
+          const profile = findProfile(await readProfileList(), profileName);
+          if (!profile) return { exitCode: 1, stderr: `No person profile named "${profileName}".` };
+          const settings = await readSettings();
+          const keys = await resolvedKeys();
+          const route = resolveRoute({
+            requestedModel: flag(argv, "--model"),
+            requestedGateway: flag(argv, "--gateway"),
+            enabled: enabledFromSettings(settings),
+            defaultGateway: settings.defaultGateway,
+            hasFalKey: Boolean(keys.fal),
+            hasKieKey: Boolean(keys.kie),
+          });
+          if (!route.ok) return { exitCode: 1, stderr: route.error };
+          const sourceCount = flags(argv, "--image").length;
+          const filled = filledSlots(profile);
+          const limit = Math.min(refLimit(route.model, route.gateway), route.model === "qwen-image-2.1" ? QWEN_GENERATE_CAP : 99) - sourceCount;
+          const keywords = selectRefs({ prompt: previewPrompt, filled, mode: { kind: "auto" }, budget: limit, model: route.model });
+          const jev = await chooseWithJev(settings, { prompt: previewPrompt, model: route.model, gender: profile.gender, sourceCount, filled });
+          const viaJev = jev?.cues
+            ? selectRefs({ prompt: previewPrompt, filled, mode: { kind: "auto" }, budget: limit, model: route.model, cues: jev.cues.cues, noPerson: jev.cues.noPerson })
+            : null;
+          const chosen = viaJev ?? keywords;
+          return reply(
+            {
+              profile: profile.name,
+              model: route.model,
+              gateway: route.gateway,
+              budget: limit,
+              selector: jev?.used.selector ?? "keywords",
+              provider: jev?.used.provider ?? null,
+              jevMs: jev?.used.ms ?? null,
+              jevError: jev?.used.error ?? null,
+              noPerson: Boolean(jev?.cues?.noPerson),
+              used: chosen.used,
+              dropped: chosen.dropped,
+              scores: jev?.used.scores ?? null,
+              keywordsWouldSend: keywords.used,
+            },
+            [
+              `selector: ${jev?.used.selector ?? "keywords"}${jev?.used.provider ? ` via ${jev.used.provider} in ${jev.used.ms}ms` : ""}${jev?.used.error ? ` (Jev not used: ${jev.used.error})` : ""}`,
+              `would send: ${chosen.used.length > 0 ? chosen.used.join(", ") : "none"}${chosen.dropped.length > 0 ? ` (left out: ${chosen.dropped.join(", ")})` : ""}`,
+              `keyword rules would send: ${keywords.used.length > 0 ? keywords.used.join(", ") : "none"}`,
+            ].join("\n"),
+          );
+        }
+        case "sheet": {
+          const profileName = flag(argv, "--profile");
+          if (!profileName) return { exitCode: 1, stderr: usage };
+          const profile = findProfile(await readProfileList(), profileName);
+          if (!profile) return { exitCode: 1, stderr: `No person profile named "${profileName}".` };
+          const requested = flag(argv, "--slots");
+          let slots: SlotId[];
+          if (requested) {
+            slots = [];
+            for (const part of requested.split(/[\s,]+/).filter(Boolean)) {
+              const slot = parseSlotId(part);
+              if (!slot) return { exitCode: 1, stderr: `Unknown reference slot "${part}". Use: ${SHEET_SLOTS.join(", ")}.` };
+              if (!slots.includes(slot)) slots.push(slot);
+            }
+            slots = sortSlots(slots);
+          } else {
+            slots = missingSheetSlots(filledSlots(profile));
+          }
+          if (slots.length === 0) return reply({ profile: profile.name, slots: [] }, "Nothing to build: every sheet slot already has a photo.");
+          const modelOverride = flag(argv, "--model");
+          const accept = argv.includes("--accept");
+          const settings = await readSettings();
+          const parallelFlag = flag(argv, "--parallel");
+          if (parallelFlag !== undefined && !/^\d+$/.test(parallelFlag)) {
+            return { exitCode: 1, stderr: `--parallel takes a number from 1 to ${MAX_CONCURRENCY}.` };
+          }
+          const parallel = clampConcurrency(parallelFlag === undefined ? settings.concurrency : Number(parallelFlag));
+          const waves = sheetWaves(slots);
+
+          const plans = await Promise.all(slots.map((slot) => planSheetSlot(profile, slot, modelOverride)));
+          if (argv.includes("--dry-run")) {
+            const rows = slots.map((slot, index) => {
+              const plan = plans[index]!;
+              return plan.ok
+                ? { slot, ok: true, model: plan.model, gateway: plan.gateway }
+                : { slot, ok: false, error: plan.error };
+            });
+            return reply(
+              { profile: profile.name, dryRun: true, parallel, waves: waves.map((wave) => ({ wave: wave.name, slots: wave.slots })), slots: rows },
+              [
+                `waves: ${waves.map((wave) => `${wave.name} [${wave.slots.join(", ")}]`).join(" -> ")}, up to ${parallel} at once`,
+                ...rows.map((row) => (row.ok ? `${row.slot}: ${row.model} on ${row.gateway}` : `${row.slot}: ${row.error}`)),
+              ].join("\n"),
+            );
+          }
+          const blocked = plans.flatMap((plan, index) => (plan.ok ? [] : [`${slots[index]}: ${plan.error}`]));
+          if (blocked.length > 0) {
+            return { exitCode: 1, stderr: `Nothing was generated.\n${blocked.join("\n")}` };
+          }
+
+          // Waves: faces, then body, then details. Slots of a wave run in parallel; the next wave starts when
+          // the previous one is done and, with --accept, sees its accepted photos as references.
+          type SheetResult = { slot: SlotId; ok: boolean; model?: string; gateway?: string; accepted?: boolean; refsUsed?: string[]; seconds?: number; error?: string };
+          const results: SheetResult[] = [];
+          const started = Date.now();
+          for (const wave of waves) {
+            const done = await mapParallel(wave.slots, parallel, async (slot): Promise<SheetResult> => {
+              const t0 = Date.now();
+              try {
+                const built = await buildSheetSlot(profile.id, slot, { model: modelOverride });
+                if (accept) await acceptSheetSlot(profile.id, slot);
+                return {
+                  slot,
+                  ok: true,
+                  model: built.model,
+                  gateway: built.gateway,
+                  accepted: accept,
+                  refsUsed: built.profile.candidates[slot]?.refsUsed,
+                  seconds: Math.round((Date.now() - t0) / 100) / 10,
+                };
+              } catch (error) {
+                if (isStaleHandleError(error) || error instanceof ReloadingError) throw error;
+                return { slot, ok: false, error: describe(error), seconds: Math.round((Date.now() - t0) / 100) / 10 };
+              }
+            });
+            results.push(...done);
+          }
+          const failed = results.filter((item) => !item.ok);
+          const wall = Math.round((Date.now() - started) / 100) / 10;
+          const out = reply(
+            { profile: profile.name, accepted: accept, parallel, wallSeconds: wall, slots: results },
+            results
+              .map((item) =>
+                item.ok
+                  ? `${item.slot}: ${accept ? "saved" : "candidate"} via ${item.model} on ${item.gateway} (${item.seconds}s, refs: ${item.refsUsed?.join(", ") || "none"})`
+                  : `${item.slot}: failed: ${item.error}`,
+              )
+              .join("\n") +
+              `\n${results.length} slots in ${wall}s, up to ${parallel} at once.` +
+              (accept ? "" : "\nCandidates wait in Image Studio > Profiles: Accept or Regenerate each slot. Use --accept to let each wave build on the previous one."),
+          );
+          return failed.length > 0 ? { ...out, exitCode: 1 } : out;
         }
         case "models": {
           const settings = await readSettings();
@@ -838,6 +1525,7 @@ export default async function plugin(bb: BbPluginApi) {
             defaultGateway: settings.defaultGateway,
             falKey: Boolean(keys.fal),
             kieKey: Boolean(keys.kie),
+            concurrency: settings.concurrency,
           };
           return reply(
             payload,
@@ -846,43 +1534,121 @@ export default async function plugin(bb: BbPluginApi) {
               `Preferred gateway: ${settings.defaultGateway}`,
               `fal.ai key: ${keys.fal ? "yes" : "no"}`,
               `kie.ai key: ${keys.kie ? "yes" : "no"}`,
+              `Parallel generations: ${settings.concurrency}`,
             ].join("\n"),
           );
         }
         case "generate": {
-          const prompt = flag(argv, "--prompt") || restAfter(argv, "generate");
-          if (!prompt) return { exitCode: 1, stderr: usage };
-          try {
-            const record = await runGenerate({
-              projectId: ctx.projectId ?? null,
-              prompt,
-              model: flag(argv, "--model"),
-              gateway: flag(argv, "--gateway"),
-              profile: flag(argv, "--profile"),
-              images: flags(argv, "--image"),
-              aspectRatio: flag(argv, "--aspect"),
-              resolution: flag(argv, "--resolution"),
-              cwd: ctx.cwd,
-            });
-            return reply(
-              record,
-              `Saved ${record.filename} via ${record.model} on ${record.gateway}${record.projectPath ? `\n${record.projectPath}` : ""}`,
-            );
-          } catch (error) {
-            return { exitCode: 1, stderr: describe(error) };
+          const defaults = {
+            model: flag(argv, "--model"),
+            gateway: flag(argv, "--gateway"),
+            profile: flag(argv, "--profile"),
+            images: flags(argv, "--image"),
+            aspectRatio: flag(argv, "--aspect"),
+            resolution: flag(argv, "--resolution"),
+            refs: flag(argv, "--refs"),
+            seed: undefined as number | undefined,
+          };
+          const seedFlag = flag(argv, "--seed");
+          if (seedFlag !== undefined) {
+            if (!/^\d{1,10}$/.test(seedFlag)) return { exitCode: 1, stderr: "--seed takes a whole number (Qwen Image 2.1 on kie and fal models)." };
+            defaults.seed = Number(seedFlag);
           }
+          const countFlag = flag(argv, "--count");
+          if (countFlag !== undefined && !/^\d+$/.test(countFlag)) {
+            return { exitCode: 1, stderr: "--count takes a number from 1 to 20." };
+          }
+          const count = countFlag === undefined ? 1 : Number(countFlag);
+          if (count < 1 || count > MAX_BATCH) return { exitCode: 1, stderr: `--count takes a number from 1 to ${MAX_BATCH}.` };
+          const batchPath = flag(argv, "--batch");
+          if (defaults.seed !== undefined && (count > 1 || batchPath)) {
+            return { exitCode: 1, stderr: "--seed with --count or --batch would make identical images; put a seed on single batch lines instead." };
+          }
+
+          let jobs: BatchJob[];
+          if (batchPath) {
+            let text: string;
+            try {
+              const absolute = isAbsolute(batchPath) || !ctx.cwd ? batchPath : join(ctx.cwd, batchPath);
+              const file = await bb.sdk.files.read({ path: absolute });
+              text = file.contentEncoding === "base64" ? Buffer.from(file.content, "base64").toString("utf8") : file.content;
+            } catch (error) {
+              return { exitCode: 1, stderr: `Could not read the batch file ${batchPath}: ${describe(error)}` };
+            }
+            const parsed = parseBatchLines(text, defaults, flag(argv, "--prompt"));
+            if (!parsed.ok) return { exitCode: 1, stderr: parsed.error };
+            jobs = parsed.jobs;
+          } else {
+            const prompt = flag(argv, "--prompt") || restAfter(argv, "generate");
+            if (!prompt) return { exitCode: 1, stderr: usage };
+            jobs = Array.from({ length: count }, () => ({ ...defaults, prompt }));
+          }
+
+          const line = (record: Generation) =>
+            `Saved ${record.filename} via ${record.model} on ${record.gateway}${record.projectPath ? `\n${record.projectPath}` : ""}${record.refsUsed ? `\nReferences sent: ${record.refsUsed.length > 0 ? record.refsUsed.join(", ") : "none"}${record.refsDropped ? ` (left out: ${record.refsDropped.join(", ")})` : ""}` : ""}${record.refsSelector ? `\nReferences chosen by: ${record.refsSelector}${record.refsJevProvider ? ` via ${record.refsJevProvider} in ${record.refsJevMs}ms` : ""}${record.refsJevError ? ` (Jev not used: ${record.refsJevError})` : ""}` : ""}`;
+          const runOne = (job: BatchJob) => runGenerate({ ...job, projectId: ctx.projectId ?? null, cwd: ctx.cwd });
+
+          type Row = { index: number; ok: boolean; record?: Generation; note?: string; error?: string; reloaded?: boolean; seconds: number };
+          const started = Date.now();
+          const rows = await mapParallel(jobs, jobs.length, async (job, index): Promise<Row> => {
+            const t0 = Date.now();
+            const seconds = () => Math.round((Date.now() - t0) / 100) / 10;
+            try {
+              return { index: index + 1, ok: true, record: await runOne(job), seconds: seconds() };
+            } catch (error) {
+              if (error instanceof SavedAfterReload) {
+                return { index: index + 1, ok: true, record: error.record, note: error.message, seconds: seconds() };
+              }
+              return {
+                index: index + 1,
+                ok: false,
+                error: describe(error),
+                reloaded: isStaleHandleError(error) || error instanceof ReloadingError,
+                seconds: seconds(),
+              };
+            }
+          });
+          const wall = Math.round((Date.now() - started) / 100) / 10;
+          const failed = rows.filter((row) => !row.ok);
+          if (jobs.length === 1 && !batchPath) {
+            const only = rows[0]!;
+            if (!only.ok) {
+              return { exitCode: only.reloaded ? EXIT_RELOADED : 1, stderr: only.reloaded ? `Image Studio was reloaded while this command ran. No image from this run was saved. Run the same command again (exit code ${EXIT_RELOADED}).` : only.error };
+            }
+            return reply(only.record, `${line(only.record!)}${only.note ? `\n${only.note}` : ""}`);
+          }
+          const out = reply(
+            {
+              total: rows.length,
+              saved: rows.length - failed.length,
+              failed: failed.length,
+              wallSeconds: wall,
+              limit: providerLimiter.max,
+              results: rows.map((row) => (row.ok ? { index: row.index, ok: true, seconds: row.seconds, note: row.note, ...row.record } : { index: row.index, ok: false, seconds: row.seconds, error: row.error })),
+            },
+            [
+              ...rows.map((row) =>
+                row.ok
+                  ? `${row.index}/${rows.length} ${line(row.record!).split("\n")[0]} (${row.seconds}s)${row.note ? ` - ${row.note}` : ""}`
+                  : `${row.index}/${rows.length} failed: ${row.error}`,
+              ),
+              `${rows.length - failed.length} of ${rows.length} saved in ${wall}s, up to ${providerLimiter.max} at once.`,
+            ].join("\n"),
+          );
+          const allReloaded = failed.length > 0 && failed.every((row) => row.reloaded);
+          return failed.length > 0 ? { ...out, exitCode: allReloaded ? EXIT_RELOADED : 1 } : out;
         }
       }
       return { exitCode: 1, stderr: usage };
-    },
-  });
+    }
+  }
 
   bb.agents.registerTool({
     name: "image_studio_generate",
     description:
-      "Generate a project photo through Image Studio, or edit existing pictures passed in images (file path, gallery id, or URL). Always call this instead of the CLI when chatting with the user: it opens buttons for model, aspect ratio, and size with the last choice preselected. Nano Banana size defaults to 2K. Wait for Send.",
+      "Generate a project photo through Image Studio, or edit existing pictures passed in images (file path, gallery id, or URL). Always call this instead of the CLI when chatting with the user: it opens buttons for model, aspect ratio, and size with the last choice preselected. Nano Banana size defaults to 2K. With a profile, the plugin attaches the reference sheet photos it needs (refs: auto by default). Wait for Send.",
     instructions:
-      "When the user wants a photo, call image_studio_generate with the scene prompt (and profile name if they named a person). To change an existing picture, pass it in images and write an edit prompt. Do not pass model/aspect/size unless the user named them this turn. Do not run bb image-studio generate in chat — that skips the picker. Wait until the user presses Send.",
+      "When the user wants a photo, call image_studio_generate with the scene prompt (and profile name if they named a person). To change an existing picture, pass it in images and write an edit prompt. Do not pass model/aspect/size unless the user named them this turn. Do not describe the person's face or body in prompt: the plugin injects the identity and the reference photos. Pass refs only to force slots (\"all\", or e.g. \"face-front,body-back\"); leave it out for the automatic choice. The result lists the reference slots that were sent. Do not run bb image-studio generate in chat — that skips the picker. Wait until the user presses Send.",
     presentation: {
       label: { pending: "Waiting to generate a photo", completed: "Generated a photo" },
       icon: { glyph: "Palette" },
@@ -895,6 +1661,7 @@ export default async function plugin(bb: BbPluginApi) {
       gateway: z.string().optional(),
       aspectRatio: z.string().optional(),
       resolution: z.string().optional(),
+      refs: z.string().optional(),
     }),
     async execute(input, ctx) {
       const settings = await readSettings();
@@ -975,7 +1742,7 @@ export default async function plugin(bb: BbPluginApi) {
           cwd = source?.path;
           hostId = source?.hostId;
         } catch (error) {
-          bb.log.warn(`project path: ${describe(error)}`);
+          warn(`project path: ${describe(error)}`);
         }
       }
 
@@ -987,6 +1754,7 @@ export default async function plugin(bb: BbPluginApi) {
           gateway: choice.data.gateway,
           profile: profile?.name ?? input.profile,
           images: input.images,
+          refs: input.refs,
           aspectRatio: choice.data.aspectRatio,
           resolution: modelUsesResolution(choice.data.model) ? choice.data.resolution : undefined,
           cwd,
@@ -997,10 +1765,22 @@ export default async function plugin(bb: BbPluginApi) {
           record.width && record.height ? `${record.width}×${record.height}` : null,
           modelUsesResolution(choice.data.model) ? `size ${choice.data.resolution}` : null,
           record.projectPath ? record.projectPath : null,
+          record.refsUsed
+            ? `References sent: ${record.refsUsed.length > 0 ? record.refsUsed.join(", ") : "none"}${record.refsDropped ? ` (left out: ${record.refsDropped.join(", ")})` : ""}${record.refsSelector ? ` [chosen by ${record.refsSelector}]` : ""}`
+            : null,
         ]
           .filter(Boolean)
           .join("\n");
       } catch (error) {
+        if (error instanceof SavedAfterReload) {
+          return `${error.message}\nSaved ${error.record.filename} via ${error.record.model} on ${error.record.gateway}`;
+        }
+        if (isStaleHandleError(error) || error instanceof ReloadingError) {
+          return {
+            content: [{ type: "text", text: "Image Studio was reloaded while this ran and nothing was saved. Call image_studio_generate again." }],
+            isError: true,
+          };
+        }
         return { content: [{ type: "text", text: describe(error) }], isError: true };
       }
     },
@@ -1011,7 +1791,30 @@ export default async function plugin(bb: BbPluginApi) {
     skills: ["image-studio"],
   }));
 
-  bb.onDispose(() => {
-    bb.log.info("disposed");
+  // Finish what the plugin can before a reload: refuse new jobs, give running ones time to save.
+  // Whatever outlives the wait is still safe: the image is written to disk and journaled, and the next
+  // instance adopts it.
+  const recoveryTimer = setInterval(() => {
+    void recoverPending().then(
+      (adopted) => {
+        if (adopted > 0) warn(`recovered ${adopted} job(s) cut off by a reload`);
+      },
+      () => undefined,
+    );
+  }, RECOVER_EVERY_MS);
+  recoveryTimer.unref?.();
+  void recoverPending().catch(() => undefined);
+
+  bb.onDispose(async () => {
+    draining = true;
+    clearInterval(recoveryTimer);
+    if (inFlight.size > 0) {
+      warn(`reload: waiting up to ${DRAIN_MS / 1000}s for ${inFlight.size} running job(s)`);
+      await Promise.race([
+        Promise.allSettled([...inFlight]),
+        new Promise<void>((resolve) => setTimeout(resolve, DRAIN_MS).unref?.()),
+      ]);
+    }
+    warn("disposed");
   });
 }

@@ -6,7 +6,7 @@ xAI built this generation around **type and page layout**. Anything you skip sti
 
 fal/xAI responses may include `revised_prompt` (the expanded brief they actually used). Treat it as a list of decisions you left open — then rewrite those into the next prompt. Do not paste quality-booster soup (`cinematic, highly detailed, 8k`); Grok will fill a generic bottle shot.
 
-Edit: natural-language change, **up to 3 input images** on fal/xAI. If a profile has more selfies plus manicure, prefer a generate with one identity photo, or name only Image 1–2 in the prompt.
+Edit: natural-language change, **up to 5 input images** (xAI: "up to five source images"; fal and kie say the same). The plugin counts source pictures plus profile references against that cap and keeps the face first — see [profiles.md](profiles.md).
 
 Size 1K/2K and aspect are picker buttons. Iterate 1K, then 2K for keepers.
 
@@ -62,7 +62,7 @@ Camera [shot size], light [source].
 
 ## Template — edit (one change)
 
-xAI/fal: name the change **and** the fixed parts. Two changes → two passes. Combine subject + setting with Image 1 = scene, Image 2 = object (max three images).
+xAI/fal: name the change **and** the fixed parts. Two changes → two passes. Combine subject + setting with Image 1 = scene, Image 2 = object (max five images).
 
 ```
 Only [named part] changes: [new state].
@@ -86,6 +86,6 @@ Keep the same face.
 ## Do not write
 
 - Empty “luxury product, cinematic, 8k”.
-- More than three reference roles on an edit.
+- More than five images on an edit; more than three reference roles.
 - Aspect or 1K/2K inside the prompt.
 - A second identity when a profile is on.

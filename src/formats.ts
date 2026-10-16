@@ -13,6 +13,7 @@ export type Resolution = (typeof RESOLUTIONS)[number];
 
 const MODEL_VALUES = [
   "nano-banana-2",
+  "nano-banana-2.1",
   "nano-banana-pro",
   "muse-image",
   "gpt-image-2.5-flare",
@@ -20,6 +21,8 @@ const MODEL_VALUES = [
   "flux-2-pro",
   "seedream-5",
   "grok-imagine",
+  "qwen-image-2.1",
+  "wan-2.7",
 ] as const;
 
 export const lastChoiceSchema = z.object({
@@ -67,7 +70,7 @@ export function parseLastChoice(raw: unknown): LastChoice | null {
 }
 
 export function modelUsesResolution(model: ModelId): boolean {
-  return model.startsWith("nano-banana") || model.startsWith("gpt-image");
+  return model.startsWith("nano-banana") || model.startsWith("gpt-image") || model === "qwen-image-2.1";
 }
 
 export function gptImageSize(aspect?: string): "square_hd" | "portrait_4_3" | "portrait_16_9" | "landscape_4_3" | "landscape_16_9" {
@@ -98,6 +101,18 @@ function parseResolution(value: string | undefined): Resolution | null {
 function parseSuggestedModel(value: string | undefined): ModelId | null {
   if (!value) return null;
   const id = value.trim().toLowerCase();
+  if (
+    id === "nano-banana-2.1" ||
+    id === "nano-banana-2-1" ||
+    id === "nanobanana21" ||
+    id === "nb2.1" ||
+    id === "nb21" ||
+    id === "nb 2.1" ||
+    id === "banana 2.1" ||
+    id === "nano banana 2.1"
+  ) {
+    return "nano-banana-2.1";
+  }
   if (id === "nano-banana-2" || id === "nanobanana2" || id === "nb2") return "nano-banana-2";
   if (id === "nano-banana-pro" || id === "nanobananapro" || id === "nbpro") return "nano-banana-pro";
   if (id === "muse-image" || id === "muse") return "muse-image";
@@ -115,6 +130,10 @@ function parseSuggestedModel(value: string | undefined): ModelId | null {
   if (id === "flux-2-pro" || id === "flux" || id === "flux-2") return "flux-2-pro";
   if (id === "seedream-5" || id === "seedream") return "seedream-5";
   if (id === "grok-imagine" || id === "grok") return "grok-imagine";
+  if (id === "qwen-image-2.1" || id === "qwen" || id === "qwen2-1" || id === "qwen-2.1") {
+    return "qwen-image-2.1";
+  }
+  if (id === "wan-2.7" || id === "wan" || id === "wan 2.7" || id === "wan2.7" || id === "wan27") return "wan-2.7";
   return null;
 }
 
@@ -145,6 +164,8 @@ export function resolvePickerSelection(input: {
   let gateway: GatewayId;
   if (model === "muse-image") {
     gateway = "fal";
+  } else if (model === "qwen-image-2.1") {
+    gateway = "kie";
   } else if (input.suggestedGateway === "fal" || input.suggestedGateway === "kie") {
     gateway = input.suggestedGateway;
   } else {

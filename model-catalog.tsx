@@ -20,6 +20,7 @@ import {
   enabledModelList,
   modelEnabled,
   modelFalOnly,
+  modelKieOnly,
   modelSearchText,
   type ModelId,
 } from "./src/models";
@@ -85,6 +86,8 @@ export function ModelCatalogField({
                       <span className="min-w-0 flex-1">{modelLabel(id, locale)}</span>
                       {modelFalOnly(id) ? (
                         <span className="text-xs text-muted-foreground">fal.ai</span>
+                      ) : modelKieOnly(id) ? (
+                        <span className="text-xs text-muted-foreground">kie.ai</span>
                       ) : (
                         <span className="text-xs text-muted-foreground">fal · kie</span>
                       )}

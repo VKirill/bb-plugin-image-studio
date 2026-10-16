@@ -1,0 +1,14 @@
+[
+  { "id": "h-flower-field-side", "prompt": "Walking through a flower field in a white linen dress, wind in her hair, seen from the side.", "model": "nano-banana-2.1", "must": ["body-side"], "mustNot": ["hands", "buttocks", "body-back"] },
+  { "id": "h-typing-desk", "prompt": "Sitting at a desk typing on a laptop, office background, shot from the chest up.", "model": "nano-banana-2.1", "must": ["hands"], "mustNot": ["legs", "buttocks", "body-back"] },
+  { "id": "h-backless-over-shoulder", "prompt": "Over-the-shoulder glance, shown from behind in a backless evening dress.", "model": "nano-banana-2.1", "must": ["body-back", "marks"], "mustNot": ["body-front", "chest-nude"] },
+  { "id": "h-swimsuit-pool", "prompt": "Wearing a one-piece swimsuit at the pool edge, feet in the water, full body.", "model": "nano-banana-2.1", "must": ["body-front", "marks"], "mustNot": ["body-back", "buttocks", "hair-back"] },
+  { "id": "h-wide-smile-face", "prompt": "Close-up of her face with a wide smile, studio light.", "model": "nano-banana-2.1", "must": ["face-smile"], "mustNot": ["body-front", "body-back", "legs", "hands"] },
+  { "id": "h-ru-lingerie-bed", "prompt": "Девушка в чёрном белье лежит на кровати, снимок спереди, смотрит в камеру.", "model": "wan-2.7", "must": ["body-front"], "mustNot": ["body-back", "buttocks", "chest-nude", "buttocks-nude"] },
+  { "id": "h-ru-nude-behind", "prompt": "Обнажённая, вид со спины, стоит у окна.", "model": "wan-2.7", "must": ["buttocks-nude", "body-back"], "mustNot": ["chest-nude", "body-front"] },
+  { "id": "h-noperson-tea", "prompt": "A cup of tea and an open book on a windowsill, rain outside.", "model": "nano-banana-2.1", "noPerson": true, "must": [], "mustNot": ["face-front", "face-34-left", "hands", "body-front", "marks"] },
+  { "id": "h-ring-door", "prompt": "Her hand with a ring reaching for a door handle, close-up.", "model": "nano-banana-2.1", "must": ["hands"], "mustNot": ["body-front", "legs", "buttocks", "body-back"] },
+  { "id": "h-topless-jeans-back", "prompt": "Topless, wearing only jeans, standing with her back to the camera, hair down.", "model": "wan-2.7", "must": ["body-back", "hair-back", "marks"], "mustNot": ["body-front", "chest-nude"] },
+  { "id": "h-lounger-bikini", "prompt": "Lying on a sun lounger in shorts and a bikini top, reading a magazine.", "model": "nano-banana-2.1", "must": ["body-front", "marks"], "mustNot": ["body-back", "buttocks", "chest-nude"] },
+  { "id": "h-dancing-skirt", "prompt": "Dancing in a short skirt, spinning, motion blur, photographed from the front.", "model": "nano-banana-2.1", "must": ["legs", "body-front"], "mustNot": ["body-back", "buttocks", "hair-back"] }
+]

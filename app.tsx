@@ -16,14 +16,34 @@ import { GeneratePickerForm, GeneratePickerInteraction } from "./generate-picker
 import { ModelCatalogField } from "./model-catalog";
 import { detectLocale, t } from "./i18n";
 import type { I18nKey, Locale } from "./i18n";
-import { selfieAt, BODY_OPTIONS, BUST_OPTIONS, type PersonProfile } from "./src/profiles";
+import { BODY_OPTIONS, BUST_OPTIONS, type PersonProfile } from "./src/profiles";
+import { SLOT_GROUPS, slotLabelKey, type SlotGroup, type SlotId } from "./src/slots";
+import { DEFAULT_SHEET_SLOTS, isSheetSlot, sheetPrompt } from "./src/sheet";
 import { aspectLabel, DEFAULT_LAST_CHOICE, GENERATE_PICKER_ID, type LastChoice } from "./src/formats";
-import { MODEL_IDS, modelFalOnly } from "./src/models";
+import { MODEL_IDS, modelFalOnly, modelKieOnly } from "./src/models";
 import { enabledFromSettings, type StudioSettings } from "./src/settings";
+import { MAX_CONCURRENCY, mapParallel } from "./src/queue";
 
 type Tab = "settings" | "people" | "gallery";
 type UiLocale = "auto" | "en" | "ru";
-type PhotoSlotId = "selfie-0" | "selfie-1" | "selfie-2" | "manicure";
+type PhotoSlotId = SlotId;
+/** The three face slots one multi-file pick fills, in order. */
+const FACE_PICK_SLOTS: readonly SlotId[] = ["face-front", "face-34-left", "face-34-right"];
+const SHEET_GROUP_ORDER: ReadonlyArray<{ group: SlotGroup; title: I18nKey }> = [
+  { group: "face", title: "sheetFace" },
+  { group: "body", title: "sheetBody" },
+  { group: "details", title: "sheetDetails" },
+];
+const SPIN_CLASS = "animate-spin";
+
+type SheetApi = {
+  busy: ReadonlySet<string>;
+  progress: { profileId: string; done: number; total: number } | null;
+  build: (profileId: string) => Promise<void>;
+  slot: (profileId: string, slot: SlotId, prompt: string) => Promise<void>;
+  accept: (profileId: string, slot: SlotId) => Promise<void>;
+  discard: (profileId: string, slot: SlotId) => Promise<void>;
+};
 const IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
 const SELECT_CLASS = "h-8 rounded-md border border-input bg-background px-2 text-sm";
 
@@ -149,6 +169,9 @@ function PhotoSlot({
   preview,
   locale,
   multiple,
+  candidate,
+  busy,
+  title,
   onPick,
   onClear,
 }: {
@@ -156,19 +179,36 @@ function PhotoSlot({
   preview: string | null;
   locale: Locale;
   multiple?: boolean;
+  candidate?: boolean;
+  busy?: boolean;
+  title?: string;
   onPick: (files: File[]) => void;
   onClear?: () => void;
 }) {
   return (
-    <div className="flex min-w-0 flex-col gap-1">
-      <div className="text-xs text-muted-foreground">{label}</div>
+    <div className="flex min-w-0 flex-col gap-1" title={title}>
+      <div className="truncate text-xs text-muted-foreground">{label}</div>
       <div className="relative">
-        <label className="relative flex aspect-square w-full cursor-pointer items-center justify-center overflow-hidden rounded-md border border-dashed border-border bg-muted/40 hover:bg-muted">
+        <label
+          className={`relative flex aspect-square w-full cursor-pointer items-center justify-center overflow-hidden rounded-md border bg-muted/40 hover:bg-muted ${
+            candidate ? "border-solid border-primary" : "border-dashed border-border"
+          }`}
+        >
           {preview ? (
             <img src={preview} alt="" className="size-full object-cover" />
           ) : (
             <Icon name="UserRoundPlus" className="size-5 text-muted-foreground" />
           )}
+          {candidate ? (
+            <span className="pointer-events-none absolute bottom-1 left-1 rounded bg-background/85 px-1 py-0.5 text-[10px] font-medium">
+              {t("sheetCandidate", {}, locale)}
+            </span>
+          ) : null}
+          {busy ? (
+            <span className="absolute inset-0 flex items-center justify-center bg-background/60">
+              <Icon name="Loading" className={`size-5 ${SPIN_CLASS}`} />
+            </span>
+          ) : null}
           <input
             type="file"
             accept="image/jpeg,image/png,image/webp"
@@ -181,7 +221,7 @@ function PhotoSlot({
             }}
           />
         </label>
-        {preview && onClear ? (
+        {preview && onClear && !candidate ? (
           <Button
             type="button"
             variant="secondary"
@@ -220,6 +260,7 @@ function PersonCard({
   onError,
   onPhoto,
   onRemovePhoto,
+  sheet,
 }: {
   profile?: PersonProfile;
   locale: Locale;
@@ -237,7 +278,8 @@ function PersonCard({
   onDelete?: () => void;
   onError?: (cause: unknown) => void;
   onPhoto: (profileId: string, slot: PhotoSlotId, file: File) => Promise<void>;
-  onRemovePhoto: (profileId: string, photoId: string, kind: "selfie" | "manicure") => Promise<void>;
+  onRemovePhoto: (profileId: string, photoId: string) => Promise<void>;
+  sheet: SheetApi;
 }) {
   const [draft, setDraft] = useState({
     name: profile?.name ?? "",
@@ -262,12 +304,8 @@ function PersonCard({
 
   const previewFor = (slot: PhotoSlotId): string | null => {
     if (pending[slot]) return pending[slot]!.url;
-    if (!profile) return null;
-    if (slot === "manicure") {
-      return profile.manicurePhoto ? previews[profile.manicurePhoto.id] ?? null : null;
-    }
-    const selfie = selfieAt(profile, Number(slot.slice(-1)) as 0 | 1 | 2);
-    return selfie ? previews[selfie.id] ?? null : null;
+    const photo = profile?.refs[slot];
+    return photo ? previews[photo.id] ?? null : null;
   };
 
   const pickSlot = async (slot: PhotoSlotId, file: File) => {
@@ -282,21 +320,16 @@ function PersonCard({
     });
   };
 
-  const pickSelfies = async (files: File[], start = 0) => {
-    const slots: PhotoSlotId[] = ["selfie-0", "selfie-1", "selfie-2"];
-    for (let index = 0; index < files.length && start + index < slots.length; index += 1) {
-      await pickSlot(slots[start + index], files[index]);
+  const pickFaces = async (files: File[], start = 0) => {
+    for (let index = 0; index < files.length && start + index < FACE_PICK_SLOTS.length; index += 1) {
+      await pickSlot(FACE_PICK_SLOTS[start + index]!, files[index]!);
     }
   };
 
   const clearSlot = async (slot: PhotoSlotId) => {
     if (profile) {
-      if (slot === "manicure" && profile.manicurePhoto) {
-        await onRemovePhoto(profile.id, profile.manicurePhoto.id, "manicure");
-      } else {
-        const selfie = selfieAt(profile, Number(slot.slice(-1)) as 0 | 1 | 2);
-        if (selfie) await onRemovePhoto(profile.id, selfie.id, "selfie");
-      }
+      const photo = profile.refs[slot];
+      if (photo) await onRemovePhoto(profile.id, photo.id);
       return;
     }
     setPending((current) => {
@@ -307,6 +340,14 @@ function PersonCard({
       return next;
     });
   };
+
+  const [prompts, setPrompts] = useState<Partial<Record<SlotId, string>>>({});
+  const hasFront = Boolean(profile?.refs["face-front"]);
+  const slotBusy = (slot: SlotId) => (profile ? sheet.busy.has(`${profile.id}:${slot}`) : false);
+  const building = Boolean(profile && sheet.progress?.profileId === profile.id);
+  const buildable = profile
+    ? DEFAULT_SHEET_SLOTS.filter((slot) => !profile.refs[slot] && !profile.candidates[slot])
+    : [];
 
   return (
     <Card className="p-4">
@@ -328,7 +369,6 @@ function PersonCard({
               });
               const uploads = Object.entries(pending) as Array<[PhotoSlotId, { file: File; url: string }]>;
               for (const [slot, item] of uploads) {
-                if (slot === "manicure" && saved.gender !== "female") continue;
                 await onPhoto(saved.id, slot, item.file);
                 URL.revokeObjectURL(item.url);
               }
@@ -356,58 +396,140 @@ function PersonCard({
             <p className="mt-1 text-xs text-muted-foreground">{t("newPersonHint", {}, locale)}</p>
           )}
         </div>
-        <section className="flex flex-col gap-2">
-          <div className="flex items-center justify-between gap-2">
+        <section className="flex flex-col gap-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <h3 className="text-sm font-medium">{t("photos", {}, locale)}</h3>
-            <label>
-              <span className="sr-only">{t("addPhotos", {}, locale)}</span>
-              <Button type="button" variant="outline" size="sm" asChild>
-                <span>{t("addPhotos", {}, locale)}</span>
-              </Button>
-              <input
-                type="file"
-                accept="image/jpeg,image/png,image/webp"
-                multiple
-                className="sr-only"
-                onChange={(event: ChangeEvent<HTMLInputElement>) => {
-                  const files = imageFiles(event.target.files, 3);
-                  event.target.value = "";
-                  if (files.length > 0) void pickSelfies(files);
-                }}
-              />
-            </label>
+            <div className="flex flex-wrap items-center gap-2">
+              <label>
+                <span className="sr-only">{t("addPhotos", {}, locale)}</span>
+                <Button type="button" variant="outline" size="sm" asChild>
+                  <span>{t("addPhotos", {}, locale)}</span>
+                </Button>
+                <input
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp"
+                  multiple
+                  className="sr-only"
+                  onChange={(event: ChangeEvent<HTMLInputElement>) => {
+                    const files = imageFiles(event.target.files, 3);
+                    event.target.value = "";
+                    if (files.length > 0) void pickFaces(files);
+                  }}
+                />
+              </label>
+              {profile ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  disabled={!hasFront || building || buildable.length === 0}
+                  onClick={() => void sheet.build(profile.id)}
+                >
+                  <Icon name={building ? "Loading" : "Palette"} className={`size-4 ${building ? SPIN_CLASS : ""}`} />
+                  {building && sheet.progress
+                    ? t("buildSheetProgress", { done: sheet.progress.done, total: sheet.progress.total }, locale)
+                    : t("buildSheet", {}, locale)}
+                </Button>
+              ) : null}
+            </div>
           </div>
           <p className="text-xs text-muted-foreground">{t("addPhotosHint", {}, locale)}</p>
-          <div className="grid max-w-xl grid-cols-4 gap-2">
-            {([0, 1, 2] as const).map((slot) => (
-              <PhotoSlot
-                key={slot}
-                locale={locale}
-                multiple
-                label={t("selfie", { n: slot + 1 }, locale)}
-                preview={previewFor(`selfie-${slot}`)}
-                onPick={(files) => void pickSelfies(files, slot)}
-                onClear={() => void clearSlot(`selfie-${slot}`)}
-              />
-            ))}
-            {draft.gender === "female" ? (
-              <PhotoSlot
-                locale={locale}
-                label={t("manicure", {}, locale)}
-                preview={previewFor("manicure")}
-                onPick={(files) => {
-                  const file = files[0];
-                  if (file) void pickSlot("manicure", file);
-                }}
-                onClear={() => void clearSlot("manicure")}
-              />
-            ) : (
-              <div />
-            )}
-          </div>
-          {draft.gender === "female" ? (
-            <p className="text-xs text-muted-foreground">{t("manicureHint", {}, locale)}</p>
+          {profile ? (
+            <p className="text-xs text-muted-foreground">
+              {!hasFront
+                ? t("buildSheetNeedFace", {}, locale)
+                : buildable.length === 0
+                  ? t("buildSheetNothing", {}, locale)
+                  : t("buildSheetHint", {}, locale)}
+            </p>
           ) : null}
+          <p className="text-xs text-muted-foreground">{t("sheetHint", {}, locale)}</p>
+          {SHEET_GROUP_ORDER.map(({ group, title }) => (
+            <div key={group} className="flex flex-col gap-2">
+              <h4 className="text-xs font-medium">{t(title, {}, locale)}</h4>
+              <div className="grid grid-cols-3 gap-2 sm:grid-cols-4 md:grid-cols-5">
+                {SLOT_GROUPS[group].map((slot) => {
+                  const candidate = profile?.candidates[slot];
+                  const candidatePreview = candidate ? previews[candidate.id] ?? null : null;
+                  const shown = candidate ? candidatePreview : previewFor(slot);
+                  const generated = isSheetSlot(slot);
+                  const busy = slotBusy(slot);
+                  const label = t(slotLabelKey(slot) as I18nKey, {}, locale);
+                  return (
+                    <div key={slot} className="flex min-w-0 flex-col gap-1">
+                      <PhotoSlot
+                        locale={locale}
+                        multiple={FACE_PICK_SLOTS.includes(slot)}
+                        label={label}
+                        preview={shown}
+                        candidate={Boolean(candidate)}
+                        busy={busy}
+                        title={generated ? undefined : t("sheetUploadOnly", {}, locale)}
+                        onPick={(files) =>
+                          FACE_PICK_SLOTS.includes(slot)
+                            ? void pickFaces(files, FACE_PICK_SLOTS.indexOf(slot))
+                            : void pickSlot(slot, files[0]!)
+                        }
+                        onClear={() => void clearSlot(slot)}
+                      />
+                      {profile && generated && hasFront ? (
+                        <div className="flex flex-col gap-1">
+                          {candidate ? (
+                            <div className="flex gap-1">
+                              <Button
+                                type="button"
+                                size="sm"
+                                className="h-8 min-w-0 flex-1 px-1 text-xs"
+                                disabled={busy}
+                                onClick={() => void sheet.accept(profile.id, slot)}
+                              >
+                                <Icon name="Check" className="size-3.5" />
+                                {t("sheetAccept", {}, locale)}
+                              </Button>
+                              <Button
+                                type="button"
+                                size="icon"
+                                variant="ghost"
+                                className="size-8 shrink-0"
+                                disabled={busy}
+                                aria-label={t("sheetDiscard", {}, locale)}
+                                onClick={() => void sheet.discard(profile.id, slot)}
+                              >
+                                <Icon name="X" className="size-3.5" />
+                              </Button>
+                            </div>
+                          ) : null}
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            className="h-8 px-1 text-xs"
+                            disabled={busy || building}
+                            onClick={() => void sheet.slot(profile.id, slot, prompts[slot] ?? "")}
+                          >
+                            <Icon name="ArrowReloadHorizontal" className="size-3.5" />
+                            {candidate || profile.refs[slot] ? t("sheetRegenerate", {}, locale) : t("sheetGenerate", {}, locale)}
+                          </Button>
+                          <details>
+                            <summary className="cursor-pointer text-[11px] text-muted-foreground">
+                              {t("sheetPrompt", {}, locale)}
+                            </summary>
+                            <textarea
+                              className="mt-1 min-h-20 w-full rounded-md border border-input bg-background p-1.5 text-xs"
+                              value={prompts[slot] ?? ""}
+                              placeholder={sheetPrompt(slot, profile.gender, { bodyType: profile.bodyType, bust: profile.bust, heightCm: profile.heightCm, weightKg: profile.weightKg, age: profile.age })}
+                              aria-label={`${label}: ${t("sheetPrompt", {}, locale)}`}
+                              onChange={(event) => setPrompts({ ...prompts, [slot]: event.target.value })}
+                            />
+                            <p className="text-[11px] text-muted-foreground">{t("sheetPromptHint", {}, locale)}</p>
+                          </details>
+                        </div>
+                      ) : null}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
         </section>
         <section className="flex flex-col gap-2">
           <h3 className="text-sm font-medium">{t("details", {}, locale)}</h3>
@@ -694,10 +816,9 @@ function StudioPage({ initialView = "gallery" }: { initialView?: Tab }) {
 
   useEffect(() => {
     for (const profile of profiles) {
-      const photos = [
-        ...profile.photos,
-        ...(profile.manicurePhoto ? [profile.manicurePhoto] : []),
-      ];
+      const photos = [...Object.values(profile.refs), ...Object.values(profile.candidates)].filter(
+        (photo): photo is NonNullable<typeof photo> => Boolean(photo),
+      );
       for (const photo of photos) {
         if (photoPreviews[photo.id]) continue;
         void rpc
@@ -728,7 +849,77 @@ function StudioPage({ initialView = "gallery" }: { initialView?: Tab }) {
     load();
   };
 
-  const falOnlySelected = modelFalOnly((model || "nano-banana-2") as LastChoice["model"]);
+  const [sheetBusy, setSheetBusy] = useState<ReadonlySet<string>>(new Set());
+  const [sheetProgress, setSheetProgress] = useState<SheetApi["progress"]>(null);
+
+  const markSheet = (key: string, on: boolean) => {
+    setSheetBusy((current) => {
+      const next = new Set(current);
+      if (on) next.add(key);
+      else next.delete(key);
+      return next;
+    });
+  };
+
+  const sheetOne = async (targetId: string, slot: SlotId, customPrompt: string) => {
+    const key = `${targetId}:${slot}`;
+    markSheet(key, true);
+    try {
+      await rpc.call("sheet_slot", {
+        profileId: targetId,
+        slot,
+        ...(customPrompt.trim() !== "" ? { prompt: customPrompt.trim() } : {}),
+      });
+      setError(null);
+    } finally {
+      markSheet(key, false);
+      load();
+    }
+  };
+
+  const sheetApi: SheetApi = {
+    busy: sheetBusy,
+    progress: sheetProgress,
+    slot: (targetId, slot, customPrompt) => sheetOne(targetId, slot, customPrompt).catch(report),
+    accept: (targetId, slot) =>
+      rpc.call("sheet_accept", { profileId: targetId, slot }).then(() => load(), report),
+    discard: (targetId, slot) =>
+      rpc.call("sheet_discard", { profileId: targetId, slot }).then(() => load(), report),
+    build: async (targetId) => {
+      const target = profiles.find((item) => item.id === targetId);
+      if (!target) return;
+      const todo = DEFAULT_SHEET_SLOTS.filter((slot) => !target.refs[slot] && !target.candidates[slot]);
+      if (todo.length === 0) return;
+      const failures: string[] = [];
+      let done = 0;
+      setSheetProgress({ profileId: targetId, done: 0, total: todo.length });
+      // Slots build in parallel, as many as the "parallel generations" setting allows; the server queue enforces it.
+      await mapParallel(todo, settings?.concurrency ?? 8, async (slot) => {
+        try {
+          await sheetOne(targetId, slot, "");
+        } catch (cause) {
+          failures.push(
+            t(
+              "buildSheetFailed",
+              { slot: t(slotLabelKey(slot) as I18nKey, {}, locale), error: cause instanceof Error ? cause.message : String(cause) },
+              locale,
+            ),
+          );
+        }
+        done += 1;
+        setSheetProgress({ profileId: targetId, done, total: todo.length });
+      });
+      setSheetProgress(null);
+      if (failures.length > 0) {
+        setError(failures.slice(0, 3).join(" | ") + (failures.length > 3 ? ` (+${failures.length - 3})` : ""));
+      }
+      else setError(null);
+    },
+  };
+
+  const selectedModel = (model || "nano-banana-2") as LastChoice["model"];
+  const falOnlySelected = modelFalOnly(selectedModel);
+  const kieOnlySelected = modelKieOnly(selectedModel);
 
   const navItems: Array<{ id: Tab; icon: "GridView" | "UserRound" | "Settings"; label: string }> = [
     { id: "gallery", icon: "GridView", label: t("tabGallery", {}, locale) },
@@ -737,14 +928,14 @@ function StudioPage({ initialView = "gallery" }: { initialView?: Tab }) {
   ];
 
   const pickerValue = {
-    model: (model || "nano-banana-2") as LastChoice["model"],
-    gateway: (falOnlySelected ? "fal" : gateway || "kie") as LastChoice["gateway"],
+    model: selectedModel,
+    gateway: (falOnlySelected ? "fal" : kieOnlySelected ? "kie" : gateway || "kie") as LastChoice["gateway"],
     resolution,
   };
   const pickerEnabled = settings
     ? enabledFromSettings(settings)
     : Object.fromEntries(
-        MODEL_IDS.map((id) => [id, id === "nano-banana-2" || id === "nano-banana-pro" || id === "muse-image"]),
+        MODEL_IDS.map((id) => [id, id === "nano-banana-2" || id === "nano-banana-2.1" || id === "nano-banana-pro" || id === "muse-image"]),
       );
   const onPickerChange = (next: LastChoice) => {
     setModel(next.model);
@@ -847,7 +1038,7 @@ function StudioPage({ initialView = "gallery" }: { initialView?: Tab }) {
                     projectId: projectId ?? null,
                     prompt: prompt.trim(),
                     model: model || undefined,
-                    gateway: falOnlySelected ? "fal" : gateway || undefined,
+                    gateway: falOnlySelected ? "fal" : kieOnlySelected ? "kie" : gateway || undefined,
                     profile: profileId || undefined,
                     resolution: falOnlySelected && model === "muse-image" ? undefined : resolution,
                   })
@@ -993,6 +1184,78 @@ function StudioPage({ initialView = "gallery" }: { initialView?: Tab }) {
                 </select>
               </label>
               <p className="mt-1 text-xs text-muted-foreground">{t("gatewayNanoOnly", {}, locale)}</p>
+              <label className="mt-4 block text-sm">
+                {t("concurrencyLabel", {}, locale)}
+                <select
+                  className="mt-1 h-8 w-full rounded-md border border-input bg-background px-2 text-sm"
+                  value={settings.concurrency}
+                  onChange={(event) => saveSettings({ concurrency: Number(event.target.value) })}
+                >
+                  {Array.from({ length: MAX_CONCURRENCY }, (_, index) => index + 1).map((count) => (
+                    <option key={count} value={count}>
+                      {count}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <p className="mt-1 text-xs text-muted-foreground">{t("concurrencyHint", {}, locale)}</p>
+              <div className="mt-5 flex flex-col gap-2">
+                <h3 className="text-sm font-medium">{t("jevHeading", {}, locale)}</h3>
+                <label className="block text-sm">
+                  {t("jevRefs", {}, locale)}
+                  <select
+                    className="mt-1 h-8 w-full rounded-md border border-input bg-background px-2 text-sm"
+                    value={settings.jevRefs ? "on" : "off"}
+                    onChange={(event) => saveSettings({ jevRefs: event.target.value === "on" })}
+                  >
+                    <option value="on">{t("jevOn", {}, locale)}</option>
+                    <option value="off">{t("jevOff", {}, locale)}</option>
+                  </select>
+                </label>
+                <p className="text-xs text-muted-foreground">{t("jevHint", {}, locale)}</p>
+                <Field label={t("jevBaseUrl", {}, locale)}>
+                  <Input
+                    key={`jev-url-${settings.jevBaseUrl}`}
+                    defaultValue={settings.jevBaseUrl}
+                    onBlur={(event) => {
+                      const value = event.target.value.trim();
+                      if (value !== "" && value !== settings.jevBaseUrl) saveSettings({ jevBaseUrl: value });
+                    }}
+                  />
+                </Field>
+                <Field label={t("jevModel", {}, locale)}>
+                  <Input
+                    key={`jev-model-${settings.jevModel}`}
+                    defaultValue={settings.jevModel}
+                    onBlur={(event) => {
+                      const value = event.target.value.trim();
+                      if (value !== "" && value !== settings.jevModel) saveSettings({ jevModel: value });
+                    }}
+                  />
+                </Field>
+                {([
+                  ["jevKey", "jevKeyCatalog"],
+                  ["jevFallbackKey", "jevFallbackKeyCatalog"],
+                ] as const).map(([label, field]) => (
+                  <Field key={field} label={t(label, {}, locale)}>
+                    <select
+                      className={SELECT_CLASS}
+                      value={settings[field]}
+                      onChange={(event) => saveSettings({ [field]: event.target.value })}
+                    >
+                      <option value="">—</option>
+                      {settings[field] && !catalog.names.includes(settings[field]) ? (
+                        <option value={settings[field]}>{settings[field]}</option>
+                      ) : null}
+                      {catalog.names.map((name) => (
+                        <option key={name} value={name}>
+                          {name}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+                ))}
+              </div>
             </section>
             <section className="flex flex-col gap-3">
               <h2 className="text-sm font-medium">{t("keysHeading", {}, locale)}</h2>
@@ -1037,10 +1300,11 @@ function StudioPage({ initialView = "gallery" }: { initialView?: Tab }) {
                       })}
                       onDelete={() => void rpc.call("delete_profile", { id: profile.id }).then(load, report)}
                       onPhoto={uploadPhoto}
-                      onRemovePhoto={async (id, photoId, kind) => {
-                        await rpc.call("remove_photo", { profileId: id, photoId, kind });
+                      onRemovePhoto={async (id, photoId) => {
+                        await rpc.call("remove_photo", { profileId: id, photoId });
                         load();
                       }}
+                      sheet={sheetApi}
                     />
                   </li>
                 ))}
@@ -1056,10 +1320,11 @@ function StudioPage({ initialView = "gallery" }: { initialView?: Tab }) {
                 return saved;
               }}
               onPhoto={uploadPhoto}
-              onRemovePhoto={async (id, photoId, kind) => {
-                await rpc.call("remove_photo", { profileId: id, photoId, kind });
+              onRemovePhoto={async (id, photoId) => {
+                await rpc.call("remove_photo", { profileId: id, photoId });
                 load();
               }}
+              sheet={sheetApi}
             />
           </div>
         ) : null}

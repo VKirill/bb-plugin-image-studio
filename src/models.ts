@@ -1,5 +1,6 @@
 export const MODEL_IDS = [
   "nano-banana-2",
+  "nano-banana-2.1",
   "nano-banana-pro",
   "muse-image",
   "gpt-image-2.5-flare",
@@ -7,6 +8,8 @@ export const MODEL_IDS = [
   "flux-2-pro",
   "seedream-5",
   "grok-imagine",
+  "qwen-image-2.1",
+  "wan-2.7",
 ] as const;
 export type ModelId = (typeof MODEL_IDS)[number];
 
@@ -17,16 +20,20 @@ export type EnabledModels = Record<ModelId, boolean>;
 
 export type ModelSettingKey =
   | "nanoBanana2"
+  | "nanoBanana21"
   | "nanoBananaPro"
   | "museImage"
   | "gptImage25Flare"
   | "gptImage25Sunburst"
   | "flux2Pro"
   | "seedream5"
-  | "grokImagine";
+  | "grokImagine"
+  | "qwenImage21"
+  | "wan27";
 
 export const MODEL_SETTING: Record<ModelId, ModelSettingKey> = {
   "nano-banana-2": "nanoBanana2",
+  "nano-banana-2.1": "nanoBanana21",
   "nano-banana-pro": "nanoBananaPro",
   "muse-image": "museImage",
   "gpt-image-2.5-flare": "gptImage25Flare",
@@ -34,10 +41,13 @@ export const MODEL_SETTING: Record<ModelId, ModelSettingKey> = {
   "flux-2-pro": "flux2Pro",
   "seedream-5": "seedream5",
   "grok-imagine": "grokImagine",
+  "qwen-image-2.1": "qwenImage21",
+  "wan-2.7": "wan27",
 };
 
-export const FAL_ENDPOINTS: Record<ModelId, { generate: string; edit: string }> = {
+export const FAL_ENDPOINTS: Partial<Record<ModelId, { generate: string; edit: string }>> = {
   "nano-banana-2": { generate: "fal-ai/nano-banana-2", edit: "fal-ai/nano-banana-2/edit" },
+  "nano-banana-2.1": { generate: "google/nano-banana-2.1", edit: "google/nano-banana-2.1/edit" },
   "nano-banana-pro": { generate: "fal-ai/nano-banana-pro", edit: "fal-ai/nano-banana-pro/edit" },
   "muse-image": { generate: "meta/muse-image/text-to-image", edit: "meta/muse-image/edit" },
   "gpt-image-2.5-flare": {
@@ -57,16 +67,18 @@ export const FAL_ENDPOINTS: Record<ModelId, { generate: string; edit: string }> 
     generate: "xai/grok-imagine-image/v2.0/text-to-image",
     edit: "xai/grok-imagine-image/v2.0/edit",
   },
+  "wan-2.7": { generate: "fal-ai/wan/v2.7/text-to-image", edit: "fal-ai/wan/v2.7/edit" },
 };
 
 export type KieRoute = {
   generate: string;
   edit: string;
-  refField: "image_input" | "input_urls";
+  refField: "image_input" | "input_urls" | "image_urls";
 };
 
 export const KIE_MODELS: Partial<Record<ModelId, KieRoute>> = {
   "nano-banana-2": { generate: "nano-banana-2", edit: "nano-banana-2", refField: "image_input" },
+  "nano-banana-2.1": { generate: "nano-banana-2-1", edit: "nano-banana-2-1", refField: "image_input" },
   "nano-banana-pro": { generate: "nano-banana-pro", edit: "nano-banana-pro", refField: "image_input" },
   "gpt-image-2.5-flare": {
     generate: "gpt-image-2-5-flare-text-to-image",
@@ -93,10 +105,18 @@ export const KIE_MODELS: Partial<Record<ModelId, KieRoute>> = {
     edit: "grok-imagine/image-to-image",
     refField: "input_urls",
   },
+  "qwen-image-2.1": {
+    generate: "qwen2-1/text-to-image",
+    edit: "qwen2-1/image-to-image",
+    refField: "image_urls",
+  },
+  // kie lists Wan 2.7 Image (docs.kie.ai/market/wan/2-7-image): one model for create and edit, up to 9 input_urls.
+  "wan-2.7": { generate: "wan/2-7-image", edit: "wan/2-7-image", refField: "input_urls" },
 };
 
 const MODEL_ALIASES: Record<ModelId, string[]> = {
   "nano-banana-2": ["nb2", "banana 2", "nano banana", "gemini"],
+  "nano-banana-2.1": ["nb 2.1", "nb2.1", "nb21", "banana 2.1", "nano banana 2.1", "nano-banana-2-1", "gemini"],
   "nano-banana-pro": ["nbpro", "banana pro", "nano banana pro"],
   "muse-image": ["muse", "meta muse"],
   "gpt-image-2.5-flare": [
@@ -113,10 +133,16 @@ const MODEL_ALIASES: Record<ModelId, string[]> = {
   "flux-2-pro": ["flux", "flux 2", "flux.2", "black forest"],
   "seedream-5": ["seedream", "seedream 5", "bytedance"],
   "grok-imagine": ["grok", "xai", "grok imagine"],
+  "qwen-image-2.1": ["qwen", "qwen 2.1", "qwen2-1", "alibaba"],
+  "wan-2.7": ["wan", "wan 2.7", "wan2.7", "wan27", "alibaba", "wanx"],
 };
 
 export function modelFalOnly(id: ModelId): boolean {
   return id === "muse-image";
+}
+
+export function modelKieOnly(id: ModelId): boolean {
+  return id === "qwen-image-2.1";
 }
 
 export function modelEnabled(id: ModelId, enabled: EnabledModels): boolean {
@@ -153,6 +179,19 @@ export type RouteResult =
 export function parseModel(value: string | undefined): ModelId | null {
   if (value === undefined || value.trim() === "") return null;
   const id = value.trim().toLowerCase();
+  if (
+    id === "nano-banana-2.1" ||
+    id === "nano-banana-2-1" ||
+    id === "nanobanana2.1" ||
+    id === "nanobanana21" ||
+    id === "nb2.1" ||
+    id === "nb21" ||
+    id === "nb 2.1" ||
+    id === "banana 2.1" ||
+    id === "nano banana 2.1"
+  ) {
+    return "nano-banana-2.1";
+  }
   if (id === "nano-banana-2" || id === "nanobanana2" || id === "nb2") return "nano-banana-2";
   if (id === "nano-banana-pro" || id === "nanobananapro" || id === "nbpro") return "nano-banana-pro";
   if (id === "muse-image" || id === "muse" || id === "muse-mage") return "muse-image";
@@ -175,6 +214,18 @@ export function parseModel(value: string | undefined): ModelId | null {
   if (id === "flux-2-pro" || id === "flux2" || id === "flux-2" || id === "flux") return "flux-2-pro";
   if (id === "seedream-5" || id === "seedream" || id === "seedream5") return "seedream-5";
   if (id === "grok-imagine" || id === "grok" || id === "grok-imagine-image") return "grok-imagine";
+  if (
+    id === "qwen-image-2.1" ||
+    id === "qwen" ||
+    id === "qwen2-1" ||
+    id === "qwen-2.1" ||
+    id === "qwen21"
+  ) {
+    return "qwen-image-2.1";
+  }
+  if (id === "wan-2.7" || id === "wan" || id === "wan 2.7" || id === "wan2.7" || id === "wan27" || id === "wan-2-7") {
+    return "wan-2.7";
+  }
   return null;
 }
 
@@ -217,6 +268,8 @@ export function resolveRoute(input: RouteInput): RouteResult {
     gateway = parsedGateway;
   } else if (modelFalOnly(model)) {
     gateway = "fal";
+  } else if (modelKieOnly(model)) {
+    gateway = "kie";
   } else if (input.defaultGateway === "kie" && kieOk) {
     gateway = "kie";
   } else if (input.defaultGateway === "fal" && falOk) {
@@ -229,6 +282,9 @@ export function resolveRoute(input: RouteInput): RouteResult {
     return { ok: false, error: `No API key for ${model}. Add a fal.ai or kie.ai key in Image Studio.` };
   }
 
+  if (gateway === "fal" && modelKieOnly(model)) {
+    return { ok: false, error: `${model} is available through kie.ai only.` };
+  }
   if (gateway === "fal" && !falOk) {
     return { ok: false, error: "fal.ai key is missing. Enter it in Image Studio or pick it from Env Catalog." };
   }

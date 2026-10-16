@@ -6,6 +6,7 @@ import type { EnabledModels } from "../src/models.ts";
 function enabled(overrides: Partial<EnabledModels> = {}): EnabledModels {
   return {
     "nano-banana-2": true,
+    "nano-banana-2.1": false,
     "nano-banana-pro": true,
     "muse-image": true,
     "gpt-image-2.5-flare": false,
@@ -13,6 +14,7 @@ function enabled(overrides: Partial<EnabledModels> = {}): EnabledModels {
     "flux-2-pro": false,
     "seedream-5": false,
     "grok-imagine": false,
+    "qwen-image-2.1": false,
     ...overrides,
   };
 }
@@ -118,9 +120,33 @@ test("named gpt image uses the preferred gateway", () => {
   assert.equal(choice.gateway, "kie");
 });
 
+test("named qwen image stays on kie", () => {
+  const choice = resolvePickerSelection({
+    enabled: enabled({ "qwen-image-2.1": true }),
+    defaultGateway: "fal",
+    last: null,
+    suggestedModel: "qwen",
+    suggestedGateway: "fal",
+  });
+  assert.equal(choice.model, "qwen-image-2.1");
+  assert.equal(choice.gateway, "kie");
+});
+
 test("aspectLabel maps pixel size to nearest named frame", () => {
   assert.equal(aspectLabel(1920, 1080), "16:9");
   assert.equal(aspectLabel(1080, 1920), "9:16");
   assert.equal(aspectLabel(1024, 1024), "1:1");
   assert.equal(aspectLabel(1080, 1350), "4:5");
+});
+
+test("a suggested nano banana 2.1 name is understood by the picker", () => {
+  for (const name of ["nano-banana-2.1", "nb2.1", "banana 2.1"]) {
+    const choice = resolvePickerSelection({
+      enabled: enabled({ "nano-banana-2.1": true }),
+      defaultGateway: "kie",
+      last: null,
+      suggestedModel: name,
+    });
+    assert.equal(choice.model, "nano-banana-2.1", name);
+  }
 });

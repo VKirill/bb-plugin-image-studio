@@ -65,7 +65,7 @@ Exclude: no text in the frame.
 
 ## Template — edit (one change)
 
-OpenAI: say **change only X** and list what stays. One instruction, one change. Name Image 1…N the way the plugin attached them (selfies first, manicure last). Up to 16 references on fal edit.
+OpenAI: say **change only X** and list what stays. One instruction, one change. Name Image 1…N the way the plugin attached them (sources first, then face, body, details). Up to 16 references on fal edit.
 
 ```
 Change: [the only instruction].

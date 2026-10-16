@@ -13,7 +13,7 @@ import {
   type LastChoice,
   type ModelId,
 } from "./src/formats";
-import { MODEL_IDS, modelFalOnly } from "./src/models";
+import { MODEL_IDS, modelFalOnly, modelKieOnly } from "./src/models";
 
 function ChoiceButtons<T extends string>({
   label,
@@ -67,12 +67,15 @@ function ChoiceButtons<T extends string>({
 
 export function modelLabel(id: ModelId, locale: Locale): string {
   if (id === "nano-banana-2") return t("modelNano2", {}, locale);
+  if (id === "nano-banana-2.1") return t("modelNano21", {}, locale);
   if (id === "nano-banana-pro") return t("modelNanoPro", {}, locale);
   if (id === "gpt-image-2.5-flare") return t("modelGptFlare", {}, locale);
   if (id === "gpt-image-2.5-sunburst") return t("modelGptSunburst", {}, locale);
   if (id === "flux-2-pro") return t("modelFlux", {}, locale);
   if (id === "seedream-5") return t("modelSeedream", {}, locale);
   if (id === "grok-imagine") return t("modelGrok", {}, locale);
+  if (id === "qwen-image-2.1") return t("modelQwen", {}, locale);
+  if (id === "wan-2.7") return t("modelWan", {}, locale);
   return t("modelMuse", {}, locale);
 }
 
@@ -95,7 +98,7 @@ export function GeneratePickerForm({
 }) {
   const models = MODEL_IDS.filter((id) => enabledModels[id] === true);
   const showResolution = modelUsesResolution(value.model);
-  const showGateway = !modelFalOnly(value.model);
+  const showGateway = !modelFalOnly(value.model) && !modelKieOnly(value.model);
 
   return (
     <div className={cn("flex flex-col", compact ? "gap-2" : "gap-3")}>
@@ -109,7 +112,13 @@ export function GeneratePickerForm({
           onChange({
             ...value,
             model,
-            gateway: modelFalOnly(model) ? "fal" : modelFalOnly(value.model) ? "kie" : value.gateway,
+            gateway: modelFalOnly(model)
+              ? "fal"
+              : modelKieOnly(model)
+                ? "kie"
+                : modelFalOnly(value.model)
+                  ? "kie"
+                  : value.gateway,
           })
         }
         nameFor={(id) => modelLabel(id, locale)}
@@ -125,7 +134,9 @@ export function GeneratePickerForm({
           nameFor={(id) => (id === "fal" ? t("gatewayFal", {}, locale) : t("gatewayKie", {}, locale))}
         />
       ) : (
-        <p className="text-xs text-muted-foreground">{t("falOnlyModels", {}, locale)}</p>
+        <p className="text-xs text-muted-foreground">
+          {t(modelKieOnly(value.model) ? "kieOnlyModels" : "falOnlyModels", {}, locale)}
+        </p>
       )}
       {showAspect ? (
         <ChoiceButtons

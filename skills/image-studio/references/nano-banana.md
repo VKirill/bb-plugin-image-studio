@@ -1,6 +1,6 @@
-# Nano Banana 2 / Pro — how to write the prompt
+# Nano Banana 2 / 2.1 / Pro — how to write the prompt
 
-Source: Google’s hierarchy as documented by [fal: How to Use Nano Banana 2](https://fal.ai/learn/tools/how-to-use-nano-banana-2) (Gemini 3.1 Flash Image). API: [fal-ai/nano-banana-2](https://fal.ai/models/fal-ai/nano-banana-2/api), edit `fal-ai/nano-banana-2/edit`; kie [nano-banana-2](https://docs.kie.ai/market/google/nanobanana2) / [Pro](https://docs.kie.ai/market/google/pro-image-to-image).
+Source: Google’s hierarchy as documented by [fal: How to Use Nano Banana 2](https://fal.ai/learn/tools/how-to-use-nano-banana-2) (Gemini 3.1 Flash Image). API: [fal-ai/nano-banana-2](https://fal.ai/models/fal-ai/nano-banana-2/api), edit `fal-ai/nano-banana-2/edit`; kie [nano-banana-2](https://docs.kie.ai/market/google/nanobanana2) / [2.1](https://docs.kie.ai/market/google/nanobanana-2-1) (`nano-banana-2-1`, fal `google/nano-banana-2.1` and `/edit`; same prompt rules, up to 10 reference images on kie) / [Pro](https://docs.kie.ai/market/google/pro-image-to-image).
 
 This model is **not** a diffusion tag-soup. No `masterpiece, 8k, trending on ArtStation`, no weighted `(word:1.3)` syntax. Natural language with a **fixed clause order**. Sweet spot for photos: 1–3 sentences, or the labeled template below. Posters/infographics: longer, with quoted text and layout.
 
