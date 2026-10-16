@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { aspectLabel, gptImageQuality, gptImageSize, resolvePickerSelection } from "../src/formats.ts";
+import { aspectLabel, defaultResolution, gptImageQuality, gptImageSize, resolvePickerSelection } from "../src/formats.ts";
 import type { EnabledModels } from "../src/models.ts";
 
 function enabled(overrides: Partial<EnabledModels> = {}): EnabledModels {
@@ -148,5 +148,14 @@ test("a suggested nano banana 2.1 name is understood by the picker", () => {
       suggestedModel: name,
     });
     assert.equal(choice.model, "nano-banana-2.1", name);
+  }
+});
+
+test("an unnamed size defaults to 2K for every model with a resolution field", () => {
+  for (const model of ["nano-banana-2", "nano-banana-2.1", "nano-banana-pro", "gpt-image-2.5-flare", "qwen-image-2.1", "wan-2.7"] as const) {
+    assert.equal(defaultResolution(model), "2K", model);
+  }
+  for (const model of ["muse-image", "flux-2-pro", "seedream-5", "grok-imagine"] as const) {
+    assert.equal(defaultResolution(model), undefined, model);
   }
 });

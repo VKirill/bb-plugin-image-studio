@@ -57,6 +57,7 @@ import { enabledFromSettings, mergeSettings, settingsSchema, type StudioSettings
 import {
   GENERATE_PICKER_ID,
   lastChoiceSchema,
+  defaultResolution,
   modelUsesResolution,
   parseLastChoice,
   pickerResponseSchema,
@@ -768,7 +769,8 @@ export default async function plugin(bb: BbPluginApi) {
     const job = {
       prompt: composedPrompt,
       aspectRatio: input.aspectRatio,
-      resolution: input.resolution,
+      // No size named (CLI, batch, agents) → 2K. Providers would otherwise fall back to their own 1K default.
+      resolution: input.resolution ?? defaultResolution(route.model),
       referenceDataUris: references,
       seed: input.seed,
     };

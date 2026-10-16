@@ -73,6 +73,11 @@ export function modelUsesResolution(model: ModelId): boolean {
   return model.startsWith("nano-banana") || model.startsWith("gpt-image") || model === "qwen-image-2.1";
 }
 
+/** Size sent when the caller named none: 2K for every model that takes a resolution field, else the provider's own. */
+export function defaultResolution(model: ModelId): "2K" | undefined {
+  return modelUsesResolution(model) || model === "wan-2.7" ? "2K" : undefined;
+}
+
 export function gptImageSize(aspect?: string): "square_hd" | "portrait_4_3" | "portrait_16_9" | "landscape_4_3" | "landscape_16_9" {
   if (!aspect || aspect === "1:1") return "square_hd";
   if (aspect === "9:16") return "portrait_16_9";
