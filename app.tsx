@@ -257,6 +257,26 @@ function PhotoSlot({
   );
 }
 
+const PREVIEW_PARALLEL = 6;
+
+/** Fetches each missing preview once, a few at a time, so a long gallery cannot flood the browser with requests. */
+function fetchPreviews(
+  requested: Set<string>,
+  jobs: Array<{ id: string; load: () => Promise<{ mimeType: string; base64: string }> }>,
+  store: (id: string, url: string) => void,
+): void {
+  const todo = jobs.filter((job) => !requested.has(job.id));
+  for (const job of todo) requested.add(job.id);
+  void mapParallel(todo, PREVIEW_PARALLEL, async (job) => {
+    try {
+      const file = await job.load();
+      store(job.id, `data:${file.mimeType};base64,${file.base64}`);
+    } catch {
+      // A failed preview stays a placeholder until the panel reopens.
+    }
+  });
+}
+
 async function fileToBase64(file: File): Promise<string> {
   const text = await new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
@@ -922,20 +942,18 @@ function StudioPage({ initialView = "gallery" }: { initialView?: Tab }) {
   }, [load]);
   useRealtime("image-studio-changed", load);
 
+  const requestedThumbs = useRef(new Set<string>());
   useEffect(() => {
-    for (const item of generations) {
-      if (thumbs[item.id]) continue;
-      void rpc
-        .call("generation_preview", { id: item.id, projectId: item.projectId, variant: "thumb" })
-        .then((file) => {
-          setThumbs((current) => ({
-            ...current,
-            [item.id]: `data:${file.mimeType};base64,${file.base64}`,
-          }));
-        })
-        .catch(() => undefined);
-    }
-  }, [generations, thumbs, rpc]);
+    if (tab !== "gallery") return;
+    fetchPreviews(
+      requestedThumbs.current,
+      generations.map((item) => ({
+        id: item.id,
+        load: () => rpc.call("generation_preview", { id: item.id, projectId: item.projectId, variant: "thumb" }),
+      })),
+      (id, url) => setThumbs((current) => ({ ...current, [id]: url })),
+    );
+  }, [generations, rpc, tab]);
 
   useEffect(() => {
     if (viewerIndex === null) return;
@@ -952,30 +970,26 @@ function StudioPage({ initialView = "gallery" }: { initialView?: Tab }) {
       .catch(() => undefined);
   }, [fullPreviews, generations, rpc, viewerIndex]);
 
+  const requestedPhotos = useRef(new Set<string>());
   useEffect(() => {
     if (tab !== "people") return;
     // A single profile opens by itself; with several, only the open one loads its whole sheet.
     const openId = profiles.length === 1 ? profiles[0]!.id : openProfileId;
-    for (const profile of profiles) {
-      const photos = (
-        profile.id === openId
-          ? [...Object.values(profile.refs), ...Object.values(profile.candidates)]
-          : [profile.refs["face-front"] ?? profile.refs["face-34-left"] ?? profile.refs["face-34-right"]]
-      ).filter((photo): photo is NonNullable<typeof photo> => Boolean(photo));
-      for (const photo of photos) {
-        if (photoPreviews[photo.id]) continue;
-        void rpc
-          .call("profile_photo_preview", { profileId: profile.id, photoId: photo.id })
-          .then((file) => {
-            setPhotoPreviews((current) => ({
-              ...current,
-              [photo.id]: `data:${file.mimeType};base64,${file.base64}`,
-            }));
-          })
-          .catch(() => undefined);
-      }
-    }
-  }, [photoPreviews, profiles, rpc, tab, openProfileId]);
+    const jobs = profiles.flatMap((profile) =>
+      (profile.id === openId
+        ? [...Object.values(profile.refs), ...Object.values(profile.candidates)]
+        : [profile.refs["face-front"] ?? profile.refs["face-34-left"] ?? profile.refs["face-34-right"]]
+      )
+        .filter((photo): photo is NonNullable<typeof photo> => Boolean(photo))
+        .map((photo) => ({
+          id: photo.id,
+          load: () => rpc.call("profile_photo_preview", { profileId: profile.id, photoId: photo.id }),
+        })),
+    );
+    fetchPreviews(requestedPhotos.current, jobs, (id, url) =>
+      setPhotoPreviews((current) => ({ ...current, [id]: url })),
+    );
+  }, [profiles, rpc, tab, openProfileId]);
 
   const saveSettings = (patch: Partial<StudioSettings>) => {
     rpc.call("update_settings", patch).then(load, report);
