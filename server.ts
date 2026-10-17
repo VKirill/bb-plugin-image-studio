@@ -370,6 +370,11 @@ export default async function plugin(bb: BbPluginApi) {
     } catch {
       // already gone
     }
+    try {
+      await unlink(join(profileDir(profileId), `${filename}.thumb.webp`));
+    } catch {
+      // no cached preview
+    }
   }
 
   async function readLastUnlocked(): Promise<LastChoice | null> {
@@ -1251,8 +1256,16 @@ export default async function plugin(bb: BbPluginApi) {
         SLOT_IDS.map((slot) => profile.refs[slot]).find((item) => item?.id === photoId) ??
         SLOT_IDS.map((slot) => profile.candidates[slot]).find((item) => item?.id === photoId);
       if (!photo) throw new Error("Photo not found");
-      const bytes = await readFile(join(profileDir(profile.id), photo.filename));
-      return { mimeType: photo.mimeType, base64: bytes.toString("base64") };
+      // Panel tiles are small: serve a cached WebP thumbnail, not the multi-megabyte original.
+      const thumbPath = join(profileDir(profile.id), `${photo.filename}.thumb.webp`);
+      try {
+        const bytes = await readFile(thumbPath);
+        return { mimeType: sniffImageMime(bytes), base64: bytes.toString("base64") };
+      } catch {
+        const thumb = await encodeWebp(await readFile(join(profileDir(profile.id), photo.filename)), WEBP_THUMB);
+        await writeFile(thumbPath, thumb);
+        return { mimeType: sniffImageMime(thumb), base64: thumb.toString("base64") };
+      }
     },
     generate: async (input) => {
       let cwd: string | undefined;

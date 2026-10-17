@@ -151,7 +151,14 @@ const en = {
   removePhoto: "Remove",
   saveChanges: "Save changes",
   newPerson: "New person",
-  newPersonHint: "Name and body first. Add face photos in one file picker, then body views and close-ups slot by slot. Save, then build the rest of the sheet.",
+  newPersonHint: "Name, body and face photos first. Save, then add body views and close-ups or build them from the front face.",
+  personMeta: "Age {age} · {height} cm · {weight} kg",
+  sheetCount: "{filled} of {total} references",
+  candidatesWaiting: "{count} to review",
+  sheetHelp: "How the sheet works",
+  editPrompt: "Prompt and generate",
+  buildSheetCount: "Build sheet ({count})",
+  uploadPhoto: "Upload photo",
 };
 
 export type I18nKey = keyof typeof en;
@@ -309,7 +316,14 @@ const ru: Record<I18nKey, string> = {
   removePhoto: "Убрать",
   saveChanges: "Сохранить",
   newPerson: "Новый человек",
-  newPersonHint: "Сначала имя и тело. Фото лица можно выбрать сразу несколько, потом по слотам ракурсы тела и крупные планы. Сохраните и соберите остальную раскадровку.",
+  newPersonHint: "Сначала имя, параметры и фото лица. Сохраните, потом добавьте ракурсы тела и крупные планы или соберите их по лицу анфас.",
+  personMeta: "Возраст {age} · {height} см · {weight} кг",
+  sheetCount: "Эталонов: {filled} из {total}",
+  candidatesWaiting: "На проверке: {count}",
+  sheetHelp: "Как работает раскадровка",
+  editPrompt: "Промпт и генерация",
+  buildSheetCount: "Собрать раскадровку ({count})",
+  uploadPhoto: "Загрузить фото",
 };
 
 export type Locale = "en" | "ru";

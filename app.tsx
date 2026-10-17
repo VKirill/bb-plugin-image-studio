@@ -34,6 +34,7 @@ const SHEET_GROUP_ORDER: ReadonlyArray<{ group: SlotGroup; title: I18nKey }> = [
   { group: "body", title: "sheetBody" },
   { group: "details", title: "sheetDetails" },
 ];
+const ALL_SHEET_SLOTS: readonly SlotId[] = SHEET_GROUP_ORDER.flatMap(({ group }) => SLOT_GROUPS[group]);
 const SPIN_CLASS = "animate-spin";
 
 type SheetApi = {
@@ -167,36 +168,45 @@ function Field({ label, className, children }: { label: string; className?: stri
 function PhotoSlot({
   label,
   preview,
+  loading,
   locale,
   multiple,
   candidate,
   busy,
   title,
+  actions,
   onPick,
   onClear,
 }: {
   label: string;
   preview: string | null;
+  /** A photo exists but its thumbnail has not arrived yet. */
+  loading?: boolean;
   locale: Locale;
   multiple?: boolean;
   candidate?: boolean;
   busy?: boolean;
   title?: string;
+  actions?: ReactNode;
   onPick: (files: File[]) => void;
   onClear?: () => void;
 }) {
   return (
     <div className="flex min-w-0 flex-col gap-1" title={title}>
-      <div className="truncate text-xs text-muted-foreground">{label}</div>
       <div className="relative">
         <label
+          aria-label={preview ? label : `${label}: ${t("uploadPhoto", {}, locale)}`}
           className={`relative flex aspect-square w-full cursor-pointer items-center justify-center overflow-hidden rounded-md border bg-muted/40 hover:bg-muted ${
-            candidate ? "border-solid border-primary" : "border-dashed border-border"
-          }`}
+            candidate
+              ? "border-solid border-primary ring-1 ring-primary"
+              : preview || loading
+                ? "border-solid border-border"
+                : "border-dashed border-border"
+          } ${loading && !preview ? "animate-pulse" : ""}`}
         >
           {preview ? (
-            <img src={preview} alt="" className="size-full object-cover" />
-          ) : (
+            <img src={preview} alt={label} decoding="async" className="size-full object-cover" />
+          ) : loading ? null : (
             <Icon name="UserRoundPlus" className="size-5 text-muted-foreground" />
           )}
           {candidate ? (
@@ -237,6 +247,12 @@ function PhotoSlot({
           </Button>
         ) : null}
       </div>
+      <div className="flex min-h-7 items-center gap-0.5">
+        <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground" title={label}>
+          {label}
+        </span>
+        {actions}
+      </div>
     </div>
   );
 }
@@ -255,6 +271,10 @@ function PersonCard({
   profile,
   locale,
   previews,
+  open = true,
+  onToggle,
+  onCancel,
+  onSaved,
   onSave,
   onDelete,
   onError,
@@ -265,6 +285,11 @@ function PersonCard({
   profile?: PersonProfile;
   locale: Locale;
   previews: Record<string, string>;
+  /** Existing profiles fold to a one-line header; only the open one renders its sheet. */
+  open?: boolean;
+  onToggle?: () => void;
+  onCancel?: () => void;
+  onSaved?: (saved: PersonProfile) => void;
   onSave: (input: {
     id?: string;
     name: string;
@@ -342,143 +367,323 @@ function PersonCard({
   };
 
   const [prompts, setPrompts] = useState<Partial<Record<SlotId, string>>>({});
+  const [promptSlot, setPromptSlot] = useState<SlotId | null>(null);
   const hasFront = Boolean(profile?.refs["face-front"]);
   const slotBusy = (slot: SlotId) => (profile ? sheet.busy.has(`${profile.id}:${slot}`) : false);
   const building = Boolean(profile && sheet.progress?.profileId === profile.id);
   const buildable = profile
     ? DEFAULT_SHEET_SLOTS.filter((slot) => !profile.refs[slot] && !profile.candidates[slot])
     : [];
+  // A new person only picks face photos; the rest of the sheet is filled once the profile exists.
+  const groups = profile ? SHEET_GROUP_ORDER : SHEET_GROUP_ORDER.filter(({ group }) => group === "face");
+  const filledCount = profile ? ALL_SHEET_SLOTS.filter((slot) => profile.refs[slot]).length : 0;
+  const candidateCount = profile ? ALL_SHEET_SLOTS.filter((slot) => profile.candidates[slot]).length : 0;
+  const avatarPhoto = profile?.refs["face-front"] ?? profile?.refs["face-34-left"] ?? profile?.refs["face-34-right"];
+  const avatar = avatarPhoto ? previews[avatarPhoto.id] : undefined;
+
+  const submit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    void (async () => {
+      try {
+        const saved = await onSave({
+          ...(profile?.id ? { id: profile.id } : {}),
+          name: draft.name,
+          gender: draft.gender,
+          age: Number(draft.age),
+          heightCm: Number(draft.heightCm),
+          weightKg: Number(draft.weightKg),
+          bodyType: draft.bodyType || "average",
+          bust: draft.bust,
+        });
+        const uploads = Object.entries(pending) as Array<[PhotoSlotId, { file: File; url: string }]>;
+        for (const [slot, item] of uploads) {
+          await onPhoto(saved.id, slot, item.file);
+          URL.revokeObjectURL(item.url);
+        }
+        setPending({});
+        onSaved?.(saved);
+      } catch (cause) {
+        onError?.(cause);
+      }
+    })();
+  };
+
+  const header = profile ? (
+    <button
+      type="button"
+      aria-expanded={open}
+      className="flex w-full items-center gap-3 rounded-lg p-3 text-left hover:bg-muted/50"
+      onClick={onToggle}
+    >
+      <span className="flex size-11 shrink-0 items-center justify-center overflow-hidden rounded-full bg-muted">
+        {avatar ? (
+          <img src={avatar} alt="" decoding="async" className="size-full object-cover" />
+        ) : (
+          <Icon name="UserRound" className="size-5 text-muted-foreground" />
+        )}
+      </span>
+      <span className="flex min-w-0 flex-1 flex-col">
+        <span className="truncate text-sm font-medium">{profile.name}</span>
+        <span className="truncate text-xs text-muted-foreground">
+          {t("personMeta", { age: profile.age, height: profile.heightCm, weight: profile.weightKg }, locale)}
+          {" · "}
+          {t("sheetCount", { filled: filledCount, total: ALL_SHEET_SLOTS.length }, locale)}
+        </span>
+      </span>
+      {building && sheet.progress ? (
+        <span className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
+          <Icon name="Loading" className={`size-3.5 ${SPIN_CLASS}`} />
+          {sheet.progress.done}/{sheet.progress.total}
+        </span>
+      ) : null}
+      {candidateCount > 0 ? (
+        <span className="shrink-0 rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
+          {t("candidatesWaiting", { count: candidateCount }, locale)}
+        </span>
+      ) : null}
+      <Icon
+        name="ChevronDown"
+        className={`size-4 shrink-0 text-muted-foreground transition-transform ${open ? "rotate-180" : ""}`}
+      />
+    </button>
+  ) : (
+    <div className="flex items-start justify-between gap-2 px-4 pt-4">
+      <div>
+        <h2 className="text-sm font-medium">{t("newPerson", {}, locale)}</h2>
+        <p className="mt-1 text-xs text-muted-foreground">{t("newPersonHint", {}, locale)}</p>
+      </div>
+      {onCancel ? (
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className="size-8 shrink-0"
+          aria-label={t("cancelGenerate", {}, locale)}
+          onClick={onCancel}
+        >
+          <Icon name="X" className="size-4" />
+        </Button>
+      ) : null}
+    </div>
+  );
+
+  const fields = (
+    <div className="grid grid-cols-2 gap-x-3 gap-y-3 sm:grid-cols-4">
+      <Field label={t("name", {}, locale)} className="col-span-2">
+        <Input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} required />
+      </Field>
+      <Field label={t("gender", {}, locale)}>
+        <select
+          className={SELECT_CLASS}
+          value={draft.gender}
+          onChange={(event) => setDraft({ ...draft, gender: event.target.value === "female" ? "female" : "male" })}
+        >
+          <option value="male">{t("male", {}, locale)}</option>
+          <option value="female">{t("female", {}, locale)}</option>
+        </select>
+      </Field>
+      <Field label={t("age", {}, locale)}>
+        <Input type="number" min={1} value={draft.age} onChange={(event) => setDraft({ ...draft, age: event.target.value })} />
+      </Field>
+      <Field label={t("height", {}, locale)}>
+        <Input
+          type="number"
+          min={1}
+          value={draft.heightCm}
+          onChange={(event) => setDraft({ ...draft, heightCm: event.target.value })}
+        />
+      </Field>
+      <Field label={t("weight", {}, locale)}>
+        <Input
+          type="number"
+          min={1}
+          value={draft.weightKg}
+          onChange={(event) => setDraft({ ...draft, weightKg: event.target.value })}
+        />
+      </Field>
+      <Field label={t("bodyType", {}, locale)} className={draft.gender === "female" ? "" : "col-span-2"}>
+        <select
+          className={SELECT_CLASS}
+          value={draft.bodyType}
+          onChange={(event) => setDraft({ ...draft, bodyType: event.target.value })}
+        >
+          {BODY_OPTIONS.map((option) => (
+            <option key={option.value} value={option.value}>
+              {t(option.key as I18nKey, {}, locale)}
+            </option>
+          ))}
+          {draft.bodyType && !BODY_OPTIONS.some((option) => option.value === draft.bodyType) ? (
+            <option value={draft.bodyType}>{draft.bodyType}</option>
+          ) : null}
+        </select>
+      </Field>
+      {draft.gender === "female" ? (
+        <Field label={t("bust", {}, locale)}>
+          <select className={SELECT_CLASS} value={draft.bust} onChange={(event) => setDraft({ ...draft, bust: event.target.value })}>
+            <option value="">{t("bustNone", {}, locale)}</option>
+            {BUST_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {t(option.key as I18nKey, {}, locale)}
+              </option>
+            ))}
+            {draft.bust && !BUST_OPTIONS.some((option) => option.value === draft.bust) ? (
+              <option value={draft.bust}>{draft.bust}</option>
+            ) : null}
+          </select>
+        </Field>
+      ) : null}
+    </div>
+  );
+
+  const footer = (
+    <div className="flex items-center gap-2">
+      {onDelete ? (
+        <Button type="button" variant="ghost" size="sm" className="text-destructive" onClick={onDelete}>
+          {t("deletePerson", {}, locale)}
+        </Button>
+      ) : null}
+      <span className="flex-1" />
+      <Button type="submit" size="sm">
+        {profile ? t("saveChanges", {}, locale) : t("addPerson", {}, locale)}
+      </Button>
+    </div>
+  );
+
+  const promptLabel = promptSlot ? t(slotLabelKey(promptSlot) as I18nKey, {}, locale) : "";
 
   return (
-    <Card className="p-4">
-      <form
-        className="flex flex-col gap-5"
-        onSubmit={(event) => {
-          event.preventDefault();
-          void (async () => {
-            try {
-              const saved = await onSave({
-                ...(profile?.id ? { id: profile.id } : {}),
-                name: draft.name,
-                gender: draft.gender,
-                age: Number(draft.age),
-                heightCm: Number(draft.heightCm),
-                weightKg: Number(draft.weightKg),
-                bodyType: draft.bodyType || "average",
-                bust: draft.bust,
-              });
-              const uploads = Object.entries(pending) as Array<[PhotoSlotId, { file: File; url: string }]>;
-              for (const [slot, item] of uploads) {
-                await onPhoto(saved.id, slot, item.file);
-                URL.revokeObjectURL(item.url);
-              }
-              setPending({});
-              if (!profile) {
-                setDraft({
-                  name: "",
-                  gender: draft.gender,
-                  age: draft.age,
-                  heightCm: draft.heightCm,
-                  weightKg: draft.weightKg,
-                  bodyType: draft.bodyType,
-                  bust: "",
-                });
-              }
-            } catch (cause) {
-              onError?.(cause);
-            }
-          })();
-        }}
-      >
-        <div>
-          <h2 className="text-sm font-medium">{profile ? profile.name : t("newPerson", {}, locale)}</h2>
-          {profile ? null : (
-            <p className="mt-1 text-xs text-muted-foreground">{t("newPersonHint", {}, locale)}</p>
-          )}
-        </div>
-        <section className="flex flex-col gap-3">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <h3 className="text-sm font-medium">{t("photos", {}, locale)}</h3>
-            <div className="flex flex-wrap items-center gap-2">
-              <label>
-                <span className="sr-only">{t("addPhotos", {}, locale)}</span>
-                <Button type="button" variant="outline" size="sm" asChild>
-                  <span>{t("addPhotos", {}, locale)}</span>
-                </Button>
-                <input
-                  type="file"
-                  accept="image/jpeg,image/png,image/webp"
-                  multiple
-                  className="sr-only"
-                  onChange={(event: ChangeEvent<HTMLInputElement>) => {
-                    const files = imageFiles(event.target.files, 3);
-                    event.target.value = "";
-                    if (files.length > 0) void pickFaces(files);
-                  }}
-                />
-              </label>
-              {profile ? (
-                <Button
-                  type="button"
-                  size="sm"
-                  disabled={!hasFront || building || buildable.length === 0}
-                  onClick={() => void sheet.build(profile.id)}
-                >
-                  <Icon name={building ? "Loading" : "Palette"} className={`size-4 ${building ? SPIN_CLASS : ""}`} />
-                  {building && sheet.progress
-                    ? t("buildSheetProgress", { done: sheet.progress.done, total: sheet.progress.total }, locale)
-                    : t("buildSheet", {}, locale)}
-                </Button>
-              ) : null}
+    <Card className="p-0">
+      {header}
+      {open ? (
+        <form className={`flex flex-col gap-5 p-4 ${profile ? "border-t border-border" : ""}`} onSubmit={submit}>
+          {profile ? null : fields}
+          <section className="flex flex-col gap-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h3 className="text-sm font-medium">{t("photos", {}, locale)}</h3>
+              <div className="flex flex-wrap items-center gap-2">
+                <label>
+                  <span className="sr-only">{t("addPhotos", {}, locale)}</span>
+                  <Button type="button" variant="outline" size="sm" asChild>
+                    <span>{t("addPhotos", {}, locale)}</span>
+                  </Button>
+                  <input
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp"
+                    multiple
+                    className="sr-only"
+                    onChange={(event: ChangeEvent<HTMLInputElement>) => {
+                      const files = imageFiles(event.target.files, 3);
+                      event.target.value = "";
+                      if (files.length > 0) void pickFaces(files);
+                    }}
+                  />
+                </label>
+                {profile ? (
+                  <Button
+                    type="button"
+                    size="sm"
+                    disabled={!hasFront || building || buildable.length === 0}
+                    onClick={() => void sheet.build(profile.id)}
+                  >
+                    <Icon name={building ? "Loading" : "Palette"} className={`size-4 ${building ? SPIN_CLASS : ""}`} />
+                    {building && sheet.progress
+                      ? t("buildSheetProgress", { done: sheet.progress.done, total: sheet.progress.total }, locale)
+                      : buildable.length > 0
+                        ? t("buildSheetCount", { count: buildable.length }, locale)
+                        : t("buildSheet", {}, locale)}
+                  </Button>
+                ) : null}
+              </div>
             </div>
-          </div>
-          <p className="text-xs text-muted-foreground">{t("addPhotosHint", {}, locale)}</p>
-          {profile ? (
-            <p className="text-xs text-muted-foreground">
-              {!hasFront
-                ? t("buildSheetNeedFace", {}, locale)
-                : buildable.length === 0
-                  ? t("buildSheetNothing", {}, locale)
-                  : t("buildSheetHint", {}, locale)}
-            </p>
-          ) : null}
-          <p className="text-xs text-muted-foreground">{t("sheetHint", {}, locale)}</p>
-          {SHEET_GROUP_ORDER.map(({ group, title }) => (
-            <div key={group} className="flex flex-col gap-2">
-              <h4 className="text-xs font-medium">{t(title, {}, locale)}</h4>
-              <div className="grid grid-cols-3 gap-2 sm:grid-cols-4 md:grid-cols-5">
-                {SLOT_GROUPS[group].map((slot) => {
-                  const candidate = profile?.candidates[slot];
-                  const candidatePreview = candidate ? previews[candidate.id] ?? null : null;
-                  const shown = candidate ? candidatePreview : previewFor(slot);
-                  const generated = isSheetSlot(slot);
-                  const busy = slotBusy(slot);
-                  const label = t(slotLabelKey(slot) as I18nKey, {}, locale);
-                  return (
-                    <div key={slot} className="flex min-w-0 flex-col gap-1">
-                      <PhotoSlot
-                        locale={locale}
-                        multiple={FACE_PICK_SLOTS.includes(slot)}
-                        label={label}
-                        preview={shown}
-                        candidate={Boolean(candidate)}
-                        busy={busy}
-                        title={generated ? undefined : t("sheetUploadOnly", {}, locale)}
-                        onPick={(files) =>
-                          FACE_PICK_SLOTS.includes(slot)
-                            ? void pickFaces(files, FACE_PICK_SLOTS.indexOf(slot))
-                            : void pickSlot(slot, files[0]!)
-                        }
-                        onClear={() => void clearSlot(slot)}
-                      />
-                      {profile && generated && hasFront ? (
-                        <div className="flex flex-col gap-1">
-                          {candidate ? (
+            {profile ? (
+              <p className="text-xs text-muted-foreground">
+                {!hasFront
+                  ? t("buildSheetNeedFace", {}, locale)
+                  : buildable.length === 0
+                    ? t("buildSheetNothing", {}, locale)
+                    : t("buildSheetHint", {}, locale)}
+              </p>
+            ) : null}
+            <details className="text-xs text-muted-foreground">
+              <summary className="cursor-pointer select-none">{t("sheetHelp", {}, locale)}</summary>
+              <p className="mt-1">{t("addPhotosHint", {}, locale)}</p>
+              <p className="mt-1">{t("sheetHint", {}, locale)}</p>
+            </details>
+            {groups.map(({ group, title }) => {
+              const slots = SLOT_GROUPS[group];
+              const filled = profile ? slots.filter((slot) => profile.refs[slot]).length : 0;
+              return (
+                <div key={group} className="flex flex-col gap-2">
+                  <div className="flex items-baseline justify-between gap-2">
+                    <h4 className="text-xs font-medium">{t(title, {}, locale)}</h4>
+                    {profile ? (
+                      <span className="text-xs tabular-nums text-muted-foreground">
+                        {filled}/{slots.length}
+                      </span>
+                    ) : null}
+                  </div>
+                  <div className="grid grid-cols-3 gap-3 sm:grid-cols-4 md:grid-cols-5">
+                    {slots.map((slot) => {
+                      const candidate = profile?.candidates[slot];
+                      const candidatePreview = candidate ? previews[candidate.id] ?? null : null;
+                      const shown = candidate ? candidatePreview : previewFor(slot);
+                      const generated = isSheetSlot(slot);
+                      const busy = slotBusy(slot);
+                      const label = t(slotLabelKey(slot) as I18nKey, {}, locale);
+                      const canGenerate = Boolean(profile && generated && hasFront);
+                      const regenerate = Boolean(candidate || profile?.refs[slot]);
+                      return (
+                        <div key={slot} className="flex min-w-0 flex-col gap-1">
+                          <PhotoSlot
+                            locale={locale}
+                            multiple={FACE_PICK_SLOTS.includes(slot)}
+                            label={label}
+                            preview={shown}
+                            loading={Boolean(candidate || profile?.refs[slot]) && !shown}
+                            candidate={Boolean(candidate)}
+                            busy={busy}
+                            title={generated ? undefined : t("sheetUploadOnly", {}, locale)}
+                            onPick={(files) =>
+                              FACE_PICK_SLOTS.includes(slot)
+                                ? void pickFaces(files, FACE_PICK_SLOTS.indexOf(slot))
+                                : void pickSlot(slot, files[0]!)
+                            }
+                            onClear={() => void clearSlot(slot)}
+                            actions={
+                              canGenerate && profile ? (
+                                <>
+                                  <Button
+                                    type="button"
+                                    size="icon"
+                                    variant="ghost"
+                                    className="size-7 shrink-0"
+                                    disabled={busy || building}
+                                    aria-label={`${label}: ${regenerate ? t("sheetRegenerate", {}, locale) : t("sheetGenerate", {}, locale)}`}
+                                    onClick={() => void sheet.slot(profile.id, slot, prompts[slot] ?? "")}
+                                  >
+                                    <Icon name="ArrowReloadHorizontal" className="size-3.5" />
+                                  </Button>
+                                  <Button
+                                    type="button"
+                                    size="icon"
+                                    variant="ghost"
+                                    className={`size-7 shrink-0 ${prompts[slot]?.trim() ? "text-primary" : ""}`}
+                                    disabled={busy || building}
+                                    aria-label={`${label}: ${t("editPrompt", {}, locale)}`}
+                                    onClick={() => setPromptSlot(slot)}
+                                  >
+                                    <Icon name="Edit" className="size-3.5" />
+                                  </Button>
+                                </>
+                              ) : null
+                            }
+                          />
+                          {profile && candidate ? (
                             <div className="flex gap-1">
                               <Button
                                 type="button"
                                 size="sm"
-                                className="h-8 min-w-0 flex-1 px-1 text-xs"
+                                className="h-7 min-w-0 flex-1 px-1 text-xs"
                                 disabled={busy}
                                 onClick={() => void sheet.accept(profile.id, slot)}
                               >
@@ -488,8 +693,8 @@ function PersonCard({
                               <Button
                                 type="button"
                                 size="icon"
-                                variant="ghost"
-                                className="size-8 shrink-0"
+                                variant="outline"
+                                className="size-7 shrink-0"
                                 disabled={busy}
                                 aria-label={t("sheetDiscard", {}, locale)}
                                 onClick={() => void sheet.discard(profile.id, slot)}
@@ -498,133 +703,64 @@ function PersonCard({
                               </Button>
                             </div>
                           ) : null}
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant="outline"
-                            className="h-8 px-1 text-xs"
-                            disabled={busy || building}
-                            onClick={() => void sheet.slot(profile.id, slot, prompts[slot] ?? "")}
-                          >
-                            <Icon name="ArrowReloadHorizontal" className="size-3.5" />
-                            {candidate || profile.refs[slot] ? t("sheetRegenerate", {}, locale) : t("sheetGenerate", {}, locale)}
-                          </Button>
-                          <details>
-                            <summary className="cursor-pointer text-[11px] text-muted-foreground">
-                              {t("sheetPrompt", {}, locale)}
-                            </summary>
-                            <textarea
-                              className="mt-1 min-h-20 w-full rounded-md border border-input bg-background p-1.5 text-xs"
-                              value={prompts[slot] ?? ""}
-                              placeholder={sheetPrompt(slot, profile.gender, { bodyType: profile.bodyType, bust: profile.bust, heightCm: profile.heightCm, weightKg: profile.weightKg, age: profile.age })}
-                              aria-label={`${label}: ${t("sheetPrompt", {}, locale)}`}
-                              onChange={(event) => setPrompts({ ...prompts, [slot]: event.target.value })}
-                            />
-                            <p className="text-[11px] text-muted-foreground">{t("sheetPromptHint", {}, locale)}</p>
-                          </details>
                         </div>
-                      ) : null}
-                    </div>
-                  );
-                })}
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
+          </section>
+          {profile ? (
+            <details className="border-t border-border pt-4">
+              <summary className="cursor-pointer select-none text-sm font-medium">{t("details", {}, locale)}</summary>
+              <div className="mt-3 flex flex-col gap-4">
+                {fields}
+                {footer}
               </div>
+            </details>
+          ) : (
+            footer
+          )}
+        </form>
+      ) : null}
+      {profile && promptSlot ? (
+        <Dialog open onOpenChange={(next) => { if (!next) setPromptSlot(null); }}>
+          <DialogContent className="w-[min(96vw,32rem)] max-w-[min(96vw,32rem)]">
+            <DialogTitle className="text-sm font-medium">{promptLabel}</DialogTitle>
+            <DialogDescription className="text-xs">{t("sheetPromptHint", {}, locale)}</DialogDescription>
+            <textarea
+              className="min-h-40 w-full rounded-md border border-input bg-background p-2 text-xs"
+              value={prompts[promptSlot] ?? ""}
+              placeholder={sheetPrompt(promptSlot, profile.gender, {
+                bodyType: profile.bodyType,
+                bust: profile.bust,
+                heightCm: profile.heightCm,
+                weightKg: profile.weightKg,
+                age: profile.age,
+              })}
+              aria-label={`${promptLabel}: ${t("sheetPrompt", {}, locale)}`}
+              onChange={(event) => setPrompts({ ...prompts, [promptSlot]: event.target.value })}
+            />
+            <div className="flex justify-end">
+              <Button
+                type="button"
+                size="sm"
+                disabled={slotBusy(promptSlot) || building}
+                onClick={() => {
+                  void sheet.slot(profile.id, promptSlot, prompts[promptSlot] ?? "");
+                  setPromptSlot(null);
+                }}
+              >
+                <Icon name="ArrowReloadHorizontal" className="size-3.5" />
+                {profile.refs[promptSlot] || profile.candidates[promptSlot]
+                  ? t("sheetRegenerate", {}, locale)
+                  : t("sheetGenerate", {}, locale)}
+              </Button>
             </div>
-          ))}
-        </section>
-        <section className="flex flex-col gap-2">
-          <h3 className="text-sm font-medium">{t("details", {}, locale)}</h3>
-          <div className="grid grid-cols-2 gap-x-3 gap-y-3">
-            <Field label={t("name", {}, locale)} className="col-span-2">
-              <Input
-                value={draft.name}
-                onChange={(event) => setDraft({ ...draft, name: event.target.value })}
-                required
-              />
-            </Field>
-            <Field label={t("gender", {}, locale)}>
-              <select
-                className="h-8 rounded-md border border-input bg-background px-2 text-sm"
-                value={draft.gender}
-                onChange={(event) =>
-                  setDraft({ ...draft, gender: event.target.value === "female" ? "female" : "male" })
-                }
-              >
-                <option value="male">{t("male", {}, locale)}</option>
-                <option value="female">{t("female", {}, locale)}</option>
-              </select>
-            </Field>
-            <Field label={t("age", {}, locale)}>
-              <Input
-                type="number"
-                min={1}
-                value={draft.age}
-                onChange={(event) => setDraft({ ...draft, age: event.target.value })}
-              />
-            </Field>
-            <Field label={t("height", {}, locale)}>
-              <Input
-                type="number"
-                min={1}
-                value={draft.heightCm}
-                onChange={(event) => setDraft({ ...draft, heightCm: event.target.value })}
-              />
-            </Field>
-            <Field label={t("weight", {}, locale)}>
-              <Input
-                type="number"
-                min={1}
-                value={draft.weightKg}
-                onChange={(event) => setDraft({ ...draft, weightKg: event.target.value })}
-              />
-            </Field>
-            <Field label={t("bodyType", {}, locale)} className="col-span-2">
-              <select
-                className={SELECT_CLASS}
-                value={draft.bodyType}
-                onChange={(event) => setDraft({ ...draft, bodyType: event.target.value })}
-              >
-                {BODY_OPTIONS.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {t(option.key as I18nKey, {}, locale)}
-                  </option>
-                ))}
-                {draft.bodyType && !BODY_OPTIONS.some((option) => option.value === draft.bodyType) ? (
-                  <option value={draft.bodyType}>{draft.bodyType}</option>
-                ) : null}
-              </select>
-            </Field>
-            {draft.gender === "female" ? (
-              <Field label={t("bust", {}, locale)} className="col-span-2">
-                <select
-                  className={SELECT_CLASS}
-                  value={draft.bust}
-                  onChange={(event) => setDraft({ ...draft, bust: event.target.value })}
-                >
-                  <option value="">{t("bustNone", {}, locale)}</option>
-                  {BUST_OPTIONS.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {t(option.key as I18nKey, {}, locale)}
-                    </option>
-                  ))}
-                  {draft.bust && !BUST_OPTIONS.some((option) => option.value === draft.bust) ? (
-                    <option value={draft.bust}>{draft.bust}</option>
-                  ) : null}
-                </select>
-              </Field>
-            ) : null}
-          </div>
-        </section>
-        <div className="flex justify-end gap-2">
-          {onDelete ? (
-            <Button type="button" variant="ghost" size="sm" onClick={onDelete}>
-              {t("deletePerson", {}, locale)}
-            </Button>
-          ) : null}
-          <Button type="submit">
-            {profile ? t("saveChanges", {}, locale) : t("addPerson", {}, locale)}
-          </Button>
-        </div>
-      </form>
+          </DialogContent>
+        </Dialog>
+      ) : null}
     </Card>
   );
 }
@@ -741,6 +877,8 @@ function StudioPage({ initialView = "gallery" }: { initialView?: Tab }) {
   const [thumbs, setThumbs] = useState<Record<string, string>>({});
   const [fullPreviews, setFullPreviews] = useState<Record<string, string>>({});
   const [photoPreviews, setPhotoPreviews] = useState<Record<string, string>>({});
+  const [openProfileId, setOpenProfileId] = useState<string | null>(null);
+  const [creatingPerson, setCreatingPerson] = useState(false);
   const [prompt, setPrompt] = useState("");
   const [model, setModel] = useState("");
   const [gateway, setGateway] = useState("");
@@ -815,10 +953,15 @@ function StudioPage({ initialView = "gallery" }: { initialView?: Tab }) {
   }, [fullPreviews, generations, rpc, viewerIndex]);
 
   useEffect(() => {
+    if (tab !== "people") return;
+    // A single profile opens by itself; with several, only the open one loads its whole sheet.
+    const openId = profiles.length === 1 ? profiles[0]!.id : openProfileId;
     for (const profile of profiles) {
-      const photos = [...Object.values(profile.refs), ...Object.values(profile.candidates)].filter(
-        (photo): photo is NonNullable<typeof photo> => Boolean(photo),
-      );
+      const photos = (
+        profile.id === openId
+          ? [...Object.values(profile.refs), ...Object.values(profile.candidates)]
+          : [profile.refs["face-front"] ?? profile.refs["face-34-left"] ?? profile.refs["face-34-right"]]
+      ).filter((photo): photo is NonNullable<typeof photo> => Boolean(photo));
       for (const photo of photos) {
         if (photoPreviews[photo.id]) continue;
         void rpc
@@ -832,7 +975,7 @@ function StudioPage({ initialView = "gallery" }: { initialView?: Tab }) {
           .catch(() => undefined);
       }
     }
-  }, [photoPreviews, profiles, rpc]);
+  }, [photoPreviews, profiles, rpc, tab, openProfileId]);
 
   const saveSettings = (patch: Partial<StudioSettings>) => {
     rpc.call("update_settings", patch).then(load, report);
@@ -1157,6 +1300,12 @@ function StudioPage({ initialView = "gallery" }: { initialView?: Tab }) {
                 ))}
               </div>
             ) : null}
+            {tab === "people" && !creatingPerson ? (
+              <Button type="button" size="sm" onClick={() => setCreatingPerson(true)}>
+                <Icon name="Plus" className="size-4" />
+                {t("addPerson", {}, locale)}
+              </Button>
+            ) : null}
           </div>
         {error ? (
           <p role="alert" className="mt-3 text-sm text-destructive">
@@ -1282,50 +1431,62 @@ function StudioPage({ initialView = "gallery" }: { initialView?: Tab }) {
         ) : null}
 
         {tab === "people" ? (
-          <div className="mt-5 flex flex-col gap-4">
+          <div className="mt-5 flex flex-col gap-3">
+            {creatingPerson ? (
+              <PersonCard
+                locale={locale}
+                previews={photoPreviews}
+                onError={report}
+                onCancel={() => setCreatingPerson(false)}
+                onSaved={(saved) => {
+                  setCreatingPerson(false);
+                  setOpenProfileId(saved.id);
+                }}
+                onSave={async (input) => {
+                  const saved = await rpc.call("save_profile", input);
+                  load();
+                  return saved;
+                }}
+                onPhoto={uploadPhoto}
+                onRemovePhoto={async (id, photoId) => {
+                  await rpc.call("remove_photo", { profileId: id, photoId });
+                  load();
+                }}
+                sheet={sheetApi}
+              />
+            ) : null}
             {profiles.length === 0 ? (
-              <EmptyState>{t("noPeople", {}, locale)}</EmptyState>
+              creatingPerson ? null : <EmptyState>{t("noPeople", {}, locale)}</EmptyState>
             ) : (
               <ul className="flex flex-col gap-3">
-                {profiles.map((profile) => (
-                  <li key={profile.id}>
-                    <PersonCard
-                      profile={profile}
-                      locale={locale}
-                      previews={photoPreviews}
-                      onError={report}
-                      onSave={(input) => rpc.call("save_profile", input).then((saved) => {
-                        load();
-                        return saved;
-                      })}
-                      onDelete={() => void rpc.call("delete_profile", { id: profile.id }).then(load, report)}
-                      onPhoto={uploadPhoto}
-                      onRemovePhoto={async (id, photoId) => {
-                        await rpc.call("remove_photo", { profileId: id, photoId });
-                        load();
-                      }}
-                      sheet={sheetApi}
-                    />
-                  </li>
-                ))}
+                {profiles.map((profile) => {
+                  const open = profiles.length === 1 || openProfileId === profile.id;
+                  return (
+                    <li key={profile.id}>
+                      <PersonCard
+                        profile={profile}
+                        locale={locale}
+                        previews={photoPreviews}
+                        open={open}
+                        onToggle={() => setOpenProfileId(open ? null : profile.id)}
+                        onError={report}
+                        onSave={(input) => rpc.call("save_profile", input).then((saved) => {
+                          load();
+                          return saved;
+                        })}
+                        onDelete={() => void rpc.call("delete_profile", { id: profile.id }).then(load, report)}
+                        onPhoto={uploadPhoto}
+                        onRemovePhoto={async (id, photoId) => {
+                          await rpc.call("remove_photo", { profileId: id, photoId });
+                          load();
+                        }}
+                        sheet={sheetApi}
+                      />
+                    </li>
+                  );
+                })}
               </ul>
             )}
-            <PersonCard
-              locale={locale}
-              previews={photoPreviews}
-              onError={report}
-              onSave={async (input) => {
-                const saved = await rpc.call("save_profile", input);
-                load();
-                return saved;
-              }}
-              onPhoto={uploadPhoto}
-              onRemovePhoto={async (id, photoId) => {
-                await rpc.call("remove_photo", { profileId: id, photoId });
-                load();
-              }}
-              sheet={sheetApi}
-            />
           </div>
         ) : null}
         </div>
