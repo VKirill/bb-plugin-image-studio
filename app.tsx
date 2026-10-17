@@ -246,13 +246,11 @@ function PhotoSlot({
             <Icon name="X" className="size-3.5" />
           </Button>
         ) : null}
+        {actions ? <div className="absolute bottom-1 right-1 flex gap-1">{actions}</div> : null}
       </div>
-      <div className="flex min-h-7 items-center gap-0.5">
-        <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground" title={label}>
-          {label}
-        </span>
-        {actions}
-      </div>
+      <span className="truncate text-xs text-muted-foreground" title={label}>
+        {label}
+      </span>
     </div>
   );
 }
@@ -675,7 +673,7 @@ function PersonCard({
                                   <Button
                                     type="button"
                                     size="icon"
-                                    variant="ghost"
+                                    variant="secondary"
                                     className="size-7 shrink-0"
                                     disabled={busy || building}
                                     aria-label={`${label}: ${regenerate ? t("sheetRegenerate", {}, locale) : t("sheetGenerate", {}, locale)}`}
@@ -686,7 +684,7 @@ function PersonCard({
                                   <Button
                                     type="button"
                                     size="icon"
-                                    variant="ghost"
+                                    variant="secondary"
                                     className={`size-7 shrink-0 ${prompts[slot]?.trim() ? "text-primary" : ""}`}
                                     disabled={busy || building}
                                     aria-label={`${label}: ${t("editPrompt", {}, locale)}`}
