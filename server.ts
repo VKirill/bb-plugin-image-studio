@@ -67,6 +67,8 @@ import {
 
 const ENV_CATALOG_PLUGIN_ID = "env-catalog";
 const SETTINGS_KEY = "settings";
+/** A 480px WebP thumbnail stays far below this; a bigger cached file is a stale original. */
+const THUMB_MAX_BYTES = 400 * 1024;
 const PROFILES_KEY = "profiles";
 const LAST_GENERATE_KEY = "last-generate";
 const LAST_GENERATE_RES_2K = "last-generate-res-default-2k";
@@ -491,6 +493,21 @@ export default async function plugin(bb: BbPluginApi) {
     return join(rootDir, "generations", projectId, filename);
   }
 
+  /** A thumbnail cached before sharp loaded on the host can be the full original; such a file is rebuilt. */
+  async function cachedThumb(cachePath: string, sourcePath: string): Promise<Buffer> {
+    try {
+      const bytes = await readFile(cachePath);
+      if (sniffImageMime(bytes) === "image/webp" && bytes.length <= THUMB_MAX_BYTES) return bytes;
+    } catch {
+      // not cached yet
+    }
+    const source = await readFile(sourcePath);
+    const thumb = await encodeWebp(source, WEBP_THUMB);
+    // encodeWebp hands the source back when sharp is unavailable; do not cache that as a thumbnail.
+    if (thumb !== source) await writeFile(cachePath, thumb);
+    return thumb;
+  }
+
   async function previewGeneration(
     item: Generation,
     variant: "thumb" | "full",
@@ -501,15 +518,8 @@ export default async function plugin(bb: BbPluginApi) {
     const sourcePath = generationPath(item.projectId, item.filename);
 
     if (variant === "thumb") {
-      try {
-        const bytes = await readFile(thumbPath);
-        return { mimeType: sniffImageMime(bytes), base64: bytes.toString("base64") };
-      } catch {
-        const source = await readFile(sourcePath);
-        const thumb = await encodeWebp(source, WEBP_THUMB);
-        await writeFile(thumbPath, thumb);
-        return { mimeType: sniffImageMime(thumb), base64: thumb.toString("base64") };
-      }
+      const thumb = await cachedThumb(thumbPath, sourcePath);
+      return { mimeType: sniffImageMime(thumb), base64: thumb.toString("base64") };
     }
 
     try {
@@ -1257,15 +1267,11 @@ export default async function plugin(bb: BbPluginApi) {
         SLOT_IDS.map((slot) => profile.candidates[slot]).find((item) => item?.id === photoId);
       if (!photo) throw new Error("Photo not found");
       // Panel tiles are small: serve a cached WebP thumbnail, not the multi-megabyte original.
-      const thumbPath = join(profileDir(profile.id), `${photo.filename}.thumb.webp`);
-      try {
-        const bytes = await readFile(thumbPath);
-        return { mimeType: sniffImageMime(bytes), base64: bytes.toString("base64") };
-      } catch {
-        const thumb = await encodeWebp(await readFile(join(profileDir(profile.id), photo.filename)), WEBP_THUMB);
-        await writeFile(thumbPath, thumb);
-        return { mimeType: sniffImageMime(thumb), base64: thumb.toString("base64") };
-      }
+      const thumb = await cachedThumb(
+        join(profileDir(profile.id), `${photo.filename}.thumb.webp`),
+        join(profileDir(profile.id), photo.filename),
+      );
+      return { mimeType: sniffImageMime(thumb), base64: thumb.toString("base64") };
     },
     generate: async (input) => {
       let cwd: string | undefined;
