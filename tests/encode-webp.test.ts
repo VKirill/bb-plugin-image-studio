@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import sharp from "sharp";
-import { encodeWebp, imageSize, sniffImageMime, WEBP_FULL, WEBP_THUMB } from "../src/encode-webp.ts";
+import { encodeWebp, encodeWebpWasm, imageSize, sniffImageMime, WEBP_FULL, WEBP_THUMB } from "../src/encode-webp.ts";
 
 test("webp display and thumb are smaller than a PNG of the same photo", async () => {
   const png = await sharp({
@@ -29,4 +29,17 @@ test("sniffImageMime reads PNG and JPEG signatures", () => {
   const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0]);
   assert.equal(sniffImageMime(png), "image/png");
   assert.equal(sniffImageMime(jpeg), "image/jpeg");
+});
+
+test("the WebAssembly fallback makes a small webp when sharp is missing", async () => {
+  const png = await sharp({
+    create: { width: 1200, height: 800, channels: 3, background: { r: 210, g: 80, b: 40 } },
+  })
+    .png()
+    .toBuffer();
+  const thumb = await encodeWebpWasm(png, WEBP_THUMB);
+  assert.equal(sniffImageMime(thumb), "image/webp");
+  const meta = await sharp(thumb).metadata();
+  assert.equal(meta.width, 480);
+  assert.equal(meta.height, 320);
 });

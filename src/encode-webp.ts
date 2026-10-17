@@ -15,6 +15,45 @@ function loadSharp(): SharpFn | null {
   return sharpCached;
 }
 
+type VipsImage = { webpsaveBuffer(options: { Q: number }): Uint8Array; delete(): void };
+type Vips = {
+  Image: { thumbnailBuffer(bytes: Uint8Array, width: number, options: { height: number; size: "down" }): VipsImage };
+};
+
+let vipsCached: Promise<Vips | null> | undefined;
+
+/** WebAssembly libvips: BB installs git plugins with --omit=optional, which drops sharp's native binaries. */
+function loadVips(): Promise<Vips | null> {
+  vipsCached ??= (async () => {
+    try {
+      const req = createRequire(import.meta.url);
+      const init = req(["wasm", "vips"].join("-")) as () => Promise<Vips>;
+      return await init();
+    } catch {
+      return null;
+    }
+  })();
+  return vipsCached;
+}
+
+export async function encodeWebpWasm(
+  bytes: Buffer,
+  options: { maxEdge: number; quality: number },
+): Promise<Buffer> {
+  const vips = await loadVips();
+  if (!vips) return bytes;
+  try {
+    const image = vips.Image.thumbnailBuffer(bytes, options.maxEdge, { height: options.maxEdge, size: "down" });
+    try {
+      return Buffer.from(image.webpsaveBuffer({ Q: options.quality }));
+    } finally {
+      image.delete();
+    }
+  } catch {
+    return bytes;
+  }
+}
+
 export function sniffImageMime(bytes: Buffer): string {
   if (
     bytes.length >= 12 &&
@@ -48,7 +87,7 @@ export async function encodeWebp(
   options: { maxEdge: number; quality: number },
 ): Promise<Buffer> {
   const sharp = loadSharp();
-  if (!sharp) return bytes;
+  if (!sharp) return encodeWebpWasm(bytes, options);
   try {
     return await sharp(bytes)
       .rotate()
