@@ -23,6 +23,7 @@ import { aspectLabel, DEFAULT_LAST_CHOICE, GENERATE_PICKER_ID, type LastChoice }
 import { MODEL_IDS, modelFalOnly, modelKieOnly } from "./src/models";
 import { enabledFromSettings, type StudioSettings } from "./src/settings";
 import { MAX_CONCURRENCY, mapParallel } from "./src/queue";
+import { rpcApi } from "./src/rpc-api";
 
 type Tab = "settings" | "people" | "gallery";
 type UiLocale = "auto" | "en" | "ru";
@@ -894,6 +895,7 @@ function PhotoViewer({
 
 function StudioPage({ initialView = "gallery" }: { initialView?: Tab }) {
   const rpc = useRpc<typeof rpcContract>();
+  const api = useMemo(() => rpcApi(rpc), [rpc]);
   const { projectId } = useBbContext();
   const [tab, setTab] = useState<Tab>(initialView);
   const [error, setError] = useState<string | null>(null);
@@ -930,8 +932,8 @@ function StudioPage({ initialView = "gallery" }: { initialView?: Tab }) {
   }, []);
 
   const load = useCallback(() => {
-    rpc
-      .call("snapshot", { projectId: projectId ?? null })
+    api
+      .snapshot({ projectId: projectId ?? null })
       .then((snap) => {
         setSettings(snap.settings);
         setCatalog(snap.catalog);
@@ -946,7 +948,7 @@ function StudioPage({ initialView = "gallery" }: { initialView?: Tab }) {
         }
         setError(null);
       }, report);
-  }, [rpc, projectId, report]);
+  }, [api, projectId, report]);
 
   useEffect(() => {
     load();
@@ -960,18 +962,18 @@ function StudioPage({ initialView = "gallery" }: { initialView?: Tab }) {
       requestedThumbs.current,
       generations.map((item) => ({
         id: item.id,
-        load: () => rpc.call("generation_preview", { id: item.id, projectId: item.projectId, variant: "thumb" }),
+        load: () => api.generation_preview({ id: item.id, projectId: item.projectId, variant: "thumb" }),
       })),
       (id, url) => setThumbs((current) => ({ ...current, [id]: url })),
     );
-  }, [generations, rpc, tab]);
+  }, [generations, api, tab]);
 
   useEffect(() => {
     if (viewerIndex === null) return;
     const item = generations[viewerIndex];
     if (!item || fullPreviews[item.id]) return;
-    void rpc
-      .call("generation_preview", { id: item.id, projectId: item.projectId, variant: "full" })
+    void api
+      .generation_preview({ id: item.id, projectId: item.projectId, variant: "full" })
       .then((file) => {
         setFullPreviews((current) => ({
           ...current,
@@ -979,7 +981,7 @@ function StudioPage({ initialView = "gallery" }: { initialView?: Tab }) {
         }));
       })
       .catch(() => undefined);
-  }, [fullPreviews, generations, rpc, viewerIndex]);
+  }, [fullPreviews, generations, api, viewerIndex]);
 
   const requestedPhotos = useRef(new Set<string>());
   useEffect(() => {
@@ -994,20 +996,20 @@ function StudioPage({ initialView = "gallery" }: { initialView?: Tab }) {
         .filter((photo): photo is NonNullable<typeof photo> => Boolean(photo))
         .map((photo) => ({
           id: photo.id,
-          load: () => rpc.call("profile_photo_preview", { profileId: profile.id, photoId: photo.id }),
+          load: () => api.profile_photo_preview({ profileId: profile.id, photoId: photo.id }),
         })),
     );
     fetchPreviews(requestedPhotos.current, jobs, (id, url) =>
       setPhotoPreviews((current) => ({ ...current, [id]: url })),
     );
-  }, [profiles, rpc, tab, openProfileId]);
+  }, [profiles, api, tab, openProfileId]);
 
   const saveSettings = (patch: Partial<StudioSettings>) => {
-    rpc.call("update_settings", patch).then(load, report);
+    api.update_settings(patch).then(load, report);
   };
 
   const uploadPhoto = async (targetId: string, slot: PhotoSlotId, file: File) => {
-    await rpc.call("add_photo", {
+    await api.add_photo({
       profileId: targetId,
       slot,
       filename: file.name,
@@ -1033,7 +1035,7 @@ function StudioPage({ initialView = "gallery" }: { initialView?: Tab }) {
     const key = `${targetId}:${slot}`;
     markSheet(key, true);
     try {
-      await rpc.call("sheet_slot", {
+      await api.sheet_slot({
         profileId: targetId,
         slot,
         ...(customPrompt.trim() !== "" ? { prompt: customPrompt.trim() } : {}),
@@ -1050,9 +1052,9 @@ function StudioPage({ initialView = "gallery" }: { initialView?: Tab }) {
     progress: sheetProgress,
     slot: (targetId, slot, customPrompt) => sheetOne(targetId, slot, customPrompt).catch(report),
     accept: (targetId, slot) =>
-      rpc.call("sheet_accept", { profileId: targetId, slot }).then(() => load(), report),
+      api.sheet_accept({ profileId: targetId, slot }).then(() => load(), report),
     discard: (targetId, slot) =>
-      rpc.call("sheet_discard", { profileId: targetId, slot }).then(() => load(), report),
+      api.sheet_discard({ profileId: targetId, slot }).then(() => load(), report),
     build: async (targetId) => {
       const target = profiles.find((item) => item.id === targetId);
       if (!target) return;
@@ -1201,8 +1203,8 @@ function StudioPage({ initialView = "gallery" }: { initialView?: Tab }) {
                 event.preventDefault();
                 if (prompt.trim() === "" || busy) return;
                 setBusy(true);
-                rpc
-                  .call("generate", {
+                api
+                  .generate({
                     projectId: projectId ?? null,
                     prompt: prompt.trim(),
                     model: model || undefined,
@@ -1440,7 +1442,7 @@ function StudioPage({ initialView = "gallery" }: { initialView?: Tab }) {
                 configured={secrets.falConfigured}
                 locale={locale}
                 onLink={(name) => saveSettings({ falKeyCatalog: name })}
-                onSave={(value) => rpc.call("set_secret", { slot: "falApiKey", value }).then(load, report)}
+                onSave={(value) => api.set_secret({ slot: "falApiKey", value }).then(load, report)}
               />
               <KeyBlock
                 label={t("kieKey", {}, locale)}
@@ -1449,7 +1451,7 @@ function StudioPage({ initialView = "gallery" }: { initialView?: Tab }) {
                 configured={secrets.kieConfigured}
                 locale={locale}
                 onLink={(name) => saveSettings({ kieKeyCatalog: name })}
-                onSave={(value) => rpc.call("set_secret", { slot: "kieApiKey", value }).then(load, report)}
+                onSave={(value) => api.set_secret({ slot: "kieApiKey", value }).then(load, report)}
               />
             </section>
           </div>
@@ -1468,13 +1470,13 @@ function StudioPage({ initialView = "gallery" }: { initialView?: Tab }) {
                   setOpenProfileId(saved.id);
                 }}
                 onSave={async (input) => {
-                  const saved = await rpc.call("save_profile", input);
+                  const saved = await api.save_profile(input);
                   load();
                   return saved;
                 }}
                 onPhoto={uploadPhoto}
                 onRemovePhoto={async (id, photoId) => {
-                  await rpc.call("remove_photo", { profileId: id, photoId });
+                  await api.remove_photo({ profileId: id, photoId });
                   load();
                 }}
                 sheet={sheetApi}
@@ -1495,14 +1497,14 @@ function StudioPage({ initialView = "gallery" }: { initialView?: Tab }) {
                         open={open}
                         onToggle={() => setOpenProfileId(open ? null : profile.id)}
                         onError={report}
-                        onSave={(input) => rpc.call("save_profile", input).then((saved) => {
+                        onSave={(input) => api.save_profile(input).then((saved) => {
                           load();
                           return saved;
                         })}
-                        onDelete={() => void rpc.call("delete_profile", { id: profile.id }).then(load, report)}
+                        onDelete={() => void api.delete_profile({ id: profile.id }).then(load, report)}
                         onPhoto={uploadPhoto}
                         onRemovePhoto={async (id, photoId) => {
-                          await rpc.call("remove_photo", { profileId: id, photoId });
+                          await api.remove_photo({ profileId: id, photoId });
                           load();
                         }}
                         sheet={sheetApi}

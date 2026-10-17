@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { chmod, mkdir, readFile, rm, unlink, writeFile } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
-import { defineRpcContract, type BbPluginApi } from "@get-bb/plugin-sdk";
+import { defineRpcContract, type BbPluginApi, type PluginRpcHandlers } from "@get-bb/plugin-sdk";
 import { z } from "zod";
 import {
   FAL_ENDPOINTS,
@@ -194,6 +194,7 @@ export const rpcContract = defineRpcContract({
     output: z.object({ mimeType: z.string(), base64: z.string() }),
   },
 });
+type RpcHandlers = PluginRpcHandlers<typeof rpcContract>;
 
 function describe(error: unknown): string {
   return formatUnknownError(error);
@@ -1126,182 +1127,197 @@ export default async function plugin(bb: BbPluginApi) {
     });
   }
 
-  bb.rpc.register(rpcContract, {
-    snapshot: async ({ projectId }) => {
-      const [settings, secrets, catalog, profiles, generations, lastGenerate] = await Promise.all([
-        readSettings(),
-        readSecrets(),
-        catalogKeys(),
-        readProfileList(),
-        readStudioGallery(projectId),
-        readLastGenerate(),
-      ]);
-      return {
-        settings,
-        secrets: {
-          falConfigured: secrets.falApiKey.length > 0 || settings.falKeyCatalog.length > 0,
-          kieConfigured: secrets.kieApiKey.length > 0 || settings.kieKeyCatalog.length > 0,
-        },
-        catalog,
-        profiles,
-        generations,
-        lastGenerate,
-      };
-    },
-    update_settings: (patch) =>
-      settingsLock.run(async () => {
-      const current = await readSettings();
-      const next = { ...current };
-      for (const id of MODEL_IDS) {
-        const key = MODEL_SETTING[id];
-        const value = patch[key];
-        if (typeof value === "boolean") next[key] = value;
+  const snapshot: RpcHandlers["snapshot"] = async ({ projectId }) => {
+    const [settings, secrets, catalog, profiles, generations, lastGenerate] = await Promise.all([
+      readSettings(),
+      readSecrets(),
+      catalogKeys(),
+      readProfileList(),
+      readStudioGallery(projectId),
+      readLastGenerate(),
+    ]);
+    return {
+      settings,
+      secrets: {
+        falConfigured: secrets.falApiKey.length > 0 || settings.falKeyCatalog.length > 0,
+        kieConfigured: secrets.kieApiKey.length > 0 || settings.kieKeyCatalog.length > 0,
+      },
+      catalog,
+      profiles,
+      generations,
+      lastGenerate,
+    };
+  };
+  const update_settings: RpcHandlers["update_settings"] = (patch) =>
+    settingsLock.run(async () => {
+    const current = await readSettings();
+    const next = { ...current };
+    for (const id of MODEL_IDS) {
+      const key = MODEL_SETTING[id];
+      const value = patch[key];
+      if (typeof value === "boolean") next[key] = value;
+    }
+    if (patch.defaultGateway !== undefined) next.defaultGateway = patch.defaultGateway;
+    if (patch.falKeyCatalog !== undefined) next.falKeyCatalog = patch.falKeyCatalog;
+    if (patch.kieKeyCatalog !== undefined) next.kieKeyCatalog = patch.kieKeyCatalog;
+    if (patch.uiLocale !== undefined) next.uiLocale = patch.uiLocale;
+    if (patch.concurrency !== undefined) next.concurrency = clampConcurrency(patch.concurrency);
+    if (typeof patch.jevRefs === "boolean") next.jevRefs = patch.jevRefs;
+    if (patch.jevBaseUrl !== undefined && patch.jevBaseUrl.trim() !== "") next.jevBaseUrl = patch.jevBaseUrl.trim();
+    if (patch.jevModel !== undefined && patch.jevModel.trim() !== "") next.jevModel = patch.jevModel.trim();
+    if (patch.jevKeyCatalog !== undefined) next.jevKeyCatalog = patch.jevKeyCatalog;
+    if (patch.jevFallbackKeyCatalog !== undefined) next.jevFallbackKeyCatalog = patch.jevFallbackKeyCatalog;
+    await writeSettings(next);
+    providerLimiter.setLimit(next.concurrency);
+    return { saved: true };
+    });
+  const set_secret: RpcHandlers["set_secret"] = async ({ slot, value }) => {
+    const current = await readSecrets();
+    current[slot] = value.trim();
+    await writeSecrets(current);
+    bb.realtime.publish(CHANGED, { kind: "secrets" });
+    return { saved: true };
+  };
+  const save_profile: RpcHandlers["save_profile"] = async (input) =>
+    withProfiles(async (profiles) => {
+      const now = new Date().toISOString();
+      if (input.id) {
+        const existing = profiles.find((item) => item.id === input.id);
+        if (!existing) throw new Error("Profile not found");
+        existing.name = input.name;
+        existing.gender = input.gender;
+        existing.age = input.age;
+        existing.heightCm = input.heightCm;
+        existing.weightKg = input.weightKg;
+        existing.bodyType = input.bodyType;
+        existing.bust = input.bust ?? "";
+        existing.updatedAt = now;
+        return existing;
       }
-      if (patch.defaultGateway !== undefined) next.defaultGateway = patch.defaultGateway;
-      if (patch.falKeyCatalog !== undefined) next.falKeyCatalog = patch.falKeyCatalog;
-      if (patch.kieKeyCatalog !== undefined) next.kieKeyCatalog = patch.kieKeyCatalog;
-      if (patch.uiLocale !== undefined) next.uiLocale = patch.uiLocale;
-      if (patch.concurrency !== undefined) next.concurrency = clampConcurrency(patch.concurrency);
-      if (typeof patch.jevRefs === "boolean") next.jevRefs = patch.jevRefs;
-      if (patch.jevBaseUrl !== undefined && patch.jevBaseUrl.trim() !== "") next.jevBaseUrl = patch.jevBaseUrl.trim();
-      if (patch.jevModel !== undefined && patch.jevModel.trim() !== "") next.jevModel = patch.jevModel.trim();
-      if (patch.jevKeyCatalog !== undefined) next.jevKeyCatalog = patch.jevKeyCatalog;
-      if (patch.jevFallbackKeyCatalog !== undefined) next.jevFallbackKeyCatalog = patch.jevFallbackKeyCatalog;
-      await writeSettings(next);
-      providerLimiter.setLimit(next.concurrency);
-      return { saved: true };
-      }),
-    set_secret: async ({ slot, value }) => {
-      const current = await readSecrets();
-      current[slot] = value.trim();
-      await writeSecrets(current);
-      bb.realtime.publish(CHANGED, { kind: "secrets" });
-      return { saved: true };
-    },
-    save_profile: async (input) =>
-      withProfiles(async (profiles) => {
-        const now = new Date().toISOString();
-        if (input.id) {
-          const existing = profiles.find((item) => item.id === input.id);
-          if (!existing) throw new Error("Profile not found");
-          existing.name = input.name;
-          existing.gender = input.gender;
-          existing.age = input.age;
-          existing.heightCm = input.heightCm;
-          existing.weightKg = input.weightKg;
-          existing.bodyType = input.bodyType;
-          existing.bust = input.bust ?? "";
-          existing.updatedAt = now;
-          return existing;
-        }
-        const created: PersonProfile = {
-          id: randomUUID().slice(0, 8),
-          name: input.name,
-          gender: input.gender,
-          age: input.age,
-          heightCm: input.heightCm,
-          weightKg: input.weightKg,
-          bodyType: input.bodyType,
-          bust: input.bust ?? "",
-          refs: {},
-          candidates: {},
-          photos: [],
-          manicurePhoto: null,
-          createdAt: now,
-          updatedAt: now,
-        };
-        profiles.push(created);
-        return created;
-      }),
-    delete_profile: async ({ id }) =>
-      withProfiles(async (profiles) => {
-        const index = profiles.findIndex((item) => item.id === id);
-        if (index === -1) return { removed: false };
-        profiles.splice(index, 1);
-        await rm(profileDir(id), { recursive: true, force: true });
-        return { removed: true };
-      }),
-    add_photo: async ({ profileId, slot: slotName, filename, mimeType, base64 }) => {
-      const slot = parseSlotId(slotName);
-      if (!slot) throw new Error(`Unknown reference slot "${slotName}".`);
-      return withProfiles(async (profiles) => {
-        const profile = profiles.find((item) => item.id === profileId);
-        if (!profile) throw new Error("Profile not found");
-        const id = randomUUID().slice(0, 8);
-        const safeName = `${id}-${filename.replace(/[^a-zA-Z0-9._-]+/g, "_").slice(0, 80)}`;
-        await mkdir(profileDir(profile.id), { recursive: true });
-        await writeFile(join(profileDir(profile.id), safeName), Buffer.from(base64, "base64"));
-        const previous = profile.refs[slot];
-        profile.refs[slot] = { id, filename: safeName, mimeType };
-        if (previous) await removeProfileFile(profile.id, previous.filename);
-        profile.updatedAt = new Date().toISOString();
-        return profile;
-      });
-    },
-    remove_photo: async ({ profileId, photoId }) =>
-      withProfiles(async (profiles) => {
-        const profile = profiles.find((item) => item.id === profileId);
-        if (!profile) throw new Error("Profile not found");
-        for (const slot of SLOT_IDS) {
-          const photo = profile.refs[slot];
-          if (photo?.id !== photoId) continue;
-          delete profile.refs[slot];
-          await removeProfileFile(profile.id, photo.filename);
-        }
-        profile.updatedAt = new Date().toISOString();
-        return profile;
-      }),
-    sheet_slot: async ({ profileId, slot: slotName, prompt, model }) => {
-      const slot = parseSlotId(slotName);
-      if (!slot) throw new Error(`Unknown reference slot "${slotName}".`);
-      return (await buildSheetSlot(profileId, slot, { prompt, model })).profile;
-    },
-    sheet_accept: async ({ profileId, slot: slotName }) => {
-      const slot = parseSlotId(slotName);
-      if (!slot) throw new Error(`Unknown reference slot "${slotName}".`);
-      return acceptSheetSlot(profileId, slot);
-    },
-    sheet_discard: async ({ profileId, slot: slotName }) => {
-      const slot = parseSlotId(slotName);
-      if (!slot) throw new Error(`Unknown reference slot "${slotName}".`);
-      return discardSheetSlot(profileId, slot);
-    },
-    profile_photo_preview: async ({ profileId, photoId }) => {
-      const profiles = await readProfileList();
+      const created: PersonProfile = {
+        id: randomUUID().slice(0, 8),
+        name: input.name,
+        gender: input.gender,
+        age: input.age,
+        heightCm: input.heightCm,
+        weightKg: input.weightKg,
+        bodyType: input.bodyType,
+        bust: input.bust ?? "",
+        refs: {},
+        candidates: {},
+        photos: [],
+        manicurePhoto: null,
+        createdAt: now,
+        updatedAt: now,
+      };
+      profiles.push(created);
+      return created;
+    });
+  const delete_profile: RpcHandlers["delete_profile"] = async ({ id }) =>
+    withProfiles(async (profiles) => {
+      const index = profiles.findIndex((item) => item.id === id);
+      if (index === -1) return { removed: false };
+      profiles.splice(index, 1);
+      await rm(profileDir(id), { recursive: true, force: true });
+      return { removed: true };
+    });
+  const add_photo: RpcHandlers["add_photo"] = async ({ profileId, slot: slotName, filename, mimeType, base64 }) => {
+    const slot = parseSlotId(slotName);
+    if (!slot) throw new Error(`Unknown reference slot "${slotName}".`);
+    return withProfiles(async (profiles) => {
       const profile = profiles.find((item) => item.id === profileId);
       if (!profile) throw new Error("Profile not found");
-      const photo =
-        SLOT_IDS.map((slot) => profile.refs[slot]).find((item) => item?.id === photoId) ??
-        SLOT_IDS.map((slot) => profile.candidates[slot]).find((item) => item?.id === photoId);
-      if (!photo) throw new Error("Photo not found");
-      // Panel tiles are small: serve a cached WebP thumbnail, not the multi-megabyte original.
-      const thumb = await cachedThumb(
-        join(profileDir(profile.id), `${photo.filename}.thumb.webp`),
-        join(profileDir(profile.id), photo.filename),
-      );
-      return { mimeType: sniffImageMime(thumb), base64: thumb.toString("base64") };
-    },
-    generate: async (input) => {
-      let cwd: string | undefined;
-      let hostId: string | undefined;
-      if (input.projectId) {
-        try {
-          const project = await bb.sdk.projects.get({ projectId: input.projectId });
-          const source = project.sources[0];
-          cwd = source?.path;
-          hostId = source?.hostId;
-        } catch (error) {
-          warn(`project path: ${describe(error)}`);
-        }
+      const id = randomUUID().slice(0, 8);
+      const safeName = `${id}-${filename.replace(/[^a-zA-Z0-9._-]+/g, "_").slice(0, 80)}`;
+      await mkdir(profileDir(profile.id), { recursive: true });
+      await writeFile(join(profileDir(profile.id), safeName), Buffer.from(base64, "base64"));
+      const previous = profile.refs[slot];
+      profile.refs[slot] = { id, filename: safeName, mimeType };
+      if (previous) await removeProfileFile(profile.id, previous.filename);
+      profile.updatedAt = new Date().toISOString();
+      return profile;
+    });
+  };
+  const remove_photo: RpcHandlers["remove_photo"] = async ({ profileId, photoId }) =>
+    withProfiles(async (profiles) => {
+      const profile = profiles.find((item) => item.id === profileId);
+      if (!profile) throw new Error("Profile not found");
+      for (const slot of SLOT_IDS) {
+        const photo = profile.refs[slot];
+        if (photo?.id !== photoId) continue;
+        delete profile.refs[slot];
+        await removeProfileFile(profile.id, photo.filename);
       }
-      return runGenerate({ ...input, cwd, hostId });
-    },
-    generation_preview: async ({ id, projectId, variant }) => {
-      const items = await readStudioGallery(projectId);
-      const item = items.find((entry) => entry.id === id) ?? (await readGenerations(projectId)).find((entry) => entry.id === id);
-      if (!item) throw new Error("Generation not found");
-      return previewGeneration(item, variant ?? "thumb");
-    },
+      profile.updatedAt = new Date().toISOString();
+      return profile;
+    });
+  const sheet_slot: RpcHandlers["sheet_slot"] = async ({ profileId, slot: slotName, prompt, model }) => {
+    const slot = parseSlotId(slotName);
+    if (!slot) throw new Error(`Unknown reference slot "${slotName}".`);
+    return (await buildSheetSlot(profileId, slot, { prompt, model })).profile;
+  };
+  const sheet_accept: RpcHandlers["sheet_accept"] = async ({ profileId, slot: slotName }) => {
+    const slot = parseSlotId(slotName);
+    if (!slot) throw new Error(`Unknown reference slot "${slotName}".`);
+    return acceptSheetSlot(profileId, slot);
+  };
+  const sheet_discard: RpcHandlers["sheet_discard"] = async ({ profileId, slot: slotName }) => {
+    const slot = parseSlotId(slotName);
+    if (!slot) throw new Error(`Unknown reference slot "${slotName}".`);
+    return discardSheetSlot(profileId, slot);
+  };
+  const profile_photo_preview: RpcHandlers["profile_photo_preview"] = async ({ profileId, photoId }) => {
+    const profiles = await readProfileList();
+    const profile = profiles.find((item) => item.id === profileId);
+    if (!profile) throw new Error("Profile not found");
+    const photo =
+      SLOT_IDS.map((slot) => profile.refs[slot]).find((item) => item?.id === photoId) ??
+      SLOT_IDS.map((slot) => profile.candidates[slot]).find((item) => item?.id === photoId);
+    if (!photo) throw new Error("Photo not found");
+    // Panel tiles are small: serve a cached WebP thumbnail, not the multi-megabyte original.
+    const thumb = await cachedThumb(
+      join(profileDir(profile.id), `${photo.filename}.thumb.webp`),
+      join(profileDir(profile.id), photo.filename),
+    );
+    return { mimeType: sniffImageMime(thumb), base64: thumb.toString("base64") };
+  };
+  const generate: RpcHandlers["generate"] = async (input) => {
+    let cwd: string | undefined;
+    let hostId: string | undefined;
+    if (input.projectId) {
+      try {
+        const project = await bb.sdk.projects.get({ projectId: input.projectId });
+        const source = project.sources[0];
+        cwd = source?.path;
+        hostId = source?.hostId;
+      } catch (error) {
+        warn(`project path: ${describe(error)}`);
+      }
+    }
+    return runGenerate({ ...input, cwd, hostId });
+  };
+  const generation_preview: RpcHandlers["generation_preview"] = async ({ id, projectId, variant }) => {
+    const items = await readStudioGallery(projectId);
+    const item = items.find((entry) => entry.id === id) ?? (await readGenerations(projectId)).find((entry) => entry.id === id);
+    if (!item) throw new Error("Generation not found");
+    return previewGeneration(item, variant ?? "thumb");
+  };
+
+  // Shorthand on purpose: GitNexus links the panel's api.<method>() calls to these named handlers.
+  bb.rpc.register(rpcContract, {
+    snapshot,
+    update_settings,
+    set_secret,
+    save_profile,
+    delete_profile,
+    add_photo,
+    remove_photo,
+    sheet_slot,
+    sheet_accept,
+    sheet_discard,
+    profile_photo_preview,
+    generate,
+    generation_preview,
   });
 
   const usage = [
