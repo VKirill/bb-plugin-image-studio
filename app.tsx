@@ -386,6 +386,7 @@ function PersonCard({
 
   const [prompts, setPrompts] = useState<Partial<Record<SlotId, string>>>({});
   const [promptSlot, setPromptSlot] = useState<SlotId | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const hasFront = Boolean(profile?.refs["face-front"]);
   const slotBusy = (slot: SlotId) => (profile ? sheet.busy.has(`${profile.id}:${slot}`) : false);
   const building = Boolean(profile && sheet.progress?.profileId === profile.id);
@@ -554,9 +555,21 @@ function PersonCard({
   );
 
   const footer = (
-    <div className="flex items-center gap-2">
-      {onDelete ? (
-        <Button type="button" variant="ghost" size="sm" className="text-destructive" onClick={onDelete}>
+    <div className="flex flex-wrap items-center gap-2">
+      {onDelete && confirmDelete ? (
+        <>
+          <span className="text-xs text-muted-foreground">
+            {t("deletePersonConfirm", { name: profile?.name ?? "" }, locale)}
+          </span>
+          <Button type="button" variant="destructive" size="sm" onClick={onDelete}>
+            {t("deletePerson", {}, locale)}
+          </Button>
+          <Button type="button" variant="ghost" size="sm" onClick={() => setConfirmDelete(false)}>
+            {t("cancelGenerate", {}, locale)}
+          </Button>
+        </>
+      ) : onDelete ? (
+        <Button type="button" variant="ghost" size="sm" className="text-destructive" onClick={() => setConfirmDelete(true)}>
           {t("deletePerson", {}, locale)}
         </Button>
       ) : null}

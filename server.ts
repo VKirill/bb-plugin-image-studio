@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { chmod, mkdir, readFile, unlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, rm, unlink, writeFile } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 import { defineRpcContract, type BbPluginApi } from "@get-bb/plugin-sdk";
 import { z } from "zod";
@@ -493,19 +493,28 @@ export default async function plugin(bb: BbPluginApi) {
     return join(rootDir, "generations", projectId, filename);
   }
 
-  /** A thumbnail cached before sharp loaded on the host can be the full original; such a file is rebuilt. */
-  async function cachedThumb(cachePath: string, sourcePath: string): Promise<Buffer> {
+  /** A file cached before an encoder loaded on the host can be the full original; such a file is rebuilt. */
+  async function cachedWebp(
+    cachePath: string,
+    sourcePath: string,
+    options: { maxEdge: number; quality: number },
+    maxBytes = Number.POSITIVE_INFINITY,
+  ): Promise<Buffer> {
     try {
       const bytes = await readFile(cachePath);
-      if (sniffImageMime(bytes) === "image/webp" && bytes.length <= THUMB_MAX_BYTES) return bytes;
+      if (sniffImageMime(bytes) === "image/webp" && bytes.length <= maxBytes) return bytes;
     } catch {
       // not cached yet
     }
     const source = await readFile(sourcePath);
-    const thumb = await encodeWebp(source, WEBP_THUMB);
-    // encodeWebp hands the source back when sharp is unavailable; do not cache that as a thumbnail.
-    if (thumb !== source) await writeFile(cachePath, thumb);
-    return thumb;
+    const webp = await encodeWebp(source, options);
+    // encodeWebp hands the source back when no encoder loads; do not cache that.
+    if (webp !== source) await writeFile(cachePath, webp);
+    return webp;
+  }
+
+  function cachedThumb(cachePath: string, sourcePath: string): Promise<Buffer> {
+    return cachedWebp(cachePath, sourcePath, WEBP_THUMB, THUMB_MAX_BYTES);
   }
 
   async function previewGeneration(
@@ -522,15 +531,10 @@ export default async function plugin(bb: BbPluginApi) {
       return { mimeType: sniffImageMime(thumb), base64: thumb.toString("base64") };
     }
 
-    try {
-      const bytes = await readFile(webpPath);
-      return { mimeType: sniffImageMime(bytes), base64: bytes.toString("base64") };
-    } catch {
-      const source = await readFile(sourcePath);
-      const webp = await encodeWebp(source, WEBP_FULL);
-      await writeFile(webpPath, webp);
-      return { mimeType: sniffImageMime(webp), base64: webp.toString("base64") };
-    }
+    // When the display file itself is a PNG saved under .webp, keep it and cache the encoded copy beside it.
+    const fullPath = webpPath === sourcePath ? generationPath(item.projectId, `${item.id}.full.webp`) : webpPath;
+    const webp = await cachedWebp(fullPath, sourcePath, WEBP_FULL);
+    return { mimeType: sniffImageMime(webp), base64: webp.toString("base64") };
   }
 
   /** Reads the files of the chosen slots. A slot whose file is gone is dropped, so Image numbers stay right. */
@@ -1214,6 +1218,7 @@ export default async function plugin(bb: BbPluginApi) {
         const index = profiles.findIndex((item) => item.id === id);
         if (index === -1) return { removed: false };
         profiles.splice(index, 1);
+        await rm(profileDir(id), { recursive: true, force: true });
         return { removed: true };
       }),
     add_photo: async ({ profileId, slot: slotName, filename, mimeType, base64 }) => {
@@ -1238,7 +1243,10 @@ export default async function plugin(bb: BbPluginApi) {
         const profile = profiles.find((item) => item.id === profileId);
         if (!profile) throw new Error("Profile not found");
         for (const slot of SLOT_IDS) {
-          if (profile.refs[slot]?.id === photoId) delete profile.refs[slot];
+          const photo = profile.refs[slot];
+          if (photo?.id !== photoId) continue;
+          delete profile.refs[slot];
+          await removeProfileFile(profile.id, photo.filename);
         }
         profile.updatedAt = new Date().toISOString();
         return profile;

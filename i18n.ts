@@ -159,6 +159,7 @@ const en = {
   editPrompt: "Prompt and generate",
   buildSheetCount: "Build sheet ({count})",
   uploadPhoto: "Upload photo",
+  deletePersonConfirm: "Delete {name} with all reference photos?",
 };
 
 export type I18nKey = keyof typeof en;
@@ -324,6 +325,7 @@ const ru: Record<I18nKey, string> = {
   editPrompt: "Промпт и генерация",
   buildSheetCount: "Собрать раскадровку ({count})",
   uploadPhoto: "Загрузить фото",
+  deletePersonConfirm: "Удалить {name} вместе со всеми эталонными фото?",
 };
 
 export type Locale = "en" | "ru";
