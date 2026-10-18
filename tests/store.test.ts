@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { SLOT_IDS } from "../src/slots.ts";
-import { attachCandidate, createGalleryStore, createProfileStore, generationsKey, type Kv } from "../src/store.ts";
+import { attachCandidate, createGalleryStore, createProfileStore, GALLERY_MAX_BYTES, generationsKey, type Kv } from "../src/store.ts";
 
 /** A KV whose reads and writes take a random time, so unlocked read-modify-write interleaves. */
 function slowKv(seed: Record<string, unknown> = {}): Kv & { data: Map<string, unknown> } {
@@ -145,4 +145,17 @@ test("the gallery keeps the newest 80", async () => {
   for (let i = 0; i < 8; i += 1) await gallery.add("p", { id: `r${i}` });
   const project = (await kv.get(generationsKey("p"))) as Array<{ id: string }>;
   assert.deepEqual(project.map((r) => r.id), ["r7", "r6", "r5", "r4", "r3"]);
+});
+
+test("long prompts never push a gallery list past the plugin KV size limit", async () => {
+  const kv = slowKv();
+  const gallery = createGalleryStore<{ id: string; prompt: string; composedPrompt: string }>(kv);
+  // 80 agent prompts of ~1.6k Cyrillic characters each, as on 2026-10-17: about 260 KB before the fix.
+  const prompt = "длинный промпт ".repeat(110);
+  for (let i = 0; i < 80; i += 1) await gallery.add("p", { id: `r${i}`, prompt, composedPrompt: prompt });
+  for (const key of [generationsKey("p"), generationsKey("studio")]) {
+    const list = (await kv.get(key)) as Array<{ id: string }>;
+    assert.ok(Buffer.byteLength(JSON.stringify(list)) <= GALLERY_MAX_BYTES);
+    assert.equal(list[0]!.id, "r79");
+  }
 });

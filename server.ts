@@ -32,7 +32,7 @@ import {
   mapParallel,
   MAX_CONCURRENCY,
 } from "./src/queue.js";
-import { GALLERY_MAX, attachCandidate, createGalleryStore, createProfileStore, generationsKey, STUDIO_GALLERY } from "./src/store.js";
+import { GALLERY_MAX, attachCandidate, createGalleryStore, createProfileStore, fitGallery, generationsKey, STUDIO_GALLERY } from "./src/store.js";
 import {
   SHEET_ASPECT,
   SHEET_RESOLUTION,
@@ -480,7 +480,7 @@ export default async function plugin(bb: BbPluginApi) {
     await galleryStore.withLock(async () => {
       const again = await bb.storage.kv.get<unknown>(generationsKey(STUDIO_GALLERY));
       if (!Array.isArray(again) || again.length === 0) {
-        await bb.storage.kv.set(generationsKey(STUDIO_GALLERY), collected);
+        await bb.storage.kv.set(generationsKey(STUDIO_GALLERY), fitGallery(collected));
       }
     });
     return collected;

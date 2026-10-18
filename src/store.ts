@@ -11,6 +11,22 @@ export type Kv = {
 export const PROFILES_KEY = "profiles";
 export const STUDIO_GALLERY = "studio";
 export const GALLERY_MAX = 80;
+/** Plugin KV refuses a value over 256 KB; prompts are free text, so the list is cut by size too, with headroom. */
+export const GALLERY_MAX_BYTES = 200 * 1024;
+
+/** Newest first: at most `max` records whose JSON stays within `maxBytes`. */
+export function fitGallery<T>(list: readonly T[], max = GALLERY_MAX, maxBytes = GALLERY_MAX_BYTES): T[] {
+  const encoder = new TextEncoder();
+  const out: T[] = [];
+  let bytes = 2;
+  for (const item of list.slice(0, max)) {
+    const size = encoder.encode(JSON.stringify(item)).length + 1;
+    if (bytes + size > maxBytes) break;
+    out.push(item);
+    bytes += size;
+  }
+  return out;
+}
 
 export function generationsKey(projectId: string): string {
   return `generations:${projectId}`;
@@ -73,9 +89,9 @@ export function createGalleryStore<T extends { id: string }>(kv: Kv, max = GALLE
     add(projectId: string, record: T): Promise<void> {
       return lock.run(async () => {
         const project = asList(await kv.get(generationsKey(projectId))).filter((item) => item.id !== record.id);
-        await kv.set(generationsKey(projectId), [record, ...project].slice(0, max));
+        await kv.set(generationsKey(projectId), fitGallery([record, ...project], max));
         const studio = asList(await kv.get(generationsKey(STUDIO_GALLERY))).filter((item) => item.id !== record.id);
-        await kv.set(generationsKey(STUDIO_GALLERY), [record, ...studio].slice(0, max));
+        await kv.set(generationsKey(STUDIO_GALLERY), fitGallery([record, ...studio], max));
       });
     },
   };
