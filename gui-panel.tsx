@@ -4,6 +4,8 @@ import type { rpcContract } from "./server";
 import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
 import { Input } from "@/components/ui/input";
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { t } from "./i18n";
 import type { I18nKey, Locale } from "./i18n";
 import { GUI_MAX_REFS, GUI_PRESET_IDS, PALETTE_KEYS, type GuiMode, type GuiStyle, type PaletteKey } from "./src/gui";
@@ -156,7 +158,7 @@ export function GuiPanel({
     }
   }, [styles, api]);
 
-  const runs = groupRuns(items);
+  const ordered = groupRuns(items).flat();
   const modeInfo = MODES.find((item) => item.id === mode)!;
   const needsPrompt = mode !== "kit";
 
@@ -222,39 +224,35 @@ export function GuiPanel({
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto box-border flex w-full max-w-5xl flex-col gap-4 px-4 pb-6 pt-3 md:px-5 md:pt-4">
-          <div>
-            <h1 className="text-xl font-medium">{t("tabGui", {}, locale)}</h1>
-            <p className="mt-1 text-sm text-muted-foreground">{t("guiHint", {}, locale)}</p>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label={t("guiProjects", {}, locale)}>
-            {styles.map((item) => (
-              <Button
-                key={item.id}
-                type="button"
-                size="sm"
-                variant={item.id === styleId && !creating ? "default" : "outline"}
-                onClick={() => {
-                  setCreating(false);
-                  setStyleId(item.id);
-                }}
-              >
-                {item.name}
-              </Button>
-            ))}
-            <Button
-              type="button"
-              size="sm"
-              variant={creating ? "default" : "ghost"}
-              onClick={() => {
+          <div className="flex flex-wrap items-center gap-2">
+            <h1 className="mr-2 text-xl font-medium">{t("tabGui", {}, locale)}</h1>
+            <ProjectPicker
+              styles={styles}
+              value={styleId}
+              creating={creating}
+              locale={locale}
+              onPick={(id) => {
+                setCreating(false);
+                setStyleId(id);
+              }}
+              onNew={() => {
                 setCreating(true);
                 setSettingsOpen(true);
                 setDraft(draftOf(null, `${t("guiNewStyle", {}, locale)} ${styles.length + 1}`));
               }}
-            >
-              <Icon name="Plus" className="size-4" />
-              {t("guiNewStyle", {}, locale)}
-            </Button>
+            />
+            {style && !creating ? (
+              <Button
+                type="button"
+                size="icon"
+                variant={settingsOpen ? "secondary" : "ghost"}
+                aria-label={t("guiStyleSettings", {}, locale)}
+                aria-pressed={settingsOpen}
+                onClick={() => setSettingsOpen((open) => !open)}
+              >
+                <Icon name="SlidersHorizontal" className="size-4" />
+              </Button>
+            ) : null}
           </div>
 
           {styles.length === 0 && !creating ? (
@@ -263,23 +261,10 @@ export function GuiPanel({
             </p>
           ) : null}
 
-          {style || creating ? (
-            <details
-              className="rounded-lg border border-border"
-              open={settingsOpen || creating}
-              onToggle={(event) => setSettingsOpen((event.target as HTMLDetailsElement).open)}
-            >
-              <summary className="flex min-h-10 cursor-pointer list-none items-center gap-2 px-3 text-sm font-medium [&::-webkit-details-marker]:hidden">
-                <Icon name="SlidersHorizontal" className="size-4 shrink-0" />
-                {t("guiStyleSettings", {}, locale)}
-                {style && !creating ? (
-                  <span className="truncate font-normal text-muted-foreground">
-                    · {[style.theme, ...style.tags, style.refs.length > 0 ? t("guiRefsCount", { count: style.refs.length }, locale) : ""].filter(Boolean).join(", ") || t("guiStyleFree", {}, locale)}
-                  </span>
-                ) : null}
-              </summary>
+          {(style || creating) && (settingsOpen || creating) ? (
+            <div className="rounded-lg border border-border">
               <form
-                className="flex flex-col gap-3 border-t border-border p-3"
+                className="flex flex-col gap-3 p-3"
                 onSubmit={(event) => {
                   event.preventDefault();
                   void saveDraft().catch(onError);
@@ -418,67 +403,46 @@ export function GuiPanel({
                   ) : null}
                 </div>
               </form>
-            </details>
+            </div>
           ) : null}
 
           {style && !creating ? (
-            <section className="flex flex-col gap-4">
-              <h2 className="text-sm font-medium">
-                {t("guiResults", {}, locale)} · {items.length}
-              </h2>
-              {runs.length === 0 ? <p className="text-sm text-muted-foreground">{t("guiNoResults", {}, locale)}</p> : null}
-              {runs.map((run) => {
-                const head = run[0]!;
-                return (
-                  <article key={head.guiRun ?? head.id} className="flex flex-col gap-2">
-                    <header className="flex flex-wrap items-baseline gap-x-2 text-xs">
-                      <span className="font-medium">{t(MODES.find((item) => item.id === head.guiMode)?.label ?? "guiModeScreen", {}, locale)}</span>
-                      <span className="text-muted-foreground">{new Date(head.createdAt).toLocaleString(locale)}</span>
-                      <span className="w-full line-clamp-2 text-muted-foreground">{head.prompt}</span>
-                    </header>
-                    <ul className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                      {run.map((item) => (
-                        <li key={item.id} className="flex flex-col overflow-hidden rounded-lg border border-border">
-                          <button
-                            type="button"
-                            className="block bg-muted"
-                            style={{ aspectRatio: item.width && item.height ? `${item.width} / ${item.height}` : "16 / 9" }}
-                            onClick={() => onOpen(items, items.indexOf(item), thumbs)}
-                          >
-                            {thumbs[item.id] ? <img src={thumbs[item.id]} alt={item.prompt} className="h-full w-full object-contain" /> : null}
-                          </button>
-                          <div className="flex flex-col gap-1 p-2 text-xs">
-                            <span className="font-medium">{item.guiLabel}</span>
-                            {item.guiParts !== undefined ? (
-                              <span>
-                                {t("guiParts", { count: item.guiParts }, locale)}
-                                {item.guiMissing?.length ? ` · ${t("guiMissing", { names: item.guiMissing.join(", ") }, locale)}` : ""}
-                              </span>
-                            ) : null}
-                            {item.guiDir ?? item.projectPath ? (
-                              <span className="break-all font-mono text-[10px] text-muted-foreground">{item.guiDir ?? item.projectPath}</span>
-                            ) : null}
-                            {item.guiMode === "ideas" || item.guiMode === "screen" ? (
-                              <Button
-                                type="button"
-                                size="sm"
-                                variant="outline"
-                                className="mt-1 self-start"
-                                disabled={style.refs.length >= GUI_MAX_REFS}
-                                onClick={() => void makeReference(item).catch(onError)}
-                              >
-                                <Icon name="Star" className="size-3.5" />
-                                {t("guiUseRef", {}, locale)}
-                              </Button>
-                            ) : null}
-                          </div>
-                        </li>
-                      ))}
-                    </ul>
-                  </article>
-                );
-              })}
-            </section>
+            ordered.length === 0 ? (
+              <p className="text-sm text-muted-foreground">{t("guiNoResults", {}, locale)}</p>
+            ) : (
+              <ul className="columns-2 gap-2 sm:columns-3 lg:columns-4">
+                {ordered.map((item, index) => {
+                  const ratio = item.width && item.height ? `${item.width} / ${item.height}` : "16 / 9";
+                  return (
+                    <li key={item.id} className="group relative mb-2 break-inside-avoid">
+                      <button
+                        type="button"
+                        className="block w-full overflow-hidden rounded-md bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                        onClick={() => onOpen(ordered, index, thumbs)}
+                      >
+                        {thumbs[item.id] ? (
+                          <img src={thumbs[item.id]} alt={item.prompt} loading="lazy" className="block h-auto w-full" style={{ aspectRatio: ratio }} />
+                        ) : (
+                          <span className="block w-full" style={{ aspectRatio: ratio }} />
+                        )}
+                      </button>
+                      {item.guiMode === "ideas" || item.guiMode === "screen" ? (
+                        <button
+                          type="button"
+                          className="absolute right-1.5 top-1.5 rounded-md bg-background/85 p-1.5 shadow-sm transition-opacity disabled:opacity-40 md:opacity-0 md:group-hover:opacity-100 md:focus-visible:opacity-100"
+                          title={t("guiUseRef", {}, locale)}
+                          aria-label={t("guiUseRef", {}, locale)}
+                          disabled={style.refs.length >= GUI_MAX_REFS}
+                          onClick={() => void makeReference(item).catch(onError)}
+                        >
+                          <Icon name="Star" className="size-4" />
+                        </button>
+                      ) : null}
+                    </li>
+                  );
+                })}
+              </ul>
+            )
           ) : null}
         </div>
       </div>
@@ -502,9 +466,6 @@ export function GuiPanel({
               {t(item.label, {}, locale)}
             </Button>
           ))}
-          <span className="ml-auto truncate text-xs text-muted-foreground">
-            {style && !creating ? t("guiInto", { name: style.name }, locale) : t("guiIntoNew", {}, locale)}
-          </span>
         </div>
         <p className="text-xs text-muted-foreground">{t(modeInfo.hint, {}, locale)}</p>
         <textarea
@@ -537,5 +498,84 @@ export function GuiPanel({
         </div>
       </form>
     </div>
+  );
+}
+
+/** The project switcher: a searchable list, so twenty or fifty projects stay one click away. */
+function ProjectPicker({
+  styles,
+  value,
+  creating,
+  locale,
+  onPick,
+  onNew,
+}: {
+  styles: GuiStyle[];
+  value: string;
+  creating: boolean;
+  locale: Locale;
+  onPick: (id: string) => void;
+  onNew: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const current = styles.find((item) => item.id === value);
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          type="button"
+          variant="outline"
+          role="combobox"
+          aria-expanded={open}
+          aria-label={t("guiProjects", {}, locale)}
+          className="h-9 min-w-[12rem] max-w-full justify-between gap-2 px-3 font-normal"
+        >
+          <span className="min-w-0 truncate">
+            {creating ? t("guiNewStyle", {}, locale) : (current?.name ?? t("guiPickProject", {}, locale))}
+          </span>
+          <Icon name="ChevronDown" className="size-4 shrink-0 opacity-50" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-[min(22rem,calc(100vw-2rem))] p-0" mobileTitle={t("guiProjects", {}, locale)}>
+        <Command>
+          <CommandInput placeholder={t("guiSearchProjects", {}, locale)} />
+          <CommandList>
+            <CommandEmpty>{t("guiNoMatch", {}, locale)}</CommandEmpty>
+            {styles.length > 0 ? (
+              <CommandGroup heading={t("guiProjects", {}, locale)}>
+                {styles.map((item) => (
+                  <CommandItem
+                    key={item.id}
+                    value={`${item.name} ${item.id}`}
+                    onSelect={() => {
+                      onPick(item.id);
+                      setOpen(false);
+                    }}
+                  >
+                    <Icon name="Check" className={item.id === value && !creating ? "opacity-100" : "opacity-0"} />
+                    <span className="min-w-0 flex-1 truncate">{item.name}</span>
+                    <span className="text-xs text-muted-foreground">
+                      {new Date(item.updatedAt).toLocaleDateString(locale, { day: "numeric", month: "short" })}
+                    </span>
+                  </CommandItem>
+                ))}
+              </CommandGroup>
+            ) : null}
+            <CommandGroup>
+              <CommandItem
+                value="+ new project"
+                onSelect={() => {
+                  onNew();
+                  setOpen(false);
+                }}
+              >
+                <Icon name="Plus" />
+                {t("guiNewStyle", {}, locale)}
+              </CommandItem>
+            </CommandGroup>
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
   );
 }
