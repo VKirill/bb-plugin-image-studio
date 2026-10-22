@@ -15,6 +15,7 @@ Generate project photos in BB through [fal.ai](https://fal.ai/) and [kie.ai](htt
 - **Generate in the panel** — prompt, person profile, model, gateway, and Nano Banana size (default **2K**). Aspect ratio is not a panel filter; the model sets the frame. The gallery labels each photo (1:1, 4:5, 9:16, …).
 - **Generate in chat** — ask the agent for a photo. It opens a Send form with the last model, aspect ratio, and size. Change them, then Send. The agent must call `image_studio_generate`, not `bb image-studio generate`.
 - **People profiles** — name, body, and a labeled **reference sheet**: face (front, 3/4 left, 3/4 right, profile, smile), body in fitted clothing (front, side, back), and close-ups (hands, chest, waist, legs, buttocks, moles/tattoos, hair from behind). Each generation sends only the slots the prompt needs, within the model's image cap, so the same face and body carry across models. **Build sheet** generates the missing slots from the front face; results wait as candidates you accept. Profiles are shared across projects; outputs are per project. Older profiles migrate automatically: selfies become the first three face slots, the manicure becomes hands.
+- **GUI** — game interface in one style. A style (per project) holds the theme, presets (cartoon, gothic, fantasy, sci-fi, horror, cozy, minimal, crystal, pixel), a five-colour palette, extra rules and up to six approved reference pictures, all added to every GUI prompt. Modes: **Ideas ×4** (four mockups of a screen: four directions for a fresh style, four takes inside a fixed one), **Screen**, **Elements** (a list drawn on a green-key sheet in a strict grid and cut into transparent PNGs named after the elements, optionally with normal / hover / pressed / disabled states) and **UI kit** (frame, panel, buttons, tabs, slider, toggles, checkbox, slots, bars in two cut sheets). Always Muse Image, English labels, full-size files in `image-studio/gui/<style>/` with `manifest.json`. Agents use the `image_studio_gui` tool or `bb image-studio gui …`.
 
 ![Person profile with selfie slots and body fields](screenshots/profiles.png)
 
@@ -22,7 +23,7 @@ Generate project photos in BB through [fal.ai](https://fal.ai/) and [kie.ai](htt
 
 ![Settings: models, language, and API keys](screenshots/settings.png)
 
-On a phone, Gallery / Profiles / Settings sit in a bottom bar so the prompt field stays usable.
+On a phone, Gallery / GUI / Profiles / Settings sit in a bottom bar so the prompt field stays usable.
 
 ## Install
 

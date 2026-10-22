@@ -26,6 +26,7 @@
     "app.tsx",
     "generate-picker.tsx",
     "model-catalog.tsx",
+    "gui-panel.tsx",
     "i18n.ts",
     "src",
     "components",

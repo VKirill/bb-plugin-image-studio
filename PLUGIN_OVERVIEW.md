@@ -1,6 +1,6 @@
 ## What you get
 
-A gallery of photos generated for the current BB project, in their real aspect ratios. People profiles with reference selfies so a named person stays recognizable. A generate form in the plugin panel, and in chat a Send form with model, frame, and size already filled from last time.
+A gallery of photos generated for the current BB project, in their real aspect ratios. A GUI section that turns a short request into game interface mockups and element sheets cut into transparent PNGs, in one saved style per project. People profiles with reference selfies so a named person stays recognizable. A generate form in the plugin panel, and in chat a Send form with model, frame, and size already filled from last time.
 
 ## How it works
 

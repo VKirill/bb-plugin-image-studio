@@ -30,5 +30,13 @@ export const generationSchema = z.object({
   refsJevError: z.string().optional(),
   /** Slots wanted but not sent (over the model's image cap, or listed by hand and empty). */
   refsDropped: z.array(z.string()).optional(),
+  /** GUI section: the style, mode and job label ("idea 2: gothic", "kit wide") of a GUI picture. */
+  guiStyleId: z.string().nullable().optional(),
+  guiMode: z.enum(["ideas", "screen", "elements", "kit"]).optional(),
+  guiLabel: z.string().optional(),
+  /** Element sheets: folder with parts/*.png and manifest.json, how many parts were cut, and the cells not found. */
+  guiDir: z.string().nullable().optional(),
+  guiParts: z.number().int().optional(),
+  guiMissing: z.array(z.string()).optional(),
 });
 export type Generation = z.infer<typeof generationSchema>;

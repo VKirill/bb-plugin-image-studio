@@ -21,11 +21,14 @@ import { SLOT_GROUPS, slotLabelKey, type SlotGroup, type SlotId } from "./src/sl
 import { DEFAULT_SHEET_SLOTS, isSheetSlot, sheetPrompt } from "./src/sheet";
 import { aspectLabel, DEFAULT_LAST_CHOICE, GENERATE_PICKER_ID, type LastChoice } from "./src/formats";
 import { MODEL_IDS, modelFalOnly, modelKieOnly } from "./src/models";
+import type { GuiStyle } from "./src/gui";
 import { enabledFromSettings, type StudioSettings } from "./src/settings";
 import { MAX_CONCURRENCY, mapParallel } from "./src/queue";
 import { rpcApi } from "./src/rpc-api";
+import { fileToBase64 } from "./lib/files";
+import { GuiPanel } from "./gui-panel";
 
-type Tab = "settings" | "people" | "gallery";
+type Tab = "settings" | "people" | "gallery" | "gui";
 type UiLocale = "auto" | "en" | "ru";
 type PhotoSlotId = SlotId;
 /** The three face slots one multi-file pick fills, in order. */
@@ -62,6 +65,13 @@ type GenerationItem = {
   createdAt: string;
   width?: number;
   height?: number;
+  projectPath: string | null;
+  guiStyleId?: string | null;
+  guiMode?: "ideas" | "screen" | "elements" | "kit";
+  guiLabel?: string;
+  guiParts?: number;
+  guiMissing?: string[];
+  guiDir?: string | null;
 };
 
 function EmptyState({ children }: { children: ReactNode }) {
@@ -274,16 +284,6 @@ function fetchPreviews(
       // A failed preview stays a placeholder until the panel reopens.
     }
   });
-}
-
-async function fileToBase64(file: File): Promise<string> {
-  const text = await new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result ?? ""));
-    reader.onerror = () => reject(reader.error);
-    reader.readAsDataURL(file);
-  });
-  return text.includes(",") ? text.slice(text.indexOf(",") + 1) : text;
 }
 
 function PersonCard({
@@ -907,6 +907,7 @@ function StudioPage({ initialView = "gallery" }: { initialView?: Tab }) {
   const [secrets, setSecrets] = useState({ falConfigured: false, kieConfigured: false });
   const [profiles, setProfiles] = useState<PersonProfile[]>([]);
   const [generations, setGenerations] = useState<GenerationItem[]>([]);
+  const [guiStyles, setGuiStyles] = useState<GuiStyle[]>([]);
   const [thumbs, setThumbs] = useState<Record<string, string>>({});
   const [fullPreviews, setFullPreviews] = useState<Record<string, string>>({});
   const [photoPreviews, setPhotoPreviews] = useState<Record<string, string>>({});
@@ -940,6 +941,7 @@ function StudioPage({ initialView = "gallery" }: { initialView?: Tab }) {
         setSecrets(snap.secrets);
         setProfiles(snap.profiles);
         setGenerations(snap.generations);
+        setGuiStyles(snap.guiStyles);
         if (!primedChoice.current && snap.lastGenerate) {
           primedChoice.current = true;
           setModel(snap.lastGenerate.model);
@@ -957,7 +959,7 @@ function StudioPage({ initialView = "gallery" }: { initialView?: Tab }) {
 
   const requestedThumbs = useRef(new Set<string>());
   useEffect(() => {
-    if (tab !== "gallery") return;
+    if (tab !== "gallery" && tab !== "gui") return;
     fetchPreviews(
       requestedThumbs.current,
       generations.map((item) => ({
@@ -1091,8 +1093,9 @@ function StudioPage({ initialView = "gallery" }: { initialView?: Tab }) {
   const falOnlySelected = modelFalOnly(selectedModel);
   const kieOnlySelected = modelKieOnly(selectedModel);
 
-  const navItems: Array<{ id: Tab; icon: "GridView" | "UserRound" | "Settings"; label: string }> = [
+  const navItems: Array<{ id: Tab; icon: "GridView" | "Layers" | "UserRound" | "Settings"; label: string }> = [
     { id: "gallery", icon: "GridView", label: t("tabGallery", {}, locale) },
+    { id: "gui", icon: "Layers", label: t("tabGui", {}, locale) },
     { id: "people", icon: "UserRound", label: t("tabProfiles", {}, locale) },
     { id: "settings", icon: "Settings", label: t("tabSettings", {}, locale) },
   ];
@@ -1281,6 +1284,39 @@ function StudioPage({ initialView = "gallery" }: { initialView?: Tab }) {
                 />
               </div>
             </form>
+            {viewerIndex !== null ? (
+              <PhotoViewer
+                items={generations}
+                index={viewerIndex}
+                thumbs={thumbs}
+                fullPreviews={fullPreviews}
+                locale={locale}
+                onIndex={setViewerIndex}
+                onClose={() => setViewerIndex(null)}
+              />
+            ) : null}
+          </>
+        ) : tab === "gui" ? (
+          <>
+            {error ? (
+              <p role="alert" className="border-b border-border px-4 py-2 text-sm text-destructive">
+                {t("error", {}, locale)}: {error}
+              </p>
+            ) : null}
+            <GuiPanel
+              api={api}
+              projectId={projectId ?? null}
+              styles={guiStyles}
+              items={generations}
+              thumbs={thumbs}
+              locale={locale}
+              onError={report}
+              onChanged={load}
+              onOpen={(id) => {
+                const index = generations.findIndex((item) => item.id === id);
+                if (index !== -1) setViewerIndex(index);
+              }}
+            />
             {viewerIndex !== null ? (
               <PhotoViewer
                 items={generations}

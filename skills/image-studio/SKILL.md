@@ -1,11 +1,13 @@
 ---
 name: image-studio
-description: Generate or edit images for the current BB project through Image Studio (fal.ai / kie.ai, Nano Banana 2, Nano Banana 2.1, Nano Banana Pro, Muse Image, optional GPT Image 2.5, FLUX.2 Pro, Seedream 5, Grok Imagine, Qwen Image 2.1, Wan 2.7, people profiles). Use when the user asks to generate a picture, photo, poster, a scene with a named person from Image Studio profiles, or 18+ / adult / NSFW images (Qwen Image 2.1 by default, Wan 2.7 as the fallback).
+description: Generate or edit images for the current BB project through Image Studio (fal.ai / kie.ai, Nano Banana 2, Nano Banana 2.1, Nano Banana Pro, Muse Image, optional GPT Image 2.5, FLUX.2 Pro, Seedream 5, Grok Imagine, Qwen Image 2.1, Wan 2.7, people profiles, game GUI). Use when the user asks to generate a picture, a game interface (GUI, HUD, buttons, UI kit), photo, poster, a scene with a named person from Image Studio profiles, or 18+ / adult / NSFW images (Qwen Image 2.1 by default, Wan 2.7 as the fallback).
 ---
 
 # Image Studio
 
 Read this skill only when the user wants an image.
+
+**Game GUI** (menus, HUD, windows, buttons, frames, UI icons, UI kits): use the GUI section — tool `image_studio_gui` / `bb image-studio gui …`, see [references/gui.md](references/gui.md). Not `image_studio_generate`.
 
 ## Do this
 
