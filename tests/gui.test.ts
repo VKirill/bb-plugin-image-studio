@@ -80,7 +80,7 @@ test("a fresh style explores four presets; a fixed one gives four takes with its
   assert.equal(fresh.length, 4);
   assert.equal(new Set(fresh.map((job) => job.prompt)).size, 4);
   assert.ok(fresh[0]!.prompt.includes(GUI_PRESETS.cartoon));
-  assert.ok(fresh.every((job) => job.prompt.includes("Game and mood: vampires vs humans.")));
+  assert.ok(fresh.every((job) => job.prompt.includes("Project and mood: vampires vs humans.")));
   assert.ok(fresh.every((job) => job.prompt.includes("every visible label is English")));
   assert.ok(fresh.every((job) => job.aspectRatio === "16:9"));
 
@@ -100,10 +100,10 @@ test("a fresh style explores four presets; a fixed one gives four takes with its
   for (const job of takes) {
     assert.ok(job.prompt.includes(GUI_PRESETS.gothic));
     assert.ok(job.prompt.includes("panel background #1A1026, buttons #C0203A"));
-    assert.ok(job.prompt.includes("Image 1 shows the approved UI style"));
-    assert.ok(job.prompt.includes("Image 2 shows the game's art"));
+    assert.ok(job.prompt.includes("Image 1 shows the approved UI style of this project"));
+    assert.ok(job.prompt.includes("Image 2 shows the project's art"));
   }
-  assert.ok(screenJob("shop", fixed).prompt.startsWith("Deliverable: a game-ready UI design mockup for a Roblox game: shop."));
+  assert.ok(screenJob("shop", fixed).prompt.startsWith("Deliverable: a production-ready UI design mockup (the project and mood below say what it is for): shop."));
 });
 
 test("element sheets list the elements in order on a green key", () => {

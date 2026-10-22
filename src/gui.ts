@@ -141,11 +141,11 @@ function refLines(refs: readonly GuiRef[]): string[] {
   const lines: string[] = [];
   if (concepts.length > 0) {
     lines.push(
-      `${imageList(concepts)} ${concepts.length === 1 ? "shows" : "show"} the approved UI style of this game. Match ${concepts.length === 1 ? "its" : "their"} materials, colours, outline thickness, bevels, shine and ornament motifs exactly, as if from the same UI kit; do not copy ${concepts.length === 1 ? "its" : "their"} layout or labels.`,
+      `${imageList(concepts)} ${concepts.length === 1 ? "shows" : "show"} the approved UI style of this project. Match ${concepts.length === 1 ? "its" : "their"} materials, colours, outline thickness, bevels, shine and ornament motifs exactly, as if from the same UI kit; do not copy ${concepts.length === 1 ? "its" : "their"} layout or labels.`,
     );
   }
   if (art.length > 0) {
-    lines.push(`${imageList(art)} ${art.length === 1 ? "shows" : "show"} the game's art. Match its colour palette and finish only; do not draw its characters or scenes.`);
+    lines.push(`${imageList(art)} ${art.length === 1 ? "shows" : "show"} the project's art (game art, brand or site visuals). Match its colour palette and finish only; do not draw its characters or scenes.`);
   }
   return lines;
 }
@@ -159,7 +159,7 @@ function imageList(numbers: readonly number[]): string {
 export function styleLines(style: GuiStyle | null, refs: readonly GuiRef[] = style?.refs ?? []): string[] {
   if (!style) return refLines(refs);
   const lines: string[] = [];
-  if (style.theme.trim()) lines.push(`Game and mood: ${style.theme.trim()}.`);
+  if (style.theme.trim()) lines.push(`Project and mood: ${style.theme.trim()}.`);
   if (style.tags.length > 0) lines.push(`Style: ${style.tags.map(presetText).join("; ")}.`);
   const palette = paletteLine(style);
   if (palette) lines.push(palette);
@@ -181,10 +181,10 @@ export function styleIsFixed(style: GuiStyle | null): boolean {
 
 function mockupPrompt(request: string, lines: readonly string[]): string {
   return [
-    `Deliverable: a game-ready UI design mockup for a Roblox game: ${request.trim()}.`,
+    `Deliverable: a production-ready UI design mockup (the project and mood below say what it is for): ${request.trim()}.`,
     "Presentation: only this UI, shown flat and straight-on (orthographic, no perspective, no tilt), centered, filling about 85% of the frame, on a plain solid pure black background. Nothing around it: no scene, no characters, no hands, no device, no cursor.",
     "Construction, so a UI artist can slice it into reusable pieces: frames with ornaments only on the corners and at the top and bottom center, and straight edges of even thickness between them; flat inner panels with simple rounded corners; every button of one shape, with a normal and a highlighted selected state; sliders made of a track, a fill and a knob; toggles as pill switches; a round close button where a window can close. The same outline thickness and bevel on every piece.",
-    "Readable on a phone: chunky controls, thick outlines, generous spacing, few elements, large icons.",
+    "Readable on a phone: clear large controls, generous spacing, few elements, large icons.",
     TEXT_RULE,
     ...lines,
     RENDER_RULE,
@@ -214,7 +214,7 @@ export function ideasJobs(request: string, style: GuiStyle | null): GuiJob[] {
     }));
   }
   // Nothing fixed: four different presets; the theme (if any) still applies to all four.
-  const theme = style?.theme.trim() ? [`Game and mood: ${style.theme.trim()}.`] : [];
+  const theme = style?.theme.trim() ? [`Project and mood: ${style.theme.trim()}.`] : [];
   return GUI_PRESET_IDS.slice(0, GUI_IDEAS).map((preset, index) => ({
     prompt: mockupPrompt(request, [...theme, `Style direction: ${GUI_PRESETS[preset]}.`]),
     aspectRatio: MOCKUP_ASPECT,
@@ -319,7 +319,7 @@ function sheetPrompt(intro: string, layout: SheetLayout, lines: readonly string[
 
 export function elementsJob(elements: readonly string[], style: GuiStyle | null, states: boolean): GuiJob {
   const layout = sheetLayout(elements, states);
-  const intro = `Deliverable: a sprite sheet of separate game UI elements for a Roblox game, to be cut into individual images.`;
+  const intro = `Deliverable: a sprite sheet of separate UI elements (the project and mood below say what they are for), to be cut into individual images.`;
   return {
     prompt: sheetPrompt(intro, layout, styleLines(style), states),
     aspectRatio: sheetAspect(layout),
@@ -372,7 +372,7 @@ const KIT_NAMES: readonly string[][] = [
 ];
 
 export function kitJobs(style: GuiStyle | null): GuiJob[] {
-  const intro = "Deliverable: a sprite sheet of the standard parts of this game's UI kit, to be cut into individual images.";
+  const intro = "Deliverable: a sprite sheet of the standard parts of this project's UI kit, to be cut into individual images.";
   return KIT_SHEETS.map((sheet, index) => {
     const cols = index === 0 ? 2 : 4;
     const names = KIT_NAMES[index]!;
