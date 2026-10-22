@@ -36,13 +36,12 @@ const style = (patch: Partial<GuiStyle> = {}): GuiStyle => ({
   ...patch,
 });
 
-test("element lists split on lines, semicolons and commas outside brackets", () => {
-  assert.deepEqual(parseElementList("1. Play button\n- gold coin icon; wood log (oak, dark)\n\n• heart bar, badge"), [
+test("element lists split on lines and semicolons; commas stay inside a description", () => {
+  assert.deepEqual(parseElementList("1. Play button\n- gold coin icon; wood log (oak, dark)\n\n• pricing card, empty"), [
     "Play button",
     "gold coin icon",
     "wood log (oak, dark)",
-    "heart bar",
-    "badge",
+    "pricing card, empty",
   ]);
 });
 

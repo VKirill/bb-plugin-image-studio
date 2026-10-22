@@ -231,10 +231,10 @@ export function screenJob(request: string, style: GuiStyle | null): GuiJob {
 export type SheetCell = { name: string; element: string; state?: (typeof GUI_STATES)[number] };
 export type SheetLayout = { rows: number; cols: number; cells: SheetCell[] };
 
-/** "play button; gold coin icon, wood icon\n heart bar" → items. Numbering like "1." or "-" is dropped. */
+/** One element per line or per ";" (commas stay inside a description). Numbering like "1." or "-" is dropped. */
 export function parseElementList(text: string): string[] {
   return text
-    .split(/[\n;]+|,(?![^(]*\))/)
+    .split(/[\n;]+/)
     .map((item) => item.replace(/^\s*(?:[-*•]|\d+[.)])\s*/, "").trim())
     .filter((item) => item !== "");
 }

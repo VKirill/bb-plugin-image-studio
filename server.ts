@@ -1825,6 +1825,7 @@ export default async function plugin(bb: BbPluginApi) {
     "  bb image-studio gui project [--name <name>] [--rename <new>] [--theme <text>] [--tags cartoon,gothic,…] [--palette background=#1A1026,button=#C0203A,…] [--notes <text>]",
     "  bb image-studio gui ref [--project <name>] --image <path|gallery id> [--role concept|art]",
     "  bb image-studio gui generate --mode ideas|screen|elements|kit [--project <name>] [--states] [--image <path>]… --prompt <text> [--json]",
+    "  bb image-studio gui delete --project <name>   (the list and references; saved files stay)",
     "  bb image-studio gui cut --sheet <path> [--elements \"a; b; c\"] [--states] [--json]   (re-cut a green-key sheet; free)",
   ].join("\n");
 
@@ -1860,7 +1861,7 @@ export default async function plugin(bb: BbPluginApi) {
       {
         name: "gui",
         summary: "GUI section: styles, 4 mockup ideas, screens, element sheets cut into PNGs, UI kits (Muse Image, English labels)",
-        usage: "bb image-studio gui projects|project|ref|generate|cut …",
+        usage: "bb image-studio gui projects|project|ref|generate|cut|delete …",
       },
     ],
     async run(argv, ctx) {
@@ -2239,6 +2240,13 @@ export default async function plugin(bb: BbPluginApi) {
         });
         if (existing && !existing.origin) await withGuiStyle(existing.id, (style) => void (style.origin = origin));
         return reply(saved, `${existing ? "Updated" : "Created"} GUI project ${saved.name} (${saved.id}). Presets for --tags: ${GUI_PRESET_IDS.join(", ")}.`);
+      }
+      case "delete": {
+        if (!projectFlag) return { exitCode: 1, stderr: "Name the project: bb image-studio gui delete --project <name>" };
+        const style = findGuiStyle(await readGuiStyles(), projectFlag, origin);
+        if (!style) return { exitCode: 1, stderr: `No GUI project "${projectFlag}".` };
+        await delete_gui_style({ id: style.id });
+        return reply({ removed: style.id }, `Deleted GUI project ${style.name} (${style.id}): its list and references. Files saved in folders stay.`);
       }
       case "ref": {
         const image = flag(argv, "--image");
