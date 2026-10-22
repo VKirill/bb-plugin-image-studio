@@ -2150,7 +2150,7 @@ export default async function plugin(bb: BbPluginApi) {
         const [uri] = await sourceDataUris([image], projectId, cwd);
         const bytes = Buffer.from(uri!.slice(uri!.indexOf(",") + 1), "base64");
         const saved = await addGuiRefFile(style.id, role, bytes, image.split("/").pop() ?? "ref");
-        return reply(saved, `Added a ${role} reference to ${saved.name}: ${saved.refs.length} of ${GUI_MAX_REFS}.`);
+        return reply(saved, `Added ${role === "art" ? "an art" : "a concept"} reference to ${saved.name}: ${saved.refs.length} of ${GUI_MAX_REFS}.`);
       }
       case "generate": {
         const mode = guiModeSchema.safeParse(flag(argv, "--mode") ?? "ideas");

@@ -44,7 +44,8 @@ test("element lists split on lines, semicolons and commas outside brackets", () 
 });
 
 test("slugs are ascii and unique per sheet", () => {
-  assert.equal(slugify("Play button with the label 'PLAY'"), "play-button-with-the-label-play");
+  assert.equal(slugify("Play button with the label 'PLAY'"), "play-button");
+  assert.equal(slugify("square ability button with a bat icon"), "square-ability-button-with-a-bat-icon");
   assert.equal(slugify("кнопка", "element-1"), "element-1");
   const layout = sheetLayout(["Coin", "coin", "Gem"], false);
   assert.deepEqual(
@@ -102,7 +103,7 @@ test("a fresh style explores four presets; a fixed one gives four takes with its
 
 test("element sheets list the elements in order on a green key", () => {
   const job = elementsJob(["Play button", "gold coin icon", "heart bar"], null, false);
-  assert.ok(job.prompt.includes("1. Play button\n2. gold coin icon\n3. heart bar"));
+  assert.ok(job.prompt.includes("Row 1, left to right: 1. Play button; 2. gold coin icon\nRow 2, left to right: 3. heart bar"));
   assert.ok(job.prompt.includes("#00FF00"));
   assert.ok(job.prompt.includes("2 rows and 2 columns"));
   assert.equal(job.layout?.cells.length, 3);
@@ -191,5 +192,20 @@ test("cut without a layout numbers the parts", () => {
   assert.deepEqual(
     cut.parts.map((part) => part.name),
     ["part-01", "part-02"],
+  );
+});
+
+test("cut: rows of different heights are matched to grid rows in order", () => {
+  // 2×2 grid on 400×400, but the first row is drawn tall (its pieces reach past the middle line)
+  const image = sheet(400, 400, [
+    [20, 70, 180, 340, [200, 30, 50]],
+    [220, 70, 380, 340, [80, 40, 120]],
+    [20, 352, 180, 392, [30, 30, 200]],
+    [220, 352, 380, 392, [9, 9, 9]],
+  ]);
+  const cut = cutSheet(keyGreen(image), sheetLayout(["frame", "panel", "button", "bar"], false));
+  assert.deepEqual(
+    cut.parts.map((part) => [part.name, part.box.y0]),
+    [["frame", 68], ["panel", 68], ["button", 350], ["bar", 350]],
   );
 });

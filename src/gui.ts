@@ -227,6 +227,7 @@ export function parseElementList(text: string): string[] {
 export function slugify(text: string, fallback = "part"): string {
   const slug = text
     .toLowerCase()
+    .replace(/\s*with (?:the |a )?(?:label|text|caption)\s*(["'«][^"'»]*["'»])?/g, "")
     .replace(/["'«»]/g, "")
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
@@ -283,13 +284,16 @@ export function sheetAspect(layout: { rows: number; cols: number }, cellRatio = 
 function sheetPrompt(intro: string, layout: SheetLayout, lines: readonly string[], states: boolean): string {
   const list = states
     ? layout.cells.filter((cell) => cell.state === "normal").map((cell, index) => `${index + 1}. ${cell.element}`)
-    : layout.cells.map((cell, index) => `${index + 1}. ${cell.element}`);
+    : Array.from({ length: layout.rows }, (_, row) => {
+        const cells = layout.cells.slice(row * layout.cols, (row + 1) * layout.cols);
+        return `Row ${row + 1}, left to right: ${cells.map((cell, col) => `${row * layout.cols + col + 1}. ${cell.element}`).join("; ")}`;
+      });
   return [
     intro,
     `Elements, in this exact order:\n${list.join("\n")}`,
     states
       ? `Layout: a strict grid of ${layout.rows} rows and ${layout.cols} columns. Each row is one element of the list, in order from the top; its four cells, left to right, are the states normal, hover, pressed and disabled. Normal: as designed. Hover: slightly brighter with a soft rim glow. Pressed: slightly darker with a soft inner shadow. Disabled: desaturated grey with lower contrast. Every state the same size and outline.`
-      : `Layout: a strict grid of ${layout.rows} rows and ${layout.cols} columns, filled left to right, top to bottom, in the order of the list${layout.cells.length < layout.rows * layout.cols ? "; the cells after the last element stay empty" : ""}.`,
+      : `Layout: a strict grid of ${layout.rows} rows and ${layout.cols} columns, exactly the rows above: each row holds only its own elements, one per cell${layout.cells.length < layout.rows * layout.cols ? "; the cells after the last element stay empty" : ""}. A large element stays inside its own row; never draw two elements as one piece.`,
     "Every element is centered in its own equal grid cell, complete and fully visible, front view and flat (no perspective), never touching another element or the image border, with wide empty gaps between cells. Nothing else on the sheet: no captions, no numbers, no grid lines.",
     KEY_RULE,
     "Text: no text, letters or numbers on the elements, unless an element names its label in quotes; such a label is English.",
@@ -438,7 +442,8 @@ function components(image: Rgba, minArea: number): { labels: Int32Array; parts: 
   return { labels, parts };
 }
 
-function rowMajor<T extends Box>(boxes: readonly T[]): T[] {
+/** Boxes grouped into rows by vertical overlap, top to bottom, each row left to right. */
+function clusterRows<T extends Box>(boxes: readonly T[]): T[][] {
   const sorted = [...boxes].sort((a, b) => a.y0 - b.y0);
   const rows: T[][] = [];
   let bottom = -1;
@@ -452,7 +457,11 @@ function rowMajor<T extends Box>(boxes: readonly T[]): T[] {
       bottom = box.y1;
     }
   }
-  return rows.flatMap((row) => row.sort((a, b) => a.x0 - b.x0));
+  return rows.map((row) => row.sort((a, b) => a.x0 - b.x0));
+}
+
+function rowMajor<T extends Box>(boxes: readonly T[]): T[] {
+  return clusterRows(boxes).flat();
 }
 
 function gap(a: Box, b: Box): number {
@@ -484,15 +493,32 @@ export function cutSheet(keyed: Rgba, layout?: SheetLayout): CutResult {
   if (layout && layout.cells.length > 0) {
     const cellW = width / layout.cols;
     const cellH = height / layout.rows;
-    const byCell = new Map<number, Component[]>();
-    let outside = false;
-    for (const part of major) {
-      const index = Math.min(layout.rows - 1, Math.floor(part.cy / cellH)) * layout.cols + Math.min(layout.cols - 1, Math.floor(part.cx / cellW));
-      if (index >= layout.cells.length) outside = true;
+    const column = (part: Component) => Math.min(layout.cols - 1, Math.floor(part.cx / cellW));
+    const place = (assign: (byCell: Map<number, Component[]>) => void) => {
+      const byCell = new Map<number, Component[]>();
+      assign(byCell);
+      const outside = [...byCell.keys()].some((index) => index >= layout.cells.length);
+      const filled = layout.cells.filter((_, index) => byCell.has(index)).length;
+      return !outside && filled >= Math.ceil(layout.cells.length * 0.75) ? byCell : null;
+    };
+    const add = (byCell: Map<number, Component[]>, index: number, part: Component) =>
       byCell.set(index, [...(byCell.get(index) ?? []), part]);
-    }
-    const filled = layout.cells.filter((_, index) => byCell.has(index)).length;
-    if (!outside && filled >= Math.ceil(layout.cells.length * 0.75)) {
+    // Rows as drawn (Muse often makes rows of different heights), matched to the grid rows in order; then by position.
+    const rows = clusterRows(major);
+    const byCell =
+      (rows.length === layout.rows
+        ? place((map) =>
+            rows.forEach((row, r) => {
+              const inRow = Math.min(layout.cols, layout.cells.length - r * layout.cols);
+              if (row.length === inRow) row.forEach((part, c) => add(map, r * layout.cols + c, part));
+              else row.forEach((part) => add(map, r * layout.cols + column(part), part));
+            }),
+          )
+        : null) ??
+      (major.length === layout.cells.length ? null : place((map) =>
+        major.forEach((part) => add(map, Math.min(layout.rows - 1, Math.floor(part.cy / cellH)) * layout.cols + column(part), part)),
+      ));
+    if (byCell) {
       groups = [];
       layout.cells.forEach((cell, index) => {
         const members = byCell.get(index);
