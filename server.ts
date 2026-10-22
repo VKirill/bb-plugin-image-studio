@@ -66,6 +66,8 @@ import {
   ideasJobs,
   keyGreen,
   kitJobs,
+  originName,
+  originProject,
   parseElementList,
   parseGuiStyles,
   screenJob,
@@ -100,6 +102,9 @@ const DEFAULT_GATEWAY_KIE = "default-gateway-kie";
 const ENABLE_QWEN_21 = "enable-qwen-21";
 const CHANGED = "image-studio-changed";
 const GUI_STYLES_KEY = "gui-styles";
+/** Per GUI project: its generations, newest first (slim records, so a few hundred fit in one KV value). */
+const GUI_GEN_PREFIX = "gui-gen:";
+const GUI_GEN_MAX = 400;
 
 export type { Generation } from "./src/generation.js";
 
@@ -141,6 +146,8 @@ export const rpcContract = defineRpcContract({
         z.string().min(1).optional(),
       ),
       projectId: z.string().nullable(),
+      /** Bind a new project to a folder (CLI); panel-made projects stay unbound. */
+      origin: z.string().optional(),
       name: z.string().trim().min(1).max(80),
       theme: z.string().max(2000).default(""),
       tags: z.array(z.string().max(300)).max(12).default([]),
@@ -148,6 +155,10 @@ export const rpcContract = defineRpcContract({
       notes: z.string().max(2000).default(""),
     }),
     output: guiStyleSchema,
+  },
+  gui_generations: {
+    input: z.object({ styleId: z.string() }),
+    output: z.array(generationSchema),
   },
   delete_gui_style: {
     input: z.object({ id: z.string() }),
@@ -300,7 +311,7 @@ function flags(argv: string[], name: string): string[] {
 }
 
 function restAfter(argv: string[], command: string): string {
-  const skip = new Set(["--model", "--gateway", "--profile", "--image", "--aspect", "--resolution", "--refs", "--seed", "--count", "--batch", "--parallel", "--slots", "--json", "--mode", "--style", "--name", "--theme", "--tags", "--palette", "--notes", "--role", "--sheet", "--elements"]);
+  const skip = new Set(["--model", "--gateway", "--profile", "--image", "--aspect", "--resolution", "--refs", "--seed", "--count", "--batch", "--parallel", "--slots", "--json", "--mode", "--style", "--project", "--rename", "--name", "--theme", "--tags", "--palette", "--notes", "--role", "--sheet", "--elements"]);
   const out: string[] = [];
   for (let i = 0; i < argv.length; i++) {
     const token = argv[i]!;
@@ -762,7 +773,7 @@ export default async function plugin(bb: BbPluginApi) {
     leadUris?: string[];
     /** What the gallery shows as the prompt, when `prompt` is a composed one. */
     recordPrompt?: string;
-    gui?: { styleId: string | null; styleName: string | null; mode: GuiMode; label: string; layout?: SheetLayout };
+    gui?: { styleId: string | null; styleName: string | null; mode: GuiMode; label: string; run: string; layout?: SheetLayout };
   };
 
   type Rendered = {
@@ -1043,6 +1054,7 @@ export default async function plugin(bb: BbPluginApi) {
             guiStyleId: input.gui.styleId,
             guiMode: input.gui.mode,
             guiLabel: input.gui.label,
+            guiRun: input.gui.run,
             guiDir: guiOut?.dir ?? null,
             ...(guiOut?.parts !== undefined ? { guiParts: guiOut.parts } : {}),
             ...(guiOut && guiOut.missing.length > 0 ? { guiMissing: guiOut.missing } : {}),
@@ -1052,6 +1064,7 @@ export default async function plugin(bb: BbPluginApi) {
     try {
       await writePending(id, { kind: "generation", record });
       await galleryStore.add(projectId, record);
+      if (input.gui?.styleId) await addGuiGeneration(input.gui.styleId, record);
       bb.realtime.publish(CHANGED, { kind: "generations", projectId });
       await clearPending(id);
     } catch (error) {
@@ -1109,6 +1122,26 @@ export default async function plugin(bb: BbPluginApi) {
   }
   function guiDir(styleId: string): string {
     return join(rootDir, "gui", styleId);
+  }
+
+  const guiGenLock = new Mutex();
+  /** A project's generations; the first read after the update adopts its records still in the shared gallery. */
+  async function readGuiGenerations(styleId: string): Promise<Generation[]> {
+    const raw = await bb.storage.kv.get<unknown>(GUI_GEN_PREFIX + styleId);
+    if (Array.isArray(raw)) {
+      return raw.flatMap((item) => {
+        const parsed = generationSchema.safeParse(item);
+        return parsed.success ? [parsed.data] : [];
+      });
+    }
+    return (await readStudioGallery(null)).filter((item) => item.guiStyleId === styleId);
+  }
+  function addGuiGeneration(styleId: string, record: Generation): Promise<void> {
+    return guiGenLock.run(async () => {
+      const list = (await readGuiGenerations(styleId)).filter((item) => item.id !== record.id);
+      // The composed prompt is kilobytes of wrapper; the shared gallery keeps it, the project list does not.
+      await bb.storage.kv.set(GUI_GEN_PREFIX + styleId, fitGallery([{ ...record, composedPrompt: "" }, ...list], GUI_GEN_MAX));
+    });
   }
 
   async function addGuiRefFile(styleId: string, role: "concept" | "art", bytes: Buffer, name: string): Promise<GuiStyle> {
@@ -1223,6 +1256,38 @@ export default async function plugin(bb: BbPluginApi) {
     }
   }
 
+  /**
+   * The project a run writes to: the named one; else the latest project bound to this folder (or BB project);
+   * else a new project named after the folder. "Make GUI from this place" therefore always lands in one project.
+   */
+  async function resolveGuiProject(input: { styleId?: string; origin: string; projectId: string | null; name?: string }): Promise<GuiStyle> {
+    if (input.styleId) {
+      const found = findGuiStyle(await readGuiStyles(), input.styleId, input.origin);
+      if (!found) throw new Error(`No GUI project "${input.styleId}". Run bb image-studio gui projects.`);
+      return found;
+    }
+    return withGuiStyles((styles) => {
+      const bound = originProject(styles, input.origin);
+      if (bound) return bound;
+      const now = new Date().toISOString();
+      const created: GuiStyle = {
+        id: randomUUID().slice(0, 8),
+        projectId: input.projectId ?? "unscoped",
+        origin: input.origin,
+        name: (input.name || (input.origin === "unscoped" ? "" : originName(input.origin)) || `GUI ${styles.length + 1}`).slice(0, 80),
+        theme: "",
+        tags: [],
+        palette: { background: "", button: "", outline: "", highlight: "", text: "" },
+        notes: "",
+        refs: [],
+        createdAt: now,
+        updatedAt: now,
+      };
+      styles.push(created);
+      return created;
+    });
+  }
+
   async function runGui(input: {
     projectId: string | null;
     styleId?: string;
@@ -1232,10 +1297,12 @@ export default async function plugin(bb: BbPluginApi) {
     images?: string[];
     cwd?: string;
     hostId?: string;
+    /** Name for a project created for this place (BB project name); the folder name otherwise. */
+    originLabel?: string;
   }): Promise<{ generations: Generation[]; errors: string[]; style: GuiStyle | null; jobs: GuiJob[] }> {
-    const styles = await readGuiStyles();
-    const style = input.styleId ? findGuiStyle(styles, input.styleId, input.projectId) : null;
-    if (input.styleId && !style) throw new Error(`No GUI style "${input.styleId}". Run bb image-studio gui styles.`);
+    const origin = input.cwd ?? input.projectId ?? "unscoped";
+    const style = await resolveGuiProject({ styleId: input.styleId, origin, projectId: input.projectId, name: input.originLabel });
+    const run = randomUUID().slice(0, 8);
     const lead = await guiRefUris(style);
     const extra = input.images ?? [];
     const jobs = guiJobs(input.mode, input.prompt.trim(), style, input.states);
@@ -1256,7 +1323,7 @@ export default async function plugin(bb: BbPluginApi) {
           aspectRatio: job.aspectRatio,
           cwd: input.cwd,
           hostId: input.hostId,
-          gui: { styleId: style?.id ?? null, styleName: style?.name ?? null, mode: input.mode, label: job.label, layout: job.layout },
+          gui: { styleId: style.id, styleName: style.name, mode: input.mode, label: job.label, run, layout: job.layout },
         }),
       ),
     );
@@ -1267,22 +1334,40 @@ export default async function plugin(bb: BbPluginApi) {
       else if (result.reason instanceof SavedAfterReload) generations.push(result.reason.record);
       else errors.push(`${jobs[index]!.label}: ${describe(result.reason)}`);
     });
+    // The project used last comes first in the panel.
+    await withGuiStyle(style.id, () => undefined).catch(() => undefined);
     return { generations, errors, style, jobs };
   }
 
-  async function projectSource(projectId: string | null | undefined): Promise<{ cwd?: string; hostId?: string }> {
+  /** The folder the thread works in (a section of a big BB project), so its GUI lands in that folder's project. */
+  async function threadFolder(threadId: string, projectId: string | null): Promise<{ cwd?: string; hostId?: string }> {
+    try {
+      const thread = (await bb.sdk.threads.get({ threadId })) as { environmentId?: string | null };
+      if (thread.environmentId) {
+        const env = (await bb.sdk.environments.get({ environmentId: thread.environmentId })) as { path?: string; hostId?: string };
+        if (env.path) return { cwd: env.path, hostId: env.hostId };
+      }
+    } catch (error) {
+      warn(`thread folder: ${describe(error)}`);
+    }
+    return projectSource(projectId);
+  }
+
+  async function projectSource(projectId: string | null | undefined): Promise<{ cwd?: string; hostId?: string; name?: string }> {
     if (!projectId) return {};
     try {
-      const source = (await bb.sdk.projects.get({ projectId })).sources[0];
-      return { cwd: source?.path, hostId: source?.hostId };
+      const project = await bb.sdk.projects.get({ projectId });
+      const source = project.sources[0];
+      return { cwd: source?.path, hostId: source?.hostId, name: project.name };
     } catch (error) {
       warn(`project path: ${describe(error)}`);
       return {};
     }
   }
 
-  function guiSummary(run: { generations: Generation[]; errors: string[] }): string {
+  function guiSummary(run: { generations: Generation[]; errors: string[]; style?: GuiStyle | null }): string {
     return [
+      ...(run.style ? [`GUI project: ${run.style.name} (${run.style.id})`] : []),
       ...run.generations.map((record) =>
         [
           `${record.guiLabel}: ${record.projectPath ?? record.filename}`,
@@ -1463,7 +1548,7 @@ export default async function plugin(bb: BbPluginApi) {
       profiles,
       generations,
       lastGenerate,
-      guiStyles: guiStyles.filter((style) => style.projectId === (projectId ?? "unscoped")),
+      guiStyles: [...guiStyles].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
     };
   };
   const update_settings: RpcHandlers["update_settings"] = (patch) =>
@@ -1616,7 +1701,12 @@ export default async function plugin(bb: BbPluginApi) {
   };
   const generation_preview: RpcHandlers["generation_preview"] = async ({ id, projectId, variant }) => {
     const items = await readStudioGallery(projectId);
-    const item = items.find((entry) => entry.id === id) ?? (await readGenerations(projectId)).find((entry) => entry.id === id);
+    let item = items.find((entry) => entry.id === id) ?? (await readGenerations(projectId)).find((entry) => entry.id === id);
+    // GUI projects keep more history than the shared gallery.
+    for (const style of item ? [] : await readGuiStyles()) {
+      item = (await readGuiGenerations(style.id)).find((entry) => entry.id === id);
+      if (item) break;
+    }
     if (!item) throw new Error("Generation not found");
     return previewGeneration(item, variant ?? "thumb");
   };
@@ -1640,6 +1730,7 @@ export default async function plugin(bb: BbPluginApi) {
       const created: GuiStyle = {
         id: randomUUID().slice(0, 8),
         projectId: input.projectId ?? "unscoped",
+        origin: input.origin ?? "",
         ...fields,
         refs: [],
         createdAt: now,
@@ -1654,6 +1745,7 @@ export default async function plugin(bb: BbPluginApi) {
       if (index === -1) return { removed: false };
       styles.splice(index, 1);
       await rm(guiDir(id), { recursive: true, force: true });
+      await bb.storage.kv.set(GUI_GEN_PREFIX + id, []);
       return { removed: true };
     });
   const add_gui_ref: RpcHandlers["add_gui_ref"] = async ({ styleId, role, generationId, filename, base64 }) => {
@@ -1690,9 +1782,11 @@ export default async function plugin(bb: BbPluginApi) {
     return { mimeType: sniffImageMime(thumb), base64: thumb.toString("base64") };
   };
   const gui_generate: RpcHandlers["gui_generate"] = async (input) => {
-    const run = await runGui({ ...input, ...(await projectSource(input.projectId)) });
+    const source = await projectSource(input.projectId);
+    const run = await runGui({ ...input, cwd: source.cwd, hostId: source.hostId, originLabel: source.name });
     return { generations: run.generations, errors: run.errors };
   };
+  const gui_generations: RpcHandlers["gui_generations"] = async ({ styleId }) => readGuiGenerations(styleId);
 
   // Shorthand on purpose: GitNexus links the panel's api.<method>() calls to these named handlers.
   bb.rpc.register(rpcContract, {
@@ -1715,6 +1809,7 @@ export default async function plugin(bb: BbPluginApi) {
     remove_gui_ref,
     gui_ref_preview,
     gui_generate,
+    gui_generations,
   });
 
   const usage = [
@@ -1726,10 +1821,10 @@ export default async function plugin(bb: BbPluginApi) {
     "  bb image-studio refs --profile <name> --prompt <text> [--model <id>] [--image <n>]… [--json]   (preview of the reference choice; free)",
     "  bb image-studio sheet --profile <name> [--slots a,b] [--model <id>] [--accept] [--parallel N] [--dry-run] [--json]   (paid: one generation per slot)",
     "  bb image-studio models [--json]",
-    "  bb image-studio gui styles [--json]",
-    "  bb image-studio gui style --name <name> [--theme <text>] [--tags cartoon,gothic,…] [--palette background=#1A1026,button=#C0203A,…] [--notes <text>]",
-    "  bb image-studio gui ref --style <name> --image <path|gallery id> [--role concept|art]",
-    "  bb image-studio gui generate --mode ideas|screen|elements|kit [--style <name>] [--states] [--image <path>]… --prompt <text> [--json]",
+    "  bb image-studio gui projects [--json]   (* marks the project of this folder)",
+    "  bb image-studio gui project [--name <name>] [--rename <new>] [--theme <text>] [--tags cartoon,gothic,…] [--palette background=#1A1026,button=#C0203A,…] [--notes <text>]",
+    "  bb image-studio gui ref [--project <name>] --image <path|gallery id> [--role concept|art]",
+    "  bb image-studio gui generate --mode ideas|screen|elements|kit [--project <name>] [--states] [--image <path>]… --prompt <text> [--json]",
     "  bb image-studio gui cut --sheet <path> [--elements \"a; b; c\"] [--states] [--json]   (re-cut a green-key sheet; free)",
   ].join("\n");
 
@@ -1765,7 +1860,7 @@ export default async function plugin(bb: BbPluginApi) {
       {
         name: "gui",
         summary: "GUI section: styles, 4 mockup ideas, screens, element sheets cut into PNGs, UI kits (Muse Image, English labels)",
-        usage: "bb image-studio gui styles|style|ref|generate|cut …",
+        usage: "bb image-studio gui projects|project|ref|generate|cut …",
       },
     ],
     async run(argv, ctx) {
@@ -2104,23 +2199,27 @@ export default async function plugin(bb: BbPluginApi) {
   ) {
     const sub = argv[argv.indexOf("gui") + 1];
     const projectId = ctx.projectId ?? null;
-    const projectKey = projectId ?? "unscoped";
+    const origin = ctx.cwd ?? projectId ?? "unscoped";
+    const projectFlag = flag(argv, "--project") ?? flag(argv, "--style");
     switch (sub) {
-      case "styles": {
-        const styles = (await readGuiStyles()).filter((style) => style.projectId === projectKey);
+      case "styles":
+      case "projects": {
+        const styles = [...(await readGuiStyles())].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+        const here = originProject(styles, origin);
         return reply(
-          styles,
+          styles.map((style) => ({ ...style, current: style.id === here?.id })),
           styles.length === 0
-            ? "No GUI styles in this project. Create one: bb image-studio gui style --name <name> --theme <text>"
+            ? "No GUI projects yet. The first GUI generation from this folder creates one named after it."
             : styles
-                .map((style) => `${style.name} (${style.id}): ${style.theme || "no theme"}; tags: ${style.tags.join(", ") || "none"}; references: ${style.refs.length}`)
-                .join("\n"),
+                .map((style) => `${style.id === here?.id ? "* " : "  "}${style.name} (${style.id}): ${style.theme || "no theme"}; presets: ${style.tags.join(", ") || "none"}; references: ${style.refs.length}${style.origin ? `; folder: ${style.origin}` : ""}`)
+                .join("\n") + (here ? "\n* = where GUI generations from this folder go" : ""),
         );
       }
-      case "style": {
-        const name = flag(argv, "--name");
+      case "style":
+      case "project": {
+        const name = flag(argv, "--name") ?? projectFlag ?? originProject(await readGuiStyles(), origin)?.name;
         if (!name) return { exitCode: 1, stderr: usage };
-        const existing = findGuiStyle(await readGuiStyles(), name, projectKey);
+        const existing = findGuiStyle(await readGuiStyles(), name, origin);
         const palette = { ...(existing?.palette ?? { background: "", button: "", outline: "", highlight: "", text: "" }) };
         for (const pair of (flag(argv, "--palette") ?? "").split(",").filter(Boolean)) {
           const [key, value] = pair.split("=").map((part) => part.trim());
@@ -2131,20 +2230,22 @@ export default async function plugin(bb: BbPluginApi) {
         const saved = await save_gui_style({
           id: existing?.id,
           projectId,
-          name,
+          origin,
+          name: existing && flag(argv, "--rename") ? flag(argv, "--rename")! : (existing?.name ?? name),
           theme: flag(argv, "--theme") ?? existing?.theme ?? "",
           tags: tags !== undefined ? tags.split(",").map((tag) => tag.trim()).filter(Boolean) : (existing?.tags ?? []),
           palette: paletteInputSchema.parse(palette),
           notes: flag(argv, "--notes") ?? existing?.notes ?? "",
         });
-        return reply(saved, `${existing ? "Updated" : "Created"} GUI style ${saved.name} (${saved.id}). Presets for --tags: ${GUI_PRESET_IDS.join(", ")}.`);
+        if (existing && !existing.origin) await withGuiStyle(existing.id, (style) => void (style.origin = origin));
+        return reply(saved, `${existing ? "Updated" : "Created"} GUI project ${saved.name} (${saved.id}). Presets for --tags: ${GUI_PRESET_IDS.join(", ")}.`);
       }
       case "ref": {
-        const styleName = flag(argv, "--style");
         const image = flag(argv, "--image");
-        if (!styleName || !image) return { exitCode: 1, stderr: usage };
-        const style = findGuiStyle(await readGuiStyles(), styleName, projectKey);
-        if (!style) return { exitCode: 1, stderr: `No GUI style "${styleName}".` };
+        if (!image) return { exitCode: 1, stderr: usage };
+        const styles = await readGuiStyles();
+        const style = projectFlag ? findGuiStyle(styles, projectFlag, origin) : originProject(styles, origin);
+        if (!style) return { exitCode: 1, stderr: projectFlag ? `No GUI project "${projectFlag}".` : "No GUI project for this folder yet: generate first or pass --project." };
         const role = flag(argv, "--role") === "art" ? "art" : "concept";
         const { cwd } = ctx;
         const [uri] = await sourceDataUris([image], projectId, cwd);
@@ -2158,7 +2259,7 @@ export default async function plugin(bb: BbPluginApi) {
         const prompt = flag(argv, "--prompt") || restAfter(argv, "generate").replace(/^gui\s*/, "");
         const run = await runGui({
           projectId,
-          styleId: flag(argv, "--style"),
+          styleId: projectFlag,
           mode: mode.data,
           prompt,
           states: argv.includes("--states"),
@@ -2198,9 +2299,9 @@ export default async function plugin(bb: BbPluginApi) {
   bb.agents.registerTool({
     name: "image_studio_gui",
     description:
-      "Game GUI through Image Studio's GUI section (Muse Image, English labels, picked frame size). Modes: ideas (4 mockups of a screen: 4 style directions for a fresh style, 4 takes inside a fixed one), screen (one mockup), elements (a list of separate elements on one sheet, cut into named transparent PNGs; states: normal/hover/pressed/disabled), kit (the standard UI kit of the style in two sheets, cut). Runs at once, no Send form.",
+      "Game and site GUI through Image Studio's GUI section, one GUI project per folder (Muse Image, English labels, picked frame size). Modes: ideas (4 mockups of a screen: 4 style directions for a fresh style, 4 takes inside a fixed one), screen (one mockup), elements (a list of separate elements on one sheet, cut into named transparent PNGs; states: normal/hover/pressed/disabled), kit (the standard UI kit of the style in two sheets, cut). Runs at once, no Send form.",
     instructions:
-      "For game interface work (GUI, HUD, menus, buttons, frames, UI icons) call image_studio_gui instead of image_studio_generate. Pass the style name when the project has GUI styles (`bb image-studio gui styles`); without one, ideas explore 4 preset directions. prompt: ideas/screen — what the screen holds (\"settings window: tabs Graphics, Audio; sliders; Save button\"); elements — the list, one per line or separated by \";\" (\"Play button with the label 'PLAY'; gold coin icon\"); kit — optional extra wishes. Do not describe the style in prompt: the plugin adds the style's theme, palette, presets and reference pictures. Report the saved paths and parts folders to the user. To make an approved picture the style's reference: bb image-studio gui ref --style <name> --image <path or gallery id>.",
+      "For game or site interface work (GUI, HUD, menus, buttons, frames, UI icons) call image_studio_gui instead of image_studio_generate. Generations go to the GUI project of this thread's folder (created on first use, named after the folder); pass project only to write into another one (`bb image-studio gui projects`). A project with nothing fixed yet makes ideas explore 4 preset directions; once it has presets, palette or references, ideas are 4 takes inside its style. prompt: ideas/screen — what the screen holds (\"settings window: tabs Graphics, Audio; sliders; Save button\"); elements — the list, one per line or separated by \";\" (\"Play button with the label 'PLAY'; gold coin icon\"); kit — optional extra wishes. Do not describe the style in prompt: the plugin adds the style's theme, palette, presets and reference pictures. Report the saved paths and parts folders to the user. To make an approved picture the project's style reference: bb image-studio gui ref --image <path or gallery id>. Set theme/presets/palette: bb image-studio gui project --theme … --tags … --palette ….",
     presentation: {
       label: { pending: "Generating GUI", completed: "Generated GUI" },
       icon: { glyph: "Palette" },
@@ -2208,7 +2309,7 @@ export default async function plugin(bb: BbPluginApi) {
     parameters: z.object({
       mode: guiModeSchema,
       prompt: z.string().default(""),
-      style: z.string().optional(),
+      project: z.string().optional(),
       states: z.boolean().optional(),
       images: z.array(z.string().min(1)).max(4).optional(),
     }),
@@ -2216,12 +2317,12 @@ export default async function plugin(bb: BbPluginApi) {
       try {
         const run = await runGui({
           projectId: ctx.projectId || null,
-          styleId: input.style,
+          styleId: input.project,
           mode: input.mode,
           prompt: input.prompt,
           states: input.states ?? false,
           images: input.images,
-          ...(await projectSource(ctx.projectId)),
+          ...(await threadFolder(ctx.threadId, ctx.projectId || null)),
         });
         const text = guiSummary(run);
         return run.generations.length === 0 ? { content: [{ type: "text", text: text || "Nothing was generated." }], isError: true } : text;

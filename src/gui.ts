@@ -29,9 +29,13 @@ export const guiRefSchema = z.object({
 });
 export type GuiRef = z.infer<typeof guiRefSchema>;
 
+/** A GUI project: its own history of generations and the style every GUI prompt of it carries. */
 export const guiStyleSchema = z.object({
   id: z.string(),
+  /** BB project it was made in (informational; projects are listed everywhere). */
   projectId: z.string(),
+  /** The folder (or BB project) whose generations go here when no project is named. */
+  origin: z.string().default(""),
   name: z.string(),
   theme: z.string().default(""),
   tags: z.array(z.string()).default([]),
@@ -59,16 +63,27 @@ export function parseGuiStyles(raw: unknown): GuiStyle[] {
   });
 }
 
-/** By id, then by name (case-insensitive), within the project. */
-export function findGuiStyle(styles: readonly GuiStyle[], key: string, projectId?: string | null): GuiStyle | null {
-  const pool = projectId ? styles.filter((style) => style.projectId === projectId) : styles;
+/** By id, then by name (case-insensitive); a project of the same origin wins a name clash. */
+export function findGuiStyle(styles: readonly GuiStyle[], key: string, origin?: string | null): GuiStyle | null {
   const wanted = key.trim().toLowerCase();
+  const named = styles.filter((style) => style.name.toLowerCase() === wanted);
   return (
-    pool.find((style) => style.id === key) ??
-    pool.find((style) => style.name.toLowerCase() === wanted) ??
-    styles.find((style) => style.id === key) ??
+    styles.find((style) => style.id === key.trim()) ??
+    named.find((style) => origin && style.origin === origin) ??
+    named[0] ??
     null
   );
+}
+
+/** The project a folder writes to when none is named: the most recently used one bound to that folder. */
+export function originProject(styles: readonly GuiStyle[], origin: string): GuiStyle | null {
+  if (!origin) return null;
+  return [...styles].filter((style) => style.origin === origin).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0] ?? null;
+}
+
+/** "…/Roblox - Vampirism Fire" → "Roblox - Vampirism Fire". */
+export function originName(origin: string): string {
+  return origin.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || origin;
 }
 
 /** Style presets: the chips in the panel, and the four directions of a style that has nothing fixed yet. */
@@ -89,12 +104,12 @@ export const GUI_PRESETS = {
 export type GuiPreset = keyof typeof GUI_PRESETS;
 export const GUI_PRESET_IDS = Object.keys(GUI_PRESETS) as GuiPreset[];
 
-/** Four takes on one fixed style: same identity, different interpretations, so the four ideas differ. */
+/** Four takes on one fixed style: same identity, a different layout and treatment each, so the four ideas differ. */
 const VARIATIONS = [
-  "Interpretation: the most faithful, clean version of this style.",
-  "Interpretation: a bolder take: chunkier shapes, stronger ornaments, more contrast.",
-  "Interpretation: a lighter take: slimmer frames, more breathing room, quieter ornaments.",
-  "Interpretation: an unexpected take: a fresh material or motif that still clearly fits the theme.",
+  "Idea 1 of 4: the most faithful, clean version of this style, with the most straightforward classic layout.",
+  "Idea 2 of 4: a different layout: if content would sit in a row, stack it in a vertical list (or the reverse); move the title and counters to new places. Bolder shapes and stronger ornaments.",
+  "Idea 3 of 4: a featured layout: one main element large and prominent, the rest smaller around it. Slimmer frames and more breathing room.",
+  "Idea 4 of 4: a compact layout that splits the content with tabs, pages or a side menu; an unexpected but fitting material or motif detail.",
 ];
 
 const TEXT_RULE =

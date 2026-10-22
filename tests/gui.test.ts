@@ -8,6 +8,8 @@ import {
   ideasJobs,
   keyGreen,
   kitJobs,
+  originName,
+  originProject,
   parseElementList,
   parseGuiStyles,
   screenJob,
@@ -22,6 +24,7 @@ import type { Rgba } from "../src/image-io.ts";
 const style = (patch: Partial<GuiStyle> = {}): GuiStyle => ({
   id: "s1",
   projectId: "p1",
+  origin: "",
   name: "Vampire night",
   theme: "",
   tags: [],
@@ -92,6 +95,8 @@ test("a fresh style explores four presets; a fixed one gives four takes with its
   assert.equal(styleIsFixed(fixed), true);
   const takes = ideasJobs("settings window", fixed);
   assert.equal(takes.length, 4);
+  assert.ok(takes[1]!.prompt.includes("vertical list"));
+  assert.ok(takes[2]!.prompt.includes("featured layout"));
   for (const job of takes) {
     assert.ok(job.prompt.includes(GUI_PRESETS.gothic));
     assert.ok(job.prompt.includes("panel background #1A1026, buttons #C0203A"));
@@ -121,12 +126,32 @@ test("the kit is two named sheets", () => {
   assert.ok(jobs[1]!.layout?.cells.some((cell) => cell.name === "toggle-on"));
 });
 
-test("styles parse, drop broken records and resolve by id or name inside the project", () => {
-  const list = parseGuiStyles([style(), { id: "broken" }, style({ id: "s2", projectId: "p2", name: "Other" })]);
-  assert.equal(list.length, 2);
-  assert.equal(findGuiStyle(list, "vampire NIGHT", "p1")?.id, "s1");
-  assert.equal(findGuiStyle(list, "Other", "p1"), null);
-  assert.equal(findGuiStyle(list, "s2", "p1")?.id, "s2");
+test("projects parse (old records get an empty origin), resolve by id or name, the same folder wins a name clash", () => {
+  const { origin: _drop, ...legacy } = style({ id: "s0", name: "Old" });
+  const list = parseGuiStyles([
+    style({ origin: "/a/Game" }),
+    { id: "broken" },
+    style({ id: "s2", origin: "/b/Site", name: "Vampire night" }),
+    legacy,
+  ]);
+  assert.equal(list.length, 3);
+  assert.equal(list[2]!.origin, "");
+  assert.equal(findGuiStyle(list, "vampire NIGHT", "/b/Site")?.id, "s2");
+  assert.equal(findGuiStyle(list, "vampire NIGHT", "/a/Game")?.id, "s1");
+  assert.equal(findGuiStyle(list, "s2")?.id, "s2");
+  assert.equal(findGuiStyle(list, "missing"), null);
+});
+
+test("a folder writes to its most recently used project; names come from the folder", () => {
+  const list = [
+    style({ id: "old", origin: "/x/Game", updatedAt: "2026-10-01T00:00:00.000Z" }),
+    style({ id: "new", origin: "/x/Game", updatedAt: "2026-10-20T00:00:00.000Z" }),
+    style({ id: "site", origin: "/x/Site" }),
+  ];
+  assert.equal(originProject(list, "/x/Game")?.id, "new");
+  assert.equal(originProject(list, "/x/Other"), null);
+  assert.equal(originProject(list, ""), null);
+  assert.equal(originName("/Users/k/Documents/Мои проекты/Roblox - Vampirism Fire/"), "Roblox - Vampirism Fire");
 });
 
 /** A green sheet with filled rectangles (and optional extra dots), 4 bytes per pixel. */

@@ -26,7 +26,7 @@ import { enabledFromSettings, type StudioSettings } from "./src/settings";
 import { MAX_CONCURRENCY, mapParallel } from "./src/queue";
 import { rpcApi } from "./src/rpc-api";
 import { fileToBase64 } from "./lib/files";
-import { GuiPanel } from "./gui-panel";
+import { GuiPanel, type GuiItem } from "./gui-panel";
 
 type Tab = "settings" | "people" | "gallery" | "gui";
 type UiLocale = "auto" | "en" | "ru";
@@ -908,6 +908,8 @@ function StudioPage({ initialView = "gallery" }: { initialView?: Tab }) {
   const [profiles, setProfiles] = useState<PersonProfile[]>([]);
   const [generations, setGenerations] = useState<GenerationItem[]>([]);
   const [guiStyles, setGuiStyles] = useState<GuiStyle[]>([]);
+  const [guiVersion, setGuiVersion] = useState(0);
+  const [guiViewer, setGuiViewer] = useState<{ items: GuiItem[]; index: number; thumbs: Record<string, string> } | null>(null);
   const [thumbs, setThumbs] = useState<Record<string, string>>({});
   const [fullPreviews, setFullPreviews] = useState<Record<string, string>>({});
   const [photoPreviews, setPhotoPreviews] = useState<Record<string, string>>({});
@@ -942,6 +944,7 @@ function StudioPage({ initialView = "gallery" }: { initialView?: Tab }) {
         setProfiles(snap.profiles);
         setGenerations(snap.generations);
         setGuiStyles(snap.guiStyles);
+        setGuiVersion((value) => value + 1);
         if (!primedChoice.current && snap.lastGenerate) {
           primedChoice.current = true;
           setModel(snap.lastGenerate.model);
@@ -959,7 +962,7 @@ function StudioPage({ initialView = "gallery" }: { initialView?: Tab }) {
 
   const requestedThumbs = useRef(new Set<string>());
   useEffect(() => {
-    if (tab !== "gallery" && tab !== "gui") return;
+    if (tab !== "gallery") return;
     fetchPreviews(
       requestedThumbs.current,
       generations.map((item) => ({
@@ -984,6 +987,15 @@ function StudioPage({ initialView = "gallery" }: { initialView?: Tab }) {
       })
       .catch(() => undefined);
   }, [fullPreviews, generations, api, viewerIndex]);
+
+  useEffect(() => {
+    const item = guiViewer?.items[guiViewer.index];
+    if (!item || fullPreviews[item.id]) return;
+    void api
+      .generation_preview({ id: item.id, projectId: item.projectId, variant: "full" })
+      .then((file) => setFullPreviews((current) => ({ ...current, [item.id]: `data:${file.mimeType};base64,${file.base64}` })))
+      .catch(() => undefined);
+  }, [fullPreviews, api, guiViewer]);
 
   const requestedPhotos = useRef(new Set<string>());
   useEffect(() => {
@@ -1307,25 +1319,21 @@ function StudioPage({ initialView = "gallery" }: { initialView?: Tab }) {
               api={api}
               projectId={projectId ?? null}
               styles={guiStyles}
-              items={generations}
-              thumbs={thumbs}
+              version={guiVersion}
               locale={locale}
               onError={report}
               onChanged={load}
-              onOpen={(id) => {
-                const index = generations.findIndex((item) => item.id === id);
-                if (index !== -1) setViewerIndex(index);
-              }}
+              onOpen={(items, index, guiThumbs) => setGuiViewer({ items, index, thumbs: guiThumbs })}
             />
-            {viewerIndex !== null ? (
+            {guiViewer ? (
               <PhotoViewer
-                items={generations}
-                index={viewerIndex}
-                thumbs={thumbs}
+                items={guiViewer.items}
+                index={guiViewer.index}
+                thumbs={guiViewer.thumbs}
                 fullPreviews={fullPreviews}
                 locale={locale}
-                onIndex={setViewerIndex}
-                onClose={() => setViewerIndex(null)}
+                onIndex={(index) => setGuiViewer({ ...guiViewer, index })}
+                onClose={() => setGuiViewer(null)}
               />
             ) : null}
           </>

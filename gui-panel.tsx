@@ -9,16 +9,23 @@ import type { I18nKey, Locale } from "./i18n";
 import { GUI_MAX_REFS, GUI_PRESET_IDS, PALETTE_KEYS, type GuiMode, type GuiStyle, type PaletteKey } from "./src/gui";
 import type { RpcApi } from "./src/rpc-api";
 import { fileToBase64 } from "./lib/files";
+import { mapParallel } from "./src/queue";
 
 export type GuiItem = {
   id: string;
+  projectId: string;
   prompt: string;
+  model: string;
+  gateway: string;
+  profileName: string | null;
+  createdAt: string;
   width?: number;
   height?: number;
   projectPath: string | null;
   guiStyleId?: string | null;
   guiMode?: GuiMode;
   guiLabel?: string;
+  guiRun?: string;
   guiParts?: number;
   guiMissing?: string[];
   guiDir?: string | null;
@@ -49,12 +56,28 @@ function draftOf(style: GuiStyle | null, name = ""): Draft {
     : { name, theme: "", tags: [], palette: { ...EMPTY_PALETTE }, notes: "" };
 }
 
+/** Records of one request (four ideas, two kit sheets) side by side, newest request first. */
+function groupRuns(items: readonly GuiItem[]): GuiItem[][] {
+  const runs: GuiItem[][] = [];
+  const byRun = new Map<string, GuiItem[]>();
+  for (const item of items) {
+    const key = item.guiRun ?? item.id;
+    let run = byRun.get(key);
+    if (!run) {
+      run = [];
+      byRun.set(key, run);
+      runs.push(run);
+    }
+    run.push(item);
+  }
+  return runs.map((run) => [...run].sort((a, b) => (a.guiLabel ?? "").localeCompare(b.guiLabel ?? "")));
+}
+
 export function GuiPanel({
   api,
   projectId,
   styles,
-  items,
-  thumbs,
+  version,
   locale,
   onError,
   onChanged,
@@ -62,40 +85,69 @@ export function GuiPanel({
 }: {
   api: RpcApi<typeof rpcContract>;
   projectId: string | null;
+  /** All GUI projects, most recently used first. */
   styles: GuiStyle[];
-  items: GuiItem[];
-  thumbs: Record<string, string>;
+  /** Bumped by the parent on every change event, so the open project's list reloads. */
+  version: number;
   locale: Locale;
   onError: (cause: unknown) => void;
   onChanged: () => void;
-  onOpen: (id: string) => void;
+  onOpen: (items: GuiItem[], index: number, thumbs: Record<string, string>) => void;
 }) {
   const [styleId, setStyleId] = useState<string>(styles[0]?.id ?? "");
   const [creating, setCreating] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const style = styles.find((item) => item.id === styleId) ?? null;
   const [draft, setDraft] = useState<Draft>(draftOf(style));
+  const [items, setItems] = useState<GuiItem[]>([]);
+  const [thumbs, setThumbs] = useState<Record<string, string>>({});
   const [mode, setMode] = useState<GuiMode>("ideas");
   const [prompt, setPrompt] = useState("");
   const [states, setStates] = useState(false);
   const [running, setRunning] = useState(0);
   const [refPreviews, setRefPreviews] = useState<Record<string, string>>({});
-  const requested = useRef(new Set<string>());
+  const requestedRefs = useRef(new Set<string>());
+  const requestedThumbs = useRef(new Set<string>());
   const upload = useRef<HTMLInputElement>(null);
 
-  // A deleted or foreign style falls back to the first one.
+  // No project picked (first open, or the open one was deleted): the most recently used one.
   useEffect(() => {
-    if (styleId && !styles.some((item) => item.id === styleId)) setStyleId(styles[0]?.id ?? "");
-  }, [styles, styleId]);
+    if ((!styleId || !styles.some((item) => item.id === styleId)) && !creating) setStyleId(styles[0]?.id ?? "");
+  }, [styles, styleId, creating]);
   useEffect(() => {
     if (!creating) setDraft(draftOf(style));
   }, [styleId, style?.updatedAt, creating]);
 
   useEffect(() => {
+    if (!styleId) {
+      setItems([]);
+      return;
+    }
+    let live = true;
+    api.gui_generations({ styleId }).then((list) => live && setItems(list), onError);
+    return () => {
+      live = false;
+    };
+  }, [api, styleId, version, onError]);
+
+  useEffect(() => {
+    const todo = items.filter((item) => !requestedThumbs.current.has(item.id));
+    for (const item of todo) requestedThumbs.current.add(item.id);
+    void mapParallel(todo, 6, async (item) => {
+      try {
+        const file = await api.generation_preview({ id: item.id, projectId: item.projectId, variant: "thumb" });
+        setThumbs((current) => ({ ...current, [item.id]: `data:${file.mimeType};base64,${file.base64}` }));
+      } catch {
+        // stays a placeholder
+      }
+    });
+  }, [items, api]);
+
+  useEffect(() => {
     for (const item of styles) {
       for (const ref of item.refs) {
-        if (requested.current.has(ref.id)) continue;
-        requested.current.add(ref.id);
+        if (requestedRefs.current.has(ref.id)) continue;
+        requestedRefs.current.add(ref.id);
         void api
           .gui_ref_preview({ styleId: item.id, refId: ref.id })
           .then((file) => setRefPreviews((current) => ({ ...current, [ref.id]: `data:${file.mimeType};base64,${file.base64}` })))
@@ -104,7 +156,7 @@ export function GuiPanel({
     }
   }, [styles, api]);
 
-  const results = items.filter((item) => item.guiMode && (styleId ? item.guiStyleId === styleId : !item.guiStyleId));
+  const runs = groupRuns(items);
   const modeInfo = MODES.find((item) => item.id === mode)!;
   const needsPrompt = mode !== "kit";
 
@@ -121,30 +173,13 @@ export function GuiPanel({
     setCreating(false);
     setStyleId(saved.id);
     onChanged();
-    return saved;
   };
 
   const makeReference = async (item: GuiItem) => {
-    let target = style;
-    if (!target) {
-      target = await saveDraftFromScratch();
-      setSettingsOpen(true);
-    }
-    await api.add_gui_ref({ styleId: target.id, generationId: item.id, role: "concept" });
+    if (!style) return;
+    await api.add_gui_ref({ styleId: style.id, generationId: item.id, role: "concept" });
+    setSettingsOpen(true);
     onChanged();
-  };
-
-  const saveDraftFromScratch = async () => {
-    const saved = await api.save_gui_style({
-      projectId,
-      name: `${t("guiNewStyle", {}, locale)} ${styles.length + 1}`,
-      theme: "",
-      tags: [],
-      palette: { ...EMPTY_PALETTE },
-      notes: "",
-    });
-    setStyleId(saved.id);
-    return saved;
   };
 
   const onUpload = async (event: ChangeEvent<HTMLInputElement>) => {
@@ -170,6 +205,8 @@ export function GuiPanel({
       .gui_generate({ projectId, styleId: styleId || undefined, mode, prompt: prompt.trim(), states: mode === "elements" && states })
       .then((result) => {
         if (result.errors.length > 0) onError(result.errors.join(" | "));
+        const made = result.generations[0]?.guiStyleId;
+        if (made) setStyleId(made);
         onChanged();
       }, onError)
       .finally(() => setRunning((count) => count - 1));
@@ -190,18 +227,7 @@ export function GuiPanel({
             <p className="mt-1 text-sm text-muted-foreground">{t("guiHint", {}, locale)}</p>
           </div>
 
-          <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label={t("guiStyleSettings", {}, locale)}>
-            <Button
-              type="button"
-              size="sm"
-              variant={!styleId && !creating ? "default" : "outline"}
-              onClick={() => {
-                setCreating(false);
-                setStyleId("");
-              }}
-            >
-              {t("guiNoStyle", {}, locale)}
-            </Button>
+          <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label={t("guiProjects", {}, locale)}>
             {styles.map((item) => (
               <Button
                 key={item.id}
@@ -248,7 +274,7 @@ export function GuiPanel({
                 {t("guiStyleSettings", {}, locale)}
                 {style && !creating ? (
                   <span className="truncate font-normal text-muted-foreground">
-                    · {[style.theme, ...style.tags].filter(Boolean).join(", ")}
+                    · {[style.theme, ...style.tags, style.refs.length > 0 ? t("guiRefsCount", { count: style.refs.length }, locale) : ""].filter(Boolean).join(", ") || t("guiStyleFree", {}, locale)}
                   </span>
                 ) : null}
               </summary>
@@ -259,6 +285,9 @@ export function GuiPanel({
                   void saveDraft().catch(onError);
                 }}
               >
+                {style?.origin && !creating ? (
+                  <p className="break-all text-xs text-muted-foreground">{t("guiOrigin", { path: style.origin }, locale)}</p>
+                ) : null}
                 <label className="flex flex-col gap-1">
                   <span className="text-xs text-muted-foreground">{t("guiName", {}, locale)}</span>
                   <Input value={draft.name} maxLength={80} onChange={(event) => setDraft({ ...draft, name: event.target.value })} />
@@ -341,10 +370,8 @@ export function GuiPanel({
                           <button
                             type="button"
                             className="absolute right-1 top-1 rounded bg-background/85 p-0.5"
-                            aria-label={t("guiDelete", {}, locale)}
-                            onClick={() =>
-                              void api.remove_gui_ref({ styleId: style.id, refId: ref.id }).then(onChanged, onError)
-                            }
+                            aria-label={t("guiRemoveRef", {}, locale)}
+                            onClick={() => void api.remove_gui_ref({ styleId: style.id, refId: ref.id }).then(onChanged, onError)}
                           >
                             <Icon name="X" className="size-3.5" />
                           </button>
@@ -394,52 +421,65 @@ export function GuiPanel({
             </details>
           ) : null}
 
-          <section className="flex flex-col gap-2">
-            <h2 className="text-sm font-medium">{t("guiResults", {}, locale)}</h2>
-            {results.length === 0 ? (
-              <p className="text-sm text-muted-foreground">{t("guiNoResults", {}, locale)}</p>
-            ) : (
-              <ul className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                {results.map((item) => (
-                  <li key={item.id} className="flex flex-col overflow-hidden rounded-lg border border-border">
-                    <button
-                      type="button"
-                      className="block bg-muted"
-                      style={{ aspectRatio: item.width && item.height ? `${item.width} / ${item.height}` : "16 / 9" }}
-                      onClick={() => onOpen(item.id)}
-                    >
-                      {thumbs[item.id] ? <img src={thumbs[item.id]} alt={item.prompt} className="h-full w-full object-contain" /> : null}
-                    </button>
-                    <div className="flex flex-col gap-1 p-2 text-xs">
-                      <span className="font-medium">{item.guiLabel}</span>
-                      <span className="line-clamp-2 text-muted-foreground">{item.prompt}</span>
-                      {item.guiParts !== undefined ? (
-                        <span>
-                          {t("guiParts", { count: item.guiParts }, locale)}
-                          {item.guiMissing?.length ? ` · ${t("guiMissing", { names: item.guiMissing.join(", ") }, locale)}` : ""}
-                        </span>
-                      ) : null}
-                      {item.guiDir ?? item.projectPath ? (
-                        <span className="break-all font-mono text-[10px] text-muted-foreground">{item.guiDir ?? item.projectPath}</span>
-                      ) : null}
-                      {item.guiMode === "ideas" || item.guiMode === "screen" ? (
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="outline"
-                          className="mt-1 self-start"
-                          onClick={() => void makeReference(item).catch(onError)}
-                        >
-                          <Icon name="Star" className="size-3.5" />
-                          {t("guiUseRef", {}, locale)}
-                        </Button>
-                      ) : null}
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </section>
+          {style && !creating ? (
+            <section className="flex flex-col gap-4">
+              <h2 className="text-sm font-medium">
+                {t("guiResults", {}, locale)} · {items.length}
+              </h2>
+              {runs.length === 0 ? <p className="text-sm text-muted-foreground">{t("guiNoResults", {}, locale)}</p> : null}
+              {runs.map((run) => {
+                const head = run[0]!;
+                return (
+                  <article key={head.guiRun ?? head.id} className="flex flex-col gap-2">
+                    <header className="flex flex-wrap items-baseline gap-x-2 text-xs">
+                      <span className="font-medium">{t(MODES.find((item) => item.id === head.guiMode)?.label ?? "guiModeScreen", {}, locale)}</span>
+                      <span className="text-muted-foreground">{new Date(head.createdAt).toLocaleString(locale)}</span>
+                      <span className="w-full line-clamp-2 text-muted-foreground">{head.prompt}</span>
+                    </header>
+                    <ul className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                      {run.map((item) => (
+                        <li key={item.id} className="flex flex-col overflow-hidden rounded-lg border border-border">
+                          <button
+                            type="button"
+                            className="block bg-muted"
+                            style={{ aspectRatio: item.width && item.height ? `${item.width} / ${item.height}` : "16 / 9" }}
+                            onClick={() => onOpen(items, items.indexOf(item), thumbs)}
+                          >
+                            {thumbs[item.id] ? <img src={thumbs[item.id]} alt={item.prompt} className="h-full w-full object-contain" /> : null}
+                          </button>
+                          <div className="flex flex-col gap-1 p-2 text-xs">
+                            <span className="font-medium">{item.guiLabel}</span>
+                            {item.guiParts !== undefined ? (
+                              <span>
+                                {t("guiParts", { count: item.guiParts }, locale)}
+                                {item.guiMissing?.length ? ` · ${t("guiMissing", { names: item.guiMissing.join(", ") }, locale)}` : ""}
+                              </span>
+                            ) : null}
+                            {item.guiDir ?? item.projectPath ? (
+                              <span className="break-all font-mono text-[10px] text-muted-foreground">{item.guiDir ?? item.projectPath}</span>
+                            ) : null}
+                            {item.guiMode === "ideas" || item.guiMode === "screen" ? (
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="outline"
+                                className="mt-1 self-start"
+                                disabled={style.refs.length >= GUI_MAX_REFS}
+                                onClick={() => void makeReference(item).catch(onError)}
+                              >
+                                <Icon name="Star" className="size-3.5" />
+                                {t("guiUseRef", {}, locale)}
+                              </Button>
+                            ) : null}
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  </article>
+                );
+              })}
+            </section>
+          ) : null}
         </div>
       </div>
 
@@ -450,7 +490,7 @@ export function GuiPanel({
           generate();
         }}
       >
-        <div className="flex flex-wrap gap-1" role="group">
+        <div className="flex flex-wrap items-center gap-1" role="group">
           {MODES.map((item) => (
             <Button
               key={item.id}
@@ -462,6 +502,9 @@ export function GuiPanel({
               {t(item.label, {}, locale)}
             </Button>
           ))}
+          <span className="ml-auto truncate text-xs text-muted-foreground">
+            {style && !creating ? t("guiInto", { name: style.name }, locale) : t("guiIntoNew", {}, locale)}
+          </span>
         </div>
         <p className="text-xs text-muted-foreground">{t(modeInfo.hint, {}, locale)}</p>
         <textarea
@@ -487,7 +530,7 @@ export function GuiPanel({
           ) : (
             <span />
           )}
-          <Button type="submit" disabled={needsPrompt && prompt.trim() === ""}>
+          <Button type="submit" disabled={(needsPrompt && prompt.trim() === "") || creating}>
             {running > 0 ? <Icon name="Loading" className="size-4 animate-spin" /> : <Icon name="Palette" className="size-4" />}
             {running > 0 ? `${t("guiGenerating", {}, locale)} (${running})` : t("guiGenerate", {}, locale)}
           </Button>

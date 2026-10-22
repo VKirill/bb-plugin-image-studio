@@ -34,6 +34,8 @@ export const generationSchema = z.object({
   guiStyleId: z.string().nullable().optional(),
   guiMode: z.enum(["ideas", "screen", "elements", "kit"]).optional(),
   guiLabel: z.string().optional(),
+  /** One request (four ideas, two kit sheets) shares a run id. */
+  guiRun: z.string().optional(),
   /** Element sheets: folder with parts/*.png and manifest.json, how many parts were cut, and the cells not found. */
   guiDir: z.string().nullable().optional(),
   guiParts: z.number().int().optional(),
