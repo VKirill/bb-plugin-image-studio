@@ -56,8 +56,10 @@ test("single pictures: Roblox sizes and frames, takes differ", () => {
   assert.equal(robloxJobs(request({ mode: "skybox" }), null)[0]!.aspectRatio, "4:1");
   assert.equal(robloxJobs(request({ mode: "decal", aspect: "16:9" }), null)[0]!.aspectRatio, "16:9");
   assert.deepEqual(robloxJobs(request({ mode: "flipbook", frames: 4 }), null)[0]!.output, { kind: "flipbook", grid: 2, size: 1024 });
-  // A logo needs no description: the game's name comes from the game.
-  assert.equal(robloxJobs(request({ mode: "logo", prompt: "" }), null).length, 1);
+  // A logo needs no description: the game's name comes from the game; a quoted name wins.
+  assert.match(robloxJobs(request({ mode: "logo", prompt: "" }), style({ name: "Pirate Dig" }))[0]!.prompt, /only the words "Pirate Dig"/);
+  assert.match(robloxJobs(request({ mode: "logo", prompt: '"Treasure Dig", a skull' }), style())[0]!.prompt, /only the words "Treasure Dig"/);
+  assert.match(thumbs[0]!.prompt, /no title, caption, slogan or description/);
 });
 
 test("list modes: one sheet, named cells, round-safe badges, errors read well", () => {
@@ -77,7 +79,7 @@ test("list modes: one sheet, named cells, round-safe badges, errors read well", 
 test("the game's look goes into every prompt, references numbered first", () => {
   const game = style({ section: "roblox", theme: "vampires vs humans", tags: ["simulator"], notes: "purple night" });
   const [job] = robloxJobs(request({ mode: "icon", refCount: 2, designCount: 1 }), game);
-  assert.match(job!.prompt, /Game: a Roblox game\. vampires vs humans\./);
+  assert.match(job!.prompt, /Game \(context for the look, not text to write\): a Roblox game\. vampires vs humans\./);
   assert.match(job!.prompt, /Art style: bright glossy Roblox simulator style/);
   assert.match(job!.prompt, /Also: purple night/);
   assert.match(job!.prompt, /Images 1 and 2 show this game's approved art/);
@@ -145,18 +147,17 @@ test("transparent parts are trimmed and centred on a square", () => {
   assert.deepEqual(px(square, 128, 128), [255, 0, 0, 255]);
 });
 
-test("seamless textures wrap: the left and right edges, top and bottom match", () => {
-  const image = solid(64, 64, [0, 0, 0, 255]);
-  for (let y = 0; y < 64; y++) for (let x = 0; x < 64; x++) image.data.set([x * 4, y * 4, 0, 255], (y * 64 + x) * 4);
+test("seamless textures wrap: the new edges continue each other, nothing repeats", () => {
+  const image = solid(100, 100, [0, 0, 0, 255]);
+  for (let y = 0; y < 100; y++) for (let x = 0; x < 100; x++) image.data.set([x * 2, y * 2, 0, 255], (y * 100 + x) * 4);
   const tiled = seamless(image);
-  for (const y of [0, 20, 63]) {
-    const left = px(tiled, 0, y);
-    const right = px(tiled, 63, y);
-    assert.ok(Math.abs(left[0]! - right[0]!) <= 8, `row ${y}: ${left} vs ${right}`);
-  }
-  for (const x of [0, 30, 63]) assert.ok(Math.abs(px(tiled, x, 0)[1]! - px(tiled, x, 63)[1]!) <= 8);
-  // The middle is the original.
-  assert.deepEqual(px(tiled, 32, 32), px(image, 32, 32));
+  assert.deepEqual([tiled.width, tiled.height], [92, 92]);
+  // The last column is the original's column 91, the first one fades in from column 92: neighbours.
+  for (const y of [10, 50, 90]) assert.ok(Math.abs(px(tiled, 0, y)[0]! - px(tiled, 91, y)[0]!) <= 4, `row ${y}`);
+  for (const x of [10, 50, 90]) assert.ok(Math.abs(px(tiled, x, 0)[1]! - px(tiled, x, 91)[1]!) <= 4, `column ${x}`);
+  // Away from the band the picture is untouched.
+  assert.deepEqual(px(tiled, 50, 50), px(image, 50, 50));
+  assert.equal(seamless(image, "x").height, 100);
 });
 
 test("a flat texture has a flat normal map", () => {

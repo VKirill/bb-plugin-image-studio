@@ -144,30 +144,41 @@ export function fitSquare(image: Rgba, size: number, margin = 0.04): Rgba {
 }
 
 /**
- * Tileable: the picture blended with itself shifted by half (whose edges wrap without a seam), the original kept in
- * the middle and the shifted copy at the edges. `axes` "x" tiles only horizontally (a skybox strip).
+ * Tileable by a looped crossfade: the last `band` of each axis is faded into the first and cut off, so the new last
+ * column sits next to the old one and the picture wraps without a seam; nothing is repeated (a shift by half would
+ * show the middle twice). `axes` "x" loops only horizontally (a skybox strip). The picture loses `band` of each axis.
  */
-export function seamless(image: Rgba, axes: "xy" | "x" = "xy"): Rgba {
-  const { data, width, height } = image;
-  const out = new Uint8Array(data.length);
-  const sx = Math.floor(width / 2);
-  const sy = axes === "xy" ? Math.floor(height / 2) : 0;
-  // Weight of the original: 1 in the centre, 0 at the edges, smooth between.
-  const ramp = (t: number) => {
-    const d = Math.min(t, 1 - t) * 2; // 0 at the edge, 1 in the middle
-    const s = Math.min(1, d / 0.6);
-    return s * s * (3 - 2 * s);
-  };
-  for (let y = 0; y < height; y++) {
-    const wy = axes === "xy" ? ramp((y + 0.5) / height) : 1;
-    for (let x = 0; x < width; x++) {
-      const w = Math.min(ramp((x + 0.5) / width), wy);
-      const p = (y * width + x) * 4;
-      const q = (((y + sy) % height) * width + ((x + sx) % width)) * 4;
-      for (let c = 0; c < 4; c++) out[p + c] = Math.round(data[p + c]! * w + data[q + c]! * (1 - w));
+export function seamless(image: Rgba, axes: "xy" | "x" = "xy", band = 0.08): Rgba {
+  const loopX = (img: Rgba): Rgba => {
+    const { data, width, height } = img;
+    const b = Math.max(1, Math.round(width * band));
+    const w = width - b;
+    const out = new Uint8Array(w * height * 4);
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < w; x++) {
+        const p = (y * width + x) * 4;
+        const q = (y * w + x) * 4;
+        if (x >= b) {
+          out.set(data.subarray(p, p + 4), q);
+          continue;
+        }
+        // 0 at the first column: it is exactly the column after the last one kept, so the wrap is seamless.
+        const t = x / b;
+        const tail = (y * width + w + x) * 4;
+        for (let c = 0; c < 4; c++) out[q + c] = Math.round(data[p + c]! * t + data[tail + c]! * (1 - t));
+      }
     }
-  }
-  return { data: out, width, height };
+    return { data: out, width: w, height };
+  };
+  const transpose = (img: Rgba): Rgba => {
+    const out = new Uint8Array(img.data.length);
+    for (let y = 0; y < img.height; y++) {
+      for (let x = 0; x < img.width; x++) out.set(img.data.subarray((y * img.width + x) * 4, (y * img.width + x) * 4 + 4), (x * img.height + y) * 4);
+    }
+    return { data: out, width: img.height, height: img.width };
+  };
+  const horizontal = loopX(image);
+  return axes === "x" ? horizontal : transpose(loopX(transpose(horizontal)));
 }
 
 /** A tangent-space normal map (OpenGL, green up) from brightness as height; wraps at the edges like a tile. */
@@ -215,7 +226,8 @@ export type SkyboxFace = (typeof SKYBOX_FACES)[number];
  * and Dn are that colour, so their edges match whichever way Roblox turns them.
  */
 export function skyboxFaces(strip: Rgba, size: number): Record<SkyboxFace, Rgba> {
-  const tiled = seamless(strip, "x");
+  // A narrow loop band: the quarters stay close to square (each side face is about 90° wide).
+  const tiled = seamless(strip, "x", 0.05);
   const band = Math.max(1, Math.round(tiled.height * 0.04));
   const top = averageRows(tiled, 0, band);
   const bottom = averageRows(tiled, tiled.height - band, tiled.height);

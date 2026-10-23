@@ -114,11 +114,16 @@ export type RobloxRequest = {
 
 const NO_TEXT = "Text: no letters, words, numbers or logos anywhere in the picture.";
 const QUOTED_TEXT =
-  "Text: none, except text the request gives in quotes, drawn exactly as written in big bold readable letters; nothing else written anywhere, no watermark.";
+  "Text: no title, caption, slogan or description written anywhere (the game line below is context, never text in the picture), except text the request gives in quotes, drawn exactly as written in big bold readable letters; no watermark.";
 const GREEN = "Background: one flat solid pure green colour (#00FF00) everywhere around the items, with no shadow, glow or gradient on it; nothing inside the items is green (use another colour instead).";
 const BLACK = "Background: pure black (#000000) everywhere; the effects are made only of light (glowing colour on black), with no dark outlines and nothing else in the picture.";
 const WHITE =
   "Background: plain flat pure white (#FFFFFF) everywhere, no floor, no ground shadow, no scenery. Lighting: soft even studio light from the front, no strong cast shadows, true colours: the picture is the texture source for a 3D model.";
+
+/** The first text in quotes: "\"Treasure Dig\", a skull" → Treasure Dig. */
+export function quoted(text: string): string | null {
+  return /["«“']([^"»”']+)["»”']/.exec(text)?.[1]?.trim() || null;
+}
 
 function presetText(tag: string): string {
   return (ROBLOX_PRESETS as Record<string, string>)[tag] ?? tag;
@@ -131,7 +136,7 @@ function imageList(numbers: readonly number[]): string {
 /** The game's look, for every asset prompt: theme, art style, notes, approved art as Image 1…N. */
 export function gameLines(game: GuiStyle | null, refCount: number, designCount: number): string[] {
   const lines: string[] = [];
-  if (game?.theme.trim()) lines.push(`Game: a Roblox game. ${game.theme.trim()}.`);
+  if (game?.theme.trim()) lines.push(`Game (context for the look, not text to write): a Roblox game. ${game.theme.trim()}.`);
   else lines.push("Game: a Roblox game.");
   if (game && game.tags.length > 0) lines.push(`Art style: ${game.tags.map(presetText).join("; ")}.`);
   if (game?.notes.trim()) lines.push(`Also: ${game.notes.trim()}`);
@@ -238,7 +243,7 @@ export function robloxJobs(request: RobloxRequest, game: GuiStyle | null): Roblo
         [
           `Deliverable: the title logo of a Roblox game${what ? `: ${what}` : ""}.`,
           "The game's name as a bold 3D game logo: chunky stylized letters with depth, outline and shine, in the game's style, optionally with a small fitting emblem; one compact piece, centred, filling about 80% of the width.",
-          "Text: only the game's name (as given in quotes in the request, else the game's name from the game line), spelled exactly; nothing else written.",
+          `Text: only the words "${quoted(what) ?? game?.name ?? "the game's name"}", spelled exactly; nothing else written.`,
           GREEN,
         ],
         lines,
