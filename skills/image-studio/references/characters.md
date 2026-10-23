@@ -1,6 +1,6 @@
 # Characters section — game characters ready for 3D
 
-Use for a game character that becomes a 3D model: image-to-3D (Hunyuan3D, TRELLIS), auto-rigging (Roblox Avatar Setup, UniRig), a turnaround for a modeller. Always **Muse Image** on fal. Do not pass a model or aspect. For a character portrait, poster or scene, use `image_studio_generate` instead.
+Use for a game character that becomes a 3D model: a reference for procedural building (Roblox: the default, see below), a turnaround for a modeller, or image-to-3D (Hunyuan3D, TRELLIS) and auto-rigging outside Roblox. Always **Muse Image** on fal. Do not pass a model or aspect. For a character portrait, poster or scene, use `image_studio_generate` instead.
 
 ## Why a separate section
 
@@ -53,7 +53,7 @@ Files: `image-studio/characters/<project>/<id>-<name>-<mode>/`. A turnaround or 
 
 ## Roblox block avatars (`body: blocky`)
 
-For Roblox games whose characters are classic block avatars. The picture is not meant for image-to-3D: the body is built from boxes in Blender and the drawing is projected onto them, so the views must keep the exact block outline.
+For Roblox, characters and their items are built **procedurally from these pictures** — no image-to-3D (the user's rule, 23.10.2026). The body is built from boxes in Blender and the drawing is projected onto them, so the views must keep the exact block outline; helmets, pauldrons, wings and weapons are rebuilt from simple shapes by a recipe written from their picture.
 
 - The plugin fixes the R15 proportions (head 1.15 cube, torso 2×2.05×1, arms 1×2 hanging straight down level with the torso, legs 1×2, 4 wide and 5.2 tall), the pose (arms down with a thin gap, legs parallel) and paints clothing, armour and face **flat** on the block faces.
 - Everything with volume goes to `accessories`: helmet, hat, hair, pauldrons, wings, cape, skirt, backpack. Weapons go to `equipment`.
@@ -64,7 +64,9 @@ Blender -b -P Roblox/toolkit/assets3d/roblox_blocky.py -- <turnaround>/views out
 python3 -I Roblox/toolkit/opencloud/upload.py out/knight.fbx --ids ids.json
 ```
 
-`roblox_blocky.py` builds the 15 R15 MeshParts at the standard rig's sizes and projects the front and back views onto them (sides take the nearer view's edge colours), one 1024×512 texture. It writes `knight.fbx` (comes into Roblox facing -Z), `knight.png` and `knight.json` (joints, root height). In Studio, `Roblox/toolkit/assets3d/r15_import.luau` turns the uploaded asset and the JSON into an R15 model with Motor6D joints, an Animator and `Grip` attachments in the hands: standard R15 animations and IK legs (`IKControl`, UpperLeg → Foot) work on it. Accessories and weapons become separate 3D models (image-to-3D) attached to the R15 attachment points.
+`roblox_blocky.py` builds the 15 R15 MeshParts at the standard rig's sizes and projects the front and back views onto them (sides take the nearer view's edge colours), one 1024×512 texture. It writes `knight.fbx` (comes into Roblox facing -Z), `knight.png` and `knight.json` (joints, root height).
+
+Accessories and weapons: each part of the `accessories` / `equipment` manifest carries `mount: {fit, part, attachment}` (helmet → `HatAttachment` on the head, left pauldron → `LeftShoulderAttachment`, wings/cape → `BodyBackAttachment`, sword → `RightGripAttachment`). Write a recipe per item from its picture (shapes around the body part's centre, see the skill `roblox-build`, `references/characters.md`), build it with `Blender -b -P Roblox/toolkit/assets3d/recipe.py -- recipe.json out/item.fbx [side=Right]`, upload, and in Studio `R15.build(...)` then `R15.accessory(model, assetId, itemJson)` from `Roblox/toolkit/assets3d/r15_import.luau`: real `Accessory` objects on the standard attachments; the body animates with stock R15 animations and IK legs (`IKControl`, UpperLeg → Foot).
 
 ## Writing the request
 
