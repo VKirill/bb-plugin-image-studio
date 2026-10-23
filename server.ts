@@ -88,6 +88,7 @@ import {
   characterJobs,
   characterSlug,
   cutOnWhite,
+  mountFor,
   parseEquipment,
   type BodyType,
   type CharacterJob,
@@ -1283,6 +1284,9 @@ export default async function plugin(bb: BbPluginApi) {
             name: part.name,
             file: `${sub}/${part.name}.png`,
             element: gui.layout!.cells.find((cell) => cell.name === part.name)?.element ?? part.name,
+            ...(gui.mode === "accessories" || gui.mode === "equipment"
+              ? { mount: mountFor(gui.layout!.cells.find((cell) => cell.name === part.name)?.element ?? part.name, gui.mode === "equipment") }
+              : {}),
             x: part.box.x0,
             y: part.box.y0,
             width: part.box.x1 - part.box.x0,

@@ -282,7 +282,7 @@ export function equipmentJob(request: CharacterRequest, style: GuiStyle | null, 
       `Items, in this exact order:\n${rows.join("\n")}`,
       `Layout: a strict grid of ${layout.rows} rows and ${layout.cols} columns, exactly the rows above, one item per cell${layout.cells.length < layout.rows * layout.cols ? "; the cells after the last item stay empty" : ""}, with wide empty white gaps between cells; every item centred, complete and fully visible, never touching another item or the image border.`,
       worn
-        ? `Each item alone, as it sits when worn but with nobody inside: a three-quarter front view from slightly above (so its depth shows), upright in its worn orientation; a helmet or hat hollow and empty, a pair of pauldrons or wings drawn as two separate items when listed separately. No head, body, mannequin, stand or display.${request.body === "blocky" ? " Sized for a Roblox block avatar: a helmet fits over a 1.15 cube head, pauldrons sit on 1-unit-wide shoulders." : ""}`
+        ? `Each item alone, as it sits when worn but with nobody inside: seen straight from the front as the character's own front faces the camera (orthographic, no perspective, no three-quarter angle), upright in its worn orientation, so an image-to-3D model comes out already facing forward; a helmet or hat hollow and empty, a pair of pauldrons or wings drawn as two separate items when listed separately. No head, body, mannequin, stand or display.${request.body === "blocky" ? " Sized for a Roblox block avatar: a helmet fits over a 1.15 cube head, pauldrons sit on 1-unit-wide shoulders." : ""}`
         : "Each item alone: shown from the side, lying horizontal and flat to the camera (orthographic, no perspective), long items with the tip, blade or muzzle pointing to the right and the handle or grip on the left, a clearly visible grip. No hands, no character, no holster, stand or display, no straps hanging loose.",
       ...(design ? [design] : []),
       BACKGROUND_RULE,
@@ -452,5 +452,30 @@ export function cutOnWhite(image: Rgba, layout: SheetLayout): WhiteCutResult {
     parts.push({ name: named.name, image: { data: out, width: side, height: side }, box: { x0: bx0, y0: by0, x1: bx1, y1: by1 } });
   }
   return { parts, missing, clean };
+}
+
+/**
+ * Where a worn or held item goes on an R15 body, guessed from its name: the fit (how the toolkit's fit_accessory.py
+ * sizes and places it), the body part and the standard Roblox attachment it is welded by.
+ */
+export type Mount = { fit: string; part: string; attachment: string };
+const MOUNTS: ReadonlyArray<[RegExp, (side: "Left" | "Right" | null) => Mount]> = [
+  [/\b(helmet|helm|great ?helm|bucket)\b/, () => ({ fit: "helmet", part: "Head", attachment: "HatAttachment" })],
+  [/\b(hat|cap|crown|hood|tiara|horns?|beret|bandana)\b/, () => ({ fit: "hat", part: "Head", attachment: "HatAttachment" })],
+  [/\b(hair|ponytail|braids?|wig|mane)\b/, () => ({ fit: "hair", part: "Head", attachment: "HairAttachment" })],
+  [/\b(glasses|goggles|visor|mask|monocle|eyepatch)\b/, () => ({ fit: "face", part: "Head", attachment: "FaceFrontAttachment" })],
+  [/\b(pauldrons?|shoulder|epaulettes?|spaulders?)\b/, (side) => ({ fit: "shoulder", part: `${side ?? "Left"}UpperArm`, attachment: `${side ?? "Left"}ShoulderAttachment` })],
+  [/\b(wings?|capes?|cloaks?|backpack|quiver|jetpack|sheath on the back|tail)\b/, () => ({ fit: "back", part: "UpperTorso", attachment: "BodyBackAttachment" })],
+  [/\b(necklace|scarf|collar|amulet|medal)\b/, () => ({ fit: "neck", part: "UpperTorso", attachment: "NeckAttachment" })],
+  [/\b(belt|pouch|skirt|kilt|loincloth|holster)\b/, () => ({ fit: "waist", part: "LowerTorso", attachment: "WaistCenterAttachment" })],
+  [/\b(boots?|shoes?|greaves?)\b/, (side) => ({ fit: "foot", part: `${side ?? "Left"}Foot`, attachment: `${side ?? "Left"}FootAttachment` })],
+];
+
+export function mountFor(item: string, held: boolean): Mount {
+  const name = item.toLowerCase();
+  const side = /\bright\b/.test(name) ? "Right" : /\bleft\b/.test(name) ? "Left" : null;
+  if (held) return { fit: "grip", part: `${side ?? "Right"}Hand`, attachment: `${side ?? "Right"}GripAttachment` };
+  for (const [pattern, mount] of MOUNTS) if (pattern.test(name)) return mount(side);
+  return { fit: "chest", part: "UpperTorso", attachment: "BodyFrontAttachment" };
 }
 

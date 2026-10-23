@@ -5,6 +5,7 @@ import {
   characterJobs,
   characterSlug,
   cutOnWhite,
+  mountFor,
   parseEquipment,
   type CharacterRequest,
 } from "../src/characters.ts";
@@ -237,4 +238,15 @@ test("blocky: Roblox block proportions, arms down, everything painted flat; acce
   assert.match(acc!.prompt, /hollow and empty/);
   assert.match(acc!.prompt, /1.15 cube head/);
   assert.throws(() => characterJobs("accessories", request(), null), /List the worn pieces/);
+});
+
+test("mounts: worn items go to their standard R15 attachment, held items to the grip", () => {
+  assert.deepEqual(mountFor("gold bucket helmet with visor slits", false), { fit: "helmet", part: "Head", attachment: "HatAttachment" });
+  assert.deepEqual(mountFor("right gold winged pauldron", false), { fit: "shoulder", part: "RightUpperArm", attachment: "RightShoulderAttachment" });
+  assert.equal(mountFor("feathered wings", false).attachment, "BodyBackAttachment");
+  assert.equal(mountFor("ponytail", false).attachment, "HairAttachment");
+  assert.equal(mountFor("leather belt with pouches", false).attachment, "WaistCenterAttachment");
+  assert.equal(mountFor("strange ornament", false).attachment, "BodyFrontAttachment");
+  assert.deepEqual(mountFor("glowing gold sword", true), { fit: "grip", part: "RightHand", attachment: "RightGripAttachment" });
+  assert.equal(mountFor("left hand shield", true).attachment, "LeftGripAttachment");
 });
