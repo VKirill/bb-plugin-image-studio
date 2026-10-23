@@ -86,13 +86,18 @@ export function buildJevRequest(input: JevInput): { model: string; state: Record
   const photos: Record<string, string> = {};
   for (const slot of slots) photos[slotKey(slot)] = slotMeaning(slot, input.gender);
 
+  // The questions speak about the profile's person: his or her, not always "her".
+  const male = input.gender === "male";
+  const poss = male ? "his" : "her";
+  const obj = male ? "him" : "her";
+  const subj = male ? "he" : "she";
   const questions: Record<string, Question> = {};
   for (const slot of slots) {
     if (slot === "marks") {
       questions.use_marks = {
         type: "noul",
         instructions:
-          "Will a good part of the person's bare skin (arms, shoulders, chest, back or legs) be visible in the picture described in `request`? Skin covered by long sleeves, trousers or a high collar does not count. The reference photo `reference_photos.marks` shows her distinctive moles and tattoos, which matter whenever such skin is visible.",
+          "Will a good part of the person's bare skin (arms, shoulders, chest, back or legs) be visible in the picture described in `request`? Skin covered by long sleeves, trousers or a high collar does not count. The reference photo `reference_photos.marks` shows " + poss + " distinctive moles and tattoos, which matter whenever such skin is visible.",
         criteria: {
           true: "Bare arms, shoulders, chest, back or legs are visible: a bikini, swimsuit, lingerie, shorts, a short skirt, a tank top, a sleeveless or short-sleeved top, or nudity.",
           false: "The person is covered up, only the face is shown, or there is no person.",
@@ -102,7 +107,7 @@ export function buildJevRequest(input: JevInput): { model: string; state: Record
     }
     questions[`use_${slotKey(slot)}`] = {
       type: "noul",
-      instructions: `The reference photo \`reference_photos.${slotKey(slot)}\` shows: ${photos[slotKey(slot)]} The picture to create is described in \`request\`. Judge only that picture. Will the picture show this part of the person, at least partly, from this side (or with this expression), so that this reference photo helps to keep her consistent?`,
+      instructions: `The reference photo \`reference_photos.${slotKey(slot)}\` shows: ${photos[slotKey(slot)]} The picture to create is described in \`request\`. Judge only that picture. Will the picture show this part of the person, at least partly, from this side (or with this expression), so that this reference photo helps to keep ${obj} consistent?`,
       criteria: {
         true: "The described picture shows this part of the person, even partly, from this side or with this expression.",
         false: "This part is not visible in the picture, or the picture shows it from another side.",
@@ -112,7 +117,7 @@ export function buildJevRequest(input: JevInput): { model: string; state: Record
   questions.viewpoint = {
     type: "choice",
     instructions:
-      "From which side is the person seen in the picture described in `request`? Ignore `reference_photos`: they are what we have on file, not what the picture shows. Use the viewpoint the request states. A person lying down or looking back at the camera is still seen from the front unless the request says she is seen from behind.",
+      "From which side is the person seen in the picture described in `request`? Ignore `reference_photos`: they are what we have on file, not what the picture shows. Use the viewpoint the request states. A person lying down or looking back at the camera is still seen from the front unless the request says " + subj + " is seen from behind.",
     criteria: {
       front: "The person faces the camera or is seen from the front, or the request names no viewpoint.",
       back: "The person is seen from behind: back view, rear view, walking away, back to the camera.",
@@ -124,7 +129,7 @@ export function buildJevRequest(input: JevInput): { model: string; state: Record
   questions.person = {
     type: "noul",
     instructions:
-      "Does the picture described in `request` show a person (a human body or face)? Judge only the request. Ignore `reference_photos`: they are what we have on file about her, not what the picture shows.",
+      "Does the picture described in `request` show a person (a human body or face)? Judge only the request. Ignore `reference_photos`: they are what we have on file about " + obj + ", not what the picture shows.",
     criteria: {
       true: "A person is in the picture: a face, a body, or a body part such as hands.",
       false: "Only objects, animals, scenery, food, products or text are in the picture. The request says there are no people.",

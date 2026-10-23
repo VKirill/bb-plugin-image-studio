@@ -297,3 +297,13 @@ test("a generation keeps what Jev was asked, and the exact request is rebuilt fr
   assert.ok(Object.keys(rebuilt.questions).some((key) => key.startsWith("use_")));
   assert.equal((rebuilt.state as { request?: string }).request, "portrait in an office");
 });
+
+test("questions about a man's profile say him/his/he, not her/she", () => {
+  const request = buildJevRequest({ prompt: "portrait from behind", model: "nano-banana-2", gender: "male", sourceCount: 0, filled: ["face-front", "marks"] });
+  const text = JSON.stringify(request.questions);
+  assert.doesNotMatch(text, /\b(her|she)\b/);
+  assert.match(text, /keep him consistent/);
+  assert.match(text, /shows his distinctive moles/);
+  const woman = JSON.stringify(buildJevRequest({ prompt: "p", model: "nano-banana-2", gender: "female", sourceCount: 0, filled: ["face-front"] }).questions);
+  assert.match(woman, /keep her consistent/);
+});
