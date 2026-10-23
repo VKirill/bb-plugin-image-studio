@@ -6,6 +6,7 @@ import {
   characterJobs,
   characterSlug,
   cutOnWhite,
+  fixLeftFacing,
   parseEquipment,
   type CharacterRequest,
 } from "../src/characters.ts";
@@ -214,4 +215,15 @@ test("white cut: touching figures are parted at their narrowest point and a neig
   ]);
   const second = cutOnWhite(spiky, layout);
   assert.deepEqual(second.parts[0]!.box.x1 <= 152, true);
+});
+
+test("a left side view drawn facing right is mirrored; a correct one is left alone", () => {
+  // A profile: a body with a nose sticking out to the right.
+  const right = sheet(100, 100, [[30, 10, 60, 95], [60, 20, 75, 28]]);
+  const wrong = sheet(100, 100, [[30, 10, 60, 95], [60, 20, 75, 28]]);
+  const correct = sheet(100, 100, [[40, 10, 70, 95], [25, 20, 40, 28]]);
+  assert.equal(fixLeftFacing(right, correct), false);
+  assert.equal(fixLeftFacing(right, wrong), true);
+  const nose = (20 * 100 + 30) * 4;
+  assert.equal(wrong.data[nose], 90);
 });

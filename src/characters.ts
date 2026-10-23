@@ -422,3 +422,55 @@ export function cutOnWhite(image: Rgba, layout: SheetLayout): WhiteCutResult {
   }
   return { parts, missing, clean };
 }
+
+/** A view's silhouette on a coarse grid: 1 where the square has ink, for comparing poses regardless of size. */
+function silhouette(image: Rgba, size = 64): Uint8Array {
+  const out = new Uint8Array(size * size);
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const sx = Math.min(image.width - 1, Math.floor(((x + 0.5) * image.width) / size));
+      const sy = Math.min(image.height - 1, Math.floor(((y + 0.5) * image.height) / size));
+      out[y * size + x] = inked(image.data, (sy * image.width + sx) * 4) ? 1 : 0;
+    }
+  }
+  return out;
+}
+
+function overlap(a: Uint8Array, b: Uint8Array, size: number, mirrorB: boolean): number {
+  let both = 0;
+  let either = 0;
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const va = a[y * size + x]!;
+      const vb = b[y * size + (mirrorB ? size - 1 - x : x)]!;
+      both += va & vb;
+      either += va | vb;
+    }
+  }
+  return either === 0 ? 0 : both / either;
+}
+
+/**
+ * Generators sometimes draw the left side view facing the same way as the right one. The two side views of a
+ * symmetric pose are mirror images, so a left view that matches the right view better as is than mirrored faces the
+ * wrong way; it is flipped in place. Returns true when it flipped.
+ */
+export function fixLeftFacing(right: Rgba, left: Rgba): boolean {
+  const size = 64;
+  const r = silhouette(right, size);
+  const l = silhouette(left, size);
+  if (overlap(l, r, size, false) <= overlap(l, r, size, true) + 0.03) return false;
+  const { data, width, height } = left;
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width >> 1; x++) {
+      const p = (y * width + x) * 4;
+      const q = (y * width + (width - 1 - x)) * 4;
+      for (let c = 0; c < 4; c++) {
+        const t = data[p + c]!;
+        data[p + c] = data[q + c]!;
+        data[q + c] = t;
+      }
+    }
+  }
+  return true;
+}

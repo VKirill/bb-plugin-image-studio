@@ -88,6 +88,7 @@ import {
   characterJobs,
   characterSlug,
   cutOnWhite,
+  fixLeftFacing,
   parseEquipment,
   type BodyType,
   type CharacterJob,
@@ -1268,6 +1269,10 @@ export default async function plugin(bb: BbPluginApi) {
       try {
         const sub = gui.mode === "turnaround" ? "views" : "parts";
         const cut = cutOnWhite(await decodeRgba(original), gui.layout);
+        const view = (name: string) => cut.parts.find((part) => part.name === name)?.image;
+        const right = view("right");
+        const left = view("left");
+        const leftFlipped = gui.mode === "turnaround" && right && left ? fixLeftFacing(right, left) : false;
         for (const part of cut.parts) await write(join(dir, sub, `${part.name}.png`), await encodePng(part.image));
         const manifest = {
           project: gui.styleName,
@@ -1277,6 +1282,7 @@ export default async function plugin(bb: BbPluginApi) {
           sheet: `sheet.${ext}`,
           grid: { rows: gui.layout.rows, cols: gui.layout.cols },
           cleanGaps: cut.clean,
+          ...(leftFlipped ? { leftFlipped: true } : {}),
           missing: cut.missing,
           [sub]: cut.parts.map((part) => ({
             name: part.name,

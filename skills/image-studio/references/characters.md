@@ -47,7 +47,7 @@ bb image-studio character delete --project <name>
 
 Tool: `image_studio_character` (`mode`, `prompt`, `equipment`, `name`, `body`, `project`, `images`). Runs at once, no Send form. CLI: `bb image-studio character generate --mode … [--name soldier] [--body humanoid|quadruped|winged|legless] [--equipment "rifle; knife"] [--image <path or gallery id>]… --prompt "…" [--json]`. `name` is the short file name; without it the first words of the description are used.
 
-Files: `image-studio/characters/<project>/<id>-<name>-<mode>/`. A turnaround or equipment sheet is cut by its white gaps; `missing` lists empty cells, `cleanGaps: false` in the manifest means some figures touched and were cut at their narrowest point, with a neighbour's tip dropped (check the edges, or re-cut). Re-cut for free: `bb image-studio character cut --sheet <path> [--grid 1x4|2x2]` or `--items "rifle; knife"` in the sheet's order.
+Files: `image-studio/characters/<project>/<id>-<name>-<mode>/`. A turnaround or equipment sheet is cut by its white gaps; `missing` lists empty cells, `cleanGaps: false` in the manifest means some figures touched and were cut at their narrowest point, with a neighbour's tip dropped (check the edges, or re-cut). `leftFlipped: true`: the generator drew the left side view facing the same way as the right one, and the plugin mirrored it. Re-cut for free: `bb image-studio character cut --sheet <path> [--grid 1x4|2x2]` or `--items "rifle; knife"` in the sheet's order.
 
 ## Writing the request
 
