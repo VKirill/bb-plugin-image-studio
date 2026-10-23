@@ -282,3 +282,18 @@ test("the evaluation fixtures are well formed (the live eval runs with scripts/j
   const text = all.map((c) => c.prompt).join("\n");
   for (const needle of ["behind her head", "thong", "palm trees", "tank top", "ponytail", "profile", "heels", "Девушка", "dog", "apple"]) assert.ok(text.includes(needle), needle);
 });
+
+test("a generation keeps what Jev was asked, and the exact request is rebuilt from it", async () => {
+  const { generationSchema } = await import("../src/generation.ts");
+  const record = generationSchema.parse({
+    id: "g1", projectId: "p", createdAt: "2026-10-23T00:00:00.000Z", prompt: "portrait in an office", composedPrompt: "c",
+    model: "nano-banana-2", gateway: "fal", profileId: "pr", profileName: "SS · Вика", filename: "g1.webp", mimeType: "image/webp", projectPath: null,
+    refsJevInput: { model: "nano-banana-2", gender: "female", sourceCount: 1, filled: ["face-front", "body-back"] },
+  });
+  const asked = record.refsJevInput!;
+  const rebuilt = buildJevRequest({ prompt: record.prompt, model: asked.model as never, gender: asked.gender, sourceCount: asked.sourceCount, filled: asked.filled as never });
+  const original = buildJevRequest({ prompt: "portrait in an office", model: "nano-banana-2", gender: "female", sourceCount: 1, filled: ["face-front", "body-back"] });
+  assert.deepEqual(rebuilt, original);
+  assert.ok(Object.keys(rebuilt.questions).some((key) => key.startsWith("use_")));
+  assert.equal((rebuilt.state as { request?: string }).request, "portrait in an office");
+});

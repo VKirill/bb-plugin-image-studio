@@ -49,7 +49,7 @@ import {
 import { SLOT_IDS, isNudeSlot, modelAllowsNude, parseSlotId, sortSlots, type SlotId } from "./src/slots.js";
 import { MAX_BATCH, parseBatchLines, type BatchJob } from "./src/batch.js";
 import { generationSchema, type Generation } from "./src/generation.js";
-import { TYPESAFE_BASE_URL, jevCues, runJevAttempts, type JevAttempt, type JevCues } from "./src/jev.js";
+import { TYPESAFE_BASE_URL, buildJevRequest, jevCues, runJevAttempts, type JevAttempt, type JevCues } from "./src/jev.js";
 import { atomicWrite, createJournal } from "./src/journal.js";
 import { formatUnknownError, falGenerate, kieGenerate } from "./src/providers.js";
 import { encodeWebp, imageSize, sniffImageMime, WEBP_FULL, WEBP_THUMB } from "./src/encode-webp.js";
@@ -287,6 +287,15 @@ export const rpcContract = defineRpcContract({
       variant: z.enum(["thumb", "full"]).default("thumb"),
     }),
     output: z.object({ mimeType: z.string(), base64: z.string() }),
+  },
+  /** What one picture was made from: the record, the profile's photo per slot, and the exact Jev state and questions. */
+  generation_detail: {
+    input: z.object({ id: z.string(), projectId: z.string() }),
+    output: z.object({
+      generation: generationSchema,
+      profile: z.object({ id: z.string(), name: z.string(), slots: z.record(z.string(), z.string()) }).nullable(),
+      jev: z.object({ state: z.record(z.string(), z.unknown()), questions: z.record(z.string(), z.unknown()) }).nullable(),
+    }),
   },
 });
 type RpcHandlers = PluginRpcHandlers<typeof rpcContract>;
@@ -695,6 +704,7 @@ export default async function plugin(bb: BbPluginApi) {
   type SelectionNote = {
     selector: "jev" | "keywords";
     scores?: Record<string, number | string>;
+    input?: Generation["refsJevInput"];
     provider?: string;
     ms?: number;
     error?: string;
@@ -707,6 +717,7 @@ export default async function plugin(bb: BbPluginApi) {
       ...(note.provider ? { refsJevProvider: note.provider } : {}),
       ...(note.ms !== undefined ? { refsJevMs: note.ms } : {}),
       ...(note.error ? { refsJevError: note.error } : {}),
+      ...(note.input ? { refsJevInput: note.input } : {}),
     };
   }
 
@@ -740,12 +751,13 @@ export default async function plugin(bb: BbPluginApi) {
       });
     }
     const run = await runJevAttempts(input, attempts);
+    const asked = { model: input.model, gender: input.gender, sourceCount: input.sourceCount, filled: [...input.filled] };
     if (run.ok) {
       const cues = jevCues(run.answers, { model: input.model, filled: input.filled });
-      return { cues, used: { selector: "jev", scores: cues.scores, provider: run.provider, ms: run.ms } };
+      return { cues, used: { selector: "jev", scores: cues.scores, provider: run.provider, ms: run.ms, input: asked } };
     }
     warn(`Jev not used, keyword rules instead: ${run.errors.join("; ") || "no endpoint configured"}`);
-    return run.errors.length > 0 ? { cues: null, used: { selector: "keywords", error: run.errors.join("; ") } } : null;
+    return run.errors.length > 0 ? { cues: null, used: { selector: "keywords", error: run.errors.join("; "), input: asked } } : null;
   }
 
   type RenderInput = {
@@ -1711,6 +1723,34 @@ export default async function plugin(bb: BbPluginApi) {
     return previewGeneration(item, variant ?? "thumb");
   };
 
+  const generation_detail: RpcHandlers["generation_detail"] = async ({ id, projectId }) => {
+    const item =
+      (await readStudioGallery(projectId)).find((entry) => entry.id === id) ??
+      (await readGenerations(projectId)).find((entry) => entry.id === id);
+    if (!item) throw new Error("Generation not found");
+    const person = item.profileId ? (await readProfileList()).find((entry) => entry.id === item.profileId) : undefined;
+    const profile = person
+      ? {
+          id: person.id,
+          name: person.name,
+          slots: Object.fromEntries(Object.entries(person.refs).flatMap(([slot, photo]) => (photo ? [[slot, photo.id]] : []))),
+        }
+      : null;
+    const asked = item.refsJevInput;
+    const jev = asked
+      ? (({ state, questions }) => ({ state, questions }))(
+          buildJevRequest({
+            prompt: item.prompt,
+            model: asked.model as ModelId,
+            gender: asked.gender,
+            sourceCount: asked.sourceCount,
+            filled: asked.filled as SlotId[],
+          }),
+        )
+      : null;
+    return { generation: item, profile, jev };
+  };
+
   const save_gui_style: RpcHandlers["save_gui_style"] = async (input) =>
     withGuiStyles((styles) => {
       const now = new Date().toISOString();
@@ -1803,6 +1843,7 @@ export default async function plugin(bb: BbPluginApi) {
     profile_photo_preview,
     generate,
     generation_preview,
+    generation_detail,
     save_gui_style,
     delete_gui_style,
     add_gui_ref,

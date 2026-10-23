@@ -28,6 +28,10 @@ export const generationSchema = z.object({
   refsJevMs: z.number().optional(),
   /** Why Jev was not used, when it was tried. */
   refsJevError: z.string().optional(),
+  /** What Jev was asked about besides the prompt; `generation_detail` rebuilds the exact state and questions from it. */
+  refsJevInput: z
+    .object({ model: z.string(), gender: z.enum(["male", "female"]), sourceCount: z.number().int(), filled: z.array(z.string()) })
+    .optional(),
   /** Slots wanted but not sent (over the model's image cap, or listed by hand and empty). */
   refsDropped: z.array(z.string()).optional(),
   /** GUI section: the style, mode and job label ("idea 2: gothic", "kit wide") of a GUI picture. */
