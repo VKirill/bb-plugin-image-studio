@@ -2398,7 +2398,8 @@ export default async function plugin(bb: BbPluginApi) {
       }
       case "style":
       case "project": {
-        const name = flag(argv, "--name") ?? projectFlag ?? originProject(await readStyles(), origin)?.name;
+        // A fresh folder: the project is named after it, as the first generation would name it.
+        const name = flag(argv, "--name") ?? projectFlag ?? originProject(await readStyles(), origin)?.name ?? (origin === "unscoped" ? undefined : originName(origin));
         if (!name) return { exitCode: 1, stderr: usage };
         const existing = findGuiStyle(await readStyles(), name, origin);
         const palette = { ...(existing?.palette ?? { background: "", button: "", outline: "", highlight: "", text: "" }) };
