@@ -109,7 +109,7 @@ import {
   type RobloxMode,
   type RobloxOutput,
 } from "./src/roblox.js";
-import { SKYBOX_FACES, cover, fitSquare, glowToAlpha, limit, normalMap, opaque, resize, seamless, skyboxFaces, trimAlpha } from "./src/raster.js";
+import { SKYBOX_FACES, cover, fitSquare, flattenRound, glowToAlpha, limit, normalMap, opaque, resize, seamless, skyboxFaces, trimAlpha } from "./src/raster.js";
 import { enabledFromSettings, mergeSettings, settingsSchema, type StudioSettings } from "./src/settings.js";
 import {
   GENERATE_PICKER_ID,
@@ -200,6 +200,11 @@ export const rpcContract = defineRpcContract({
   },
   gui_generations: {
     input: z.object({ styleId: z.string() }),
+    output: z.array(generationSchema),
+  },
+  /** A Roblox game's own generations and those of its GUI and Characters projects, newest first. */
+  game_generations: {
+    input: z.object({ gameId: z.string() }),
     output: z.array(generationSchema),
   },
   delete_gui_style: {
@@ -1412,7 +1417,12 @@ export default async function plugin(bb: BbPluginApi) {
     switch (output.kind) {
       case "cover":
         await put(gui.mode, output.file, opaque(cover(image, output.width, output.height)));
-        use = gui.mode === "icon" ? "Game icon: Creator Dashboard → the experience → Places/Icon (512×512)." : "Thumbnail: Creator Dashboard → the experience → Thumbnails (1920×1080, up to 10).";
+        use =
+          gui.mode === "icon"
+            ? "Game icon: Creator Dashboard → the experience → Places/Icon (512×512)."
+            : gui.mode === "loading"
+              ? "Loading screen background: an ImageLabel in a ScreenGui under ReplicatedFirst, with the logo and the bar on top."
+              : "Thumbnail: Creator Dashboard → the experience → Thumbnails (1920×1080, up to 10; upload 2–5 so Roblox can test them).";
         break;
       case "limit": {
         const picture = output.transparent ? trimAlpha(keyGreen(image)) : opaque(image);
@@ -1425,7 +1435,8 @@ export default async function plugin(bb: BbPluginApi) {
         const cut = cutSheet(keyed, gui.layout);
         missing = cut.missing;
         for (const part of cut.parts) {
-          await put(part.name, `parts/${part.name}.png`, fitSquare(part.image, output.size), part.cell ? { element: part.cell.element } : {});
+          const square = output.round ? flattenRound(fitSquare(part.image, output.size, 0.01)) : fitSquare(part.image, output.size);
+          await put(part.name, `parts/${part.name}.png`, square, part.cell ? { element: part.cell.element } : {});
         }
         use =
           gui.mode === "badges"
@@ -1435,7 +1446,7 @@ export default async function plugin(bb: BbPluginApi) {
               : gui.mode === "products"
                 ? "Developer products: Creator Dashboard → Developer Products → Create."
                 : gui.mode === "vfx"
-                  ? "Particle textures: ParticleEmitter/Beam/Trail .Texture; light on black, so LightEmission 1 looks right."
+                  ? "Particle textures: ParticleEmitter/Beam/Trail .Texture, drawn white so the Color property tints them; LightEmission 1 for glow."
                   : "Item icons for ImageLabels/ImageButtons (transparent, 256×256).";
         break;
       }
@@ -1458,7 +1469,7 @@ export default async function plugin(bb: BbPluginApi) {
       case "skybox": {
         const faces = skyboxFaces(opaque(image), output.size);
         for (const face of SKYBOX_FACES) await put(face, `${face}.png`, faces[face], { property: `Sky.${face}` });
-        use = "Sky object in Lighting: each file goes to the Sky property of its name. Turning right: Ft → Rt → Bk → Lf.";
+        use = "Sky object in Lighting: each file goes to the Sky property of its name. Turning right: Ft → Rt → Bk → Lf. Sun and moon come from Roblox (Sky.SunTextureId, MoonTextureId).";
         break;
       }
       case "flipbook": {
@@ -1467,7 +1478,7 @@ export default async function plugin(bb: BbPluginApi) {
         await put("flipbook", "flipbook.png", resize(glowToAlpha(square), output.size, output.size), {
           property: `ParticleEmitter.Texture with FlipbookLayout Grid${output.grid}x${output.grid}`,
         });
-        use = `ParticleEmitter: Texture = flipbook.png, FlipbookLayout = Grid${output.grid}x${output.grid}, FlipbookMode = Loop.`;
+        use = `ParticleEmitter: Texture = flipbook.png, FlipbookLayout = Grid${output.grid}x${output.grid}, FlipbookMode = Loop, Color tints it.`;
         break;
       }
     }
@@ -2194,6 +2205,11 @@ export default async function plugin(bb: BbPluginApi) {
     return { generations: run.generations, errors: run.errors };
   };
   const gui_generations: RpcHandlers["gui_generations"] = async ({ styleId }) => readGuiGenerations(styleId);
+  const game_generations: RpcHandlers["game_generations"] = async ({ gameId }) => {
+    const linked = (await readGuiStyles()).filter((style) => style.id === gameId || style.gameId === gameId);
+    const lists = await Promise.all(linked.map((style) => readGuiGenerations(style.id)));
+    return lists.flat().sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  };
 
   // Shorthand on purpose: GitNexus links the panel's api.<method>() calls to these named handlers.
   bb.rpc.register(rpcContract, {
@@ -2218,6 +2234,7 @@ export default async function plugin(bb: BbPluginApi) {
     gui_ref_preview,
     gui_generate,
     gui_generations,
+    game_generations,
   });
 
   const usage = [
@@ -2240,7 +2257,7 @@ export default async function plugin(bb: BbPluginApi) {
     "                                     [--equipment \"rifle; knife\"] [--accessories \"helmet; left pauldron\"] [--image <design picture>]… --prompt <who the character is> [--json]",
     "  bb image-studio character cut --sheet <path> [--grid 1x2 | --items \"rifle; knife\"] [--json]   (re-cut a white sheet; free)",
     "  bb image-studio roblox projects|project|ref|delete …   (games; the same options as gui; --tags simulator,stylized,lowpoly,…)",
-    "  bb image-studio roblox generate --mode icon|thumbnail|logo|badges|passes|products|items|props|texture|skybox|decal|vfx|flipbook",
+    "  bb image-studio roblox generate --mode icon|thumbnail|logo|loading|badges|passes|products|items|props|texture|skybox|decal|vfx|flipbook",
     "                                  [--project <game>] [--variants 1-4] [--frames 4|16] [--aspect 1:1|16:9|…] [--image <path>]… --prompt <what> [--json]",
     "                                  (list modes take the list in --prompt or --items: \"VIP; 2x Coins\")",
   ].join("\n");
@@ -2873,7 +2890,7 @@ export default async function plugin(bb: BbPluginApi) {
   bb.agents.registerTool({
     name: "image_studio_roblox",
     description:
-      "Roblox game assets through Image Studio's Roblox section, one game per folder (Muse Image), fitted to what Roblox takes. Modes: icon (512×512), thumbnail (1920×1080), logo (transparent title logo), badges / passes (round-safe 512×512 icons cut from one sheet), products (developer product icons), items (transparent 256×256 item icons), props (props and buildings on white, cut for image-to-3D), texture (seamless color.png + normal.png 1024), skybox (the six Sky faces), decal (a flat picture for a surface), vfx (glowing particle textures, transparent), flipbook (a 2×2 or 4×4 particle animation). Runs at once, no Send form.",
+      "Roblox game assets through Image Studio's Roblox section, one game per folder (Muse Image), fitted to what Roblox takes. Modes: icon (512×512), thumbnail (1920×1080; variants 3-4 make a set of different shots), logo (transparent title logo), loading (loading screen art), badges / passes / products (opaque 512×512 icons composed for the circle crop, cut from one sheet), items (transparent item icons), props (props and buildings on white, cut for image-to-3D), texture (seamless color.png + normal.png 1024), skybox (the six Sky faces), decal (a flat picture for a surface), vfx (glowing particle textures, transparent), flipbook (a 2×2 or 4×4 particle animation). Runs at once, no Send form.",
     instructions:
       "For Roblox game art call image_studio_roblox: the game icon, thumbnails, logo, badges, game passes, developer products, item icons, props for 3D, textures, skyboxes, decals and particle effects. The game's GUI goes to image_studio_gui and its characters to image_studio_character: in a game's folder they land in that game and share its look. Generations go to the game of this thread's folder (created on first use, named after the folder); pass project only for another game (`bb image-studio roblox projects`). prompt: what the picture shows (icon, thumbnail, decal, flipbook), the surface (texture), the sky (skybox), the name in quotes (logo); for badges, passes, products, items, props and vfx the list, one per line or separated by \";\" (\"VIP; 2x Coins; Speed boost\"). variants 1-4 draws takes of single pictures; frames 4|16 for flipbook; aspect for decal. Do not describe the art style: the plugin adds the game's theme, art style and approved art. Report the finished files (icon.png, thumbnail.png, parts/, SkyboxFt.png…) and manifest.json, which says where each goes in Roblox. Set the look: bb image-studio roblox project --theme … --tags simulator|stylized|lowpoly|realistic|anime|horror|cartoon|voxel; make approved art a reference: bb image-studio roblox ref --image <path>.",
     presentation: {

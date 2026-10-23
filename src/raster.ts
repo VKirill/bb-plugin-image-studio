@@ -286,6 +286,38 @@ export function glowToAlpha(image: Rgba, floor = 10): Rgba {
   return { data: out, width, height };
 }
 
+/**
+ * A round icon (badge, pass, product) on an opaque square: Roblox crops these to a circle, and a transparent corner
+ * shows up as black or white after the upload. The corners take the icon's own rim colour (its opaque pixels in the
+ * outer ring), so the crop never shows a seam.
+ */
+export function flattenRound(image: Rgba): Rgba {
+  const { data, width, height } = image;
+  const cx = width / 2;
+  const cy = height / 2;
+  const radius = Math.min(width, height) / 2;
+  let r = 0, g = 0, b = 0, n = 0;
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const d = Math.hypot(x + 0.5 - cx, y + 0.5 - cy) / radius;
+      const p = (y * width + x) * 4;
+      if (d < 0.88 || data[p + 3]! < 200) continue;
+      r += data[p]!;
+      g += data[p + 1]!;
+      b += data[p + 2]!;
+      n++;
+    }
+  }
+  const fill = n > 0 ? [r / n, g / n, b / n] : [255, 255, 255];
+  const out = new Uint8Array(data.length);
+  for (let i = 0; i < data.length; i += 4) {
+    const a = data[i + 3]! / 255;
+    for (let c = 0; c < 3; c++) out[i + c] = Math.round(data[i + c]! * a + fill[c]! * (1 - a));
+    out[i + 3] = 255;
+  }
+  return { data: out, width, height };
+}
+
 /** Opaque copy (alpha 255 everywhere): decals and textures that must not show through. */
 export function opaque(image: Rgba): Rgba {
   const data = new Uint8Array(image.data);

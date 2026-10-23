@@ -3,7 +3,7 @@ import { test } from "node:test";
 import type { GuiStyle } from "../src/gui.ts";
 import type { Rgba } from "../src/image-io.ts";
 import { MODE_CATEGORY, ROBLOX_MODES, mergeGameStyle, planGameMigration, robloxJobs, type RobloxRequest } from "../src/roblox.ts";
-import { cover, fitSquare, glowToAlpha, normalMap, resize, seamless, skyboxFaces, trimAlpha } from "../src/raster.ts";
+import { cover, fitSquare, flattenRound, glowToAlpha, normalMap, resize, seamless, skyboxFaces, trimAlpha } from "../src/raster.ts";
 
 const style = (patch: Partial<GuiStyle> = {}): GuiStyle => ({
   id: "s1",
@@ -62,14 +62,35 @@ test("single pictures: Roblox sizes and frames, takes differ", () => {
   assert.match(thumbs[0]!.prompt, /no title, caption, slogan or description/);
 });
 
+test("Roblox rules: moderation-safe everywhere, thumbnails as a set, no baked sun, loading screen", () => {
+  for (const mode of ["icon", "thumbnail", "loading", "texture", "skybox", "decal", "flipbook", "badges", "items", "props"] as const) {
+    const [job] = robloxJobs(request({ mode, prompt: mode === "badges" || mode === "items" || mode === "props" ? "a; b" : "x" }), null);
+    assert.match(job!.prompt, /no URLs, social handles, QR codes/, mode);
+  }
+  const set = robloxJobs(request({ mode: "thumbnail", variants: 3 }), null);
+  assert.match(set[0]!.prompt, /Shot 1 of the set: a close-up hero/);
+  assert.match(set[1]!.prompt, /Shot 2 of the set: a gameplay scene/);
+  assert.match(set[0]!.prompt, /bottom 15% holds nothing important/);
+  assert.match(robloxJobs(request({ mode: "skybox" }), null)[0]!.prompt, /No sun disc and no moon/);
+  const [loading] = robloxJobs(request({ mode: "loading", prompt: "" }), null);
+  assert.deepEqual(loading!.output, { kind: "cover", file: "loading.png", width: 1920, height: 1080 });
+  assert.equal(MODE_CATEGORY.loading, "store");
+});
+
 test("list modes: one sheet, named cells, round-safe badges, errors read well", () => {
   const [badges] = robloxJobs(request({ mode: "badges", prompt: "First kill; Survived 10 nights\nVIP" }), null);
   assert.deepEqual(badges!.layout!.cells.map((cell) => cell.name), ["first-kill", "survived-10-nights", "vip"]);
-  assert.deepEqual(badges!.output, { kind: "parts", size: 512, key: "green" });
+  assert.deepEqual(badges!.output, { kind: "parts", size: 512, key: "green", round: true });
   assert.match(badges!.prompt, /inside one circle/);
+  assert.match(badges!.prompt, /same ring/);
+  assert.deepEqual(robloxJobs(request({ mode: "passes", prompt: "VIP; 2x Gold" }), null)[0]!.output, { kind: "parts", size: 512, key: "green", round: true });
   assert.match(badges!.prompt, /#00FF00/);
-  assert.deepEqual(robloxJobs(request({ mode: "items", prompt: "coin; gem" }), null)[0]!.output, { kind: "parts", size: 256, key: "green" });
-  assert.deepEqual(robloxJobs(request({ mode: "vfx", prompt: "spark; smoke" }), null)[0]!.output, { kind: "parts", size: 256, key: "black" });
+  // Few items get big cells: 512; a full sheet of 16 has room for 256.
+  assert.deepEqual(robloxJobs(request({ mode: "items", prompt: "coin; gem" }), null)[0]!.output, { kind: "parts", size: 512, key: "green" });
+  assert.equal((robloxJobs(request({ mode: "items", prompt: "a;b;c;d;e;f;g" }), null)[0]!.output as { size: number }).size, 256);
+  const [vfx] = robloxJobs(request({ mode: "vfx", prompt: "spark; smoke" }), null);
+  assert.deepEqual(vfx!.output, { kind: "parts", size: 256, key: "black" });
+  assert.match(vfx!.prompt, /white and light grey light only/);
   assert.deepEqual(robloxJobs(request({ mode: "props", prompt: "crate; lantern" }), null)[0]!.output, { kind: "white-parts" });
   assert.throws(() => robloxJobs(request({ mode: "passes", prompt: "" }), null), /List the passes/);
   assert.throws(() => robloxJobs(request({ mode: "badges", prompt: "a;b;c;d;e;f;g" }), null), /At most 6 badges/);
@@ -173,6 +194,20 @@ test("skybox: six square faces; sides fade into Up and Dn so every edge matches"
   assert.deepEqual(px(faces.SkyboxFt, 10, 0), px(faces.SkyboxUp, 0, 0));
   assert.deepEqual(px(faces.SkyboxBk, 10, 63), px(faces.SkyboxDn, 0, 0));
   assert.deepEqual(px(faces.SkyboxUp, 30, 30), [40, 80, 200, 255]);
+});
+
+test("round icons become opaque squares filled with their rim colour", () => {
+  const image = solid(100, 100, [0, 0, 0, 0]);
+  for (let y = 0; y < 100; y++) {
+    for (let x = 0; x < 100; x++) {
+      const d = Math.hypot(x + 0.5 - 50, y + 0.5 - 50);
+      if (d < 49) image.data.set(d > 42 ? [200, 160, 20, 255] : [30, 60, 200, 255], (y * 100 + x) * 4);
+    }
+  }
+  const flat = flattenRound(image);
+  assert.deepEqual(px(flat, 0, 0), [200, 160, 20, 255]);
+  assert.deepEqual(px(flat, 50, 50), [30, 60, 200, 255]);
+  assert.ok([...Array(100 * 100).keys()].every((i) => flat.data[i * 4 + 3] === 255));
 });
 
 test("glow on black becomes colour with alpha", () => {

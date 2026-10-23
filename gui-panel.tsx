@@ -71,6 +71,7 @@ const MODES: Record<Section, readonly ModeInfo[]> = {
     { id: "icon", label: "robloxModeIcon", hint: "robloxHintIcon", placeholder: "robloxPlaceholderSingle" },
     { id: "thumbnail", label: "robloxModeThumbnail", hint: "robloxHintThumbnail", placeholder: "robloxPlaceholderSingle" },
     { id: "logo", label: "robloxModeLogo", hint: "robloxHintLogo", placeholder: "robloxPlaceholderLogo" },
+    { id: "loading", label: "robloxModeLoading", hint: "robloxHintLoading", placeholder: "robloxPlaceholderLoading" },
     { id: "badges", label: "robloxModeBadges", hint: "robloxHintBadges", placeholder: "robloxPlaceholderList" },
     { id: "passes", label: "robloxModePasses", hint: "robloxHintPasses", placeholder: "robloxPlaceholderList" },
     { id: "products", label: "robloxModeProducts", hint: "robloxHintProducts", placeholder: "robloxPlaceholderList" },
@@ -83,7 +84,11 @@ const MODES: Record<Section, readonly ModeInfo[]> = {
     { id: "flipbook", label: "robloxModeFlipbook", hint: "robloxHintFlipbook", placeholder: "robloxPlaceholderSingle" },
   ],
 };
-const CATEGORY_LABEL: Record<RobloxCategory, I18nKey> = {
+/** A game's tabs: everything at once, then one per asset group. */
+type GameTab = "all" | RobloxCategory;
+const GAME_TABS: readonly GameTab[] = ["all", ...ROBLOX_CATEGORIES];
+const CATEGORY_LABEL: Record<GameTab, I18nKey> = {
+  all: "robloxCatAll",
   store: "robloxCatStore",
   monetization: "robloxCatMonetization",
   items: "robloxCatItems",
@@ -181,7 +186,7 @@ export function GuiPanel({
   const [body, setBody] = useState<BodyType>("humanoid");
   const characters = section === "characters";
   const roblox = section === "roblox";
-  const [category, setCategory] = useState<RobloxCategory>("store");
+  const [category, setCategory] = useState<GameTab>("all");
   const [variants, setVariants] = useState(1);
   const [frames, setFrames] = useState<number>(16);
   const [aspect, setAspect] = useState<(typeof DECAL_ASPECTS)[number]>("1:1");
@@ -206,11 +211,12 @@ export function GuiPanel({
       return;
     }
     let live = true;
-    api.gui_generations({ styleId }).then((list) => live && setItems(list), onError);
+    // A game lists its GUI and Characters pictures too, for the All tab.
+    (section === "roblox" ? api.game_generations({ gameId: styleId }) : api.gui_generations({ styleId })).then((list) => live && setItems(list), onError);
     return () => {
       live = false;
     };
-  }, [api, styleId, version, onError]);
+  }, [api, styleId, version, onError, section]);
 
   useEffect(() => {
     const todo = items.filter((item) => !requestedThumbs.current.has(item.id));
@@ -241,7 +247,7 @@ export function GuiPanel({
   // A game's tab shows its own kind of pictures; its GUI and Characters tabs show the linked projects.
   const ordered = groupRuns(items)
     .flat()
-    .filter((item) => !roblox || (item.guiMode !== undefined && MODE_CATEGORY[item.guiMode as RobloxMode] === category));
+    .filter((item) => !roblox || category === "all" || (item.guiMode !== undefined && MODE_CATEGORY[item.guiMode as RobloxMode] === category));
   const modes = roblox ? MODES.roblox.filter((item) => MODE_CATEGORY[item.id as RobloxMode] === category) : MODES[section];
   const modeInfo = modes.find((item) => item.id === mode) ?? modes[0] ?? MODES[section][0]!;
   const needsPrompt = characters ? mode !== "equipment" && mode !== "accessories" : roblox ? mode !== "logo" : mode !== "kit";
@@ -380,7 +386,7 @@ export function GuiPanel({
 
           {roblox && style && !creating ? (
             <div className="flex flex-wrap gap-1" role="tablist">
-              {ROBLOX_CATEGORIES.map((item) => (
+              {GAME_TABS.map((item) => (
                 <Button
                   key={item}
                   type="button"
@@ -390,7 +396,7 @@ export function GuiPanel({
                   variant={category === item ? "secondary" : "ghost"}
                   onClick={() => {
                     setCategory(item);
-                    if (item !== "gui" && item !== "characters") setMode(firstMode(item));
+                    if (item !== "all" && item !== "gui" && item !== "characters") setMode(firstMode(item));
                   }}
                 >
                   {t(CATEGORY_LABEL[item], {}, locale)}
@@ -613,7 +619,7 @@ export function GuiPanel({
           onChanged={onChanged}
           onOpen={onOpen}
         />
-      ) : (
+      ) : roblox && category === "all" ? null : (
       <form
         className="flex shrink-0 flex-col gap-2 border-t border-border bg-background p-2 md:p-3"
         onSubmit={(event) => {

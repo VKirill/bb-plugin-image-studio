@@ -49,6 +49,7 @@ export const generationSchema = z.object({
       "icon",
       "thumbnail",
       "logo",
+      "loading",
       "badges",
       "passes",
       "products",

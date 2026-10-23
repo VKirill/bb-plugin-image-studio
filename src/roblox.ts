@@ -22,6 +22,7 @@ export const ROBLOX_MODES = [
   "icon",
   "thumbnail",
   "logo",
+  "loading",
   "badges",
   "passes",
   "products",
@@ -43,6 +44,7 @@ export const MODE_CATEGORY: Record<RobloxMode, RobloxCategory> = {
   icon: "store",
   thumbnail: "store",
   logo: "store",
+  loading: "store",
   badges: "monetization",
   passes: "monetization",
   products: "monetization",
@@ -59,7 +61,7 @@ export const MODE_CATEGORY: Record<RobloxMode, RobloxCategory> = {
 export const LIST_MODES: readonly RobloxMode[] = ["badges", "passes", "products", "items", "props", "vfx"];
 export const MAX_LIST: Record<string, number> = { badges: 6, passes: 6, products: 6, items: 16, props: 6, vfx: 9 };
 /** Modes that can draw a few takes of one request. */
-export const VARIANT_MODES: readonly RobloxMode[] = ["icon", "thumbnail", "logo", "texture", "skybox", "decal", "flipbook"];
+export const VARIANT_MODES: readonly RobloxMode[] = ["icon", "thumbnail", "logo", "loading", "texture", "skybox", "decal", "flipbook"];
 export const MAX_VARIANTS = 4;
 export const FLIPBOOK_FRAMES = [4, 16] as const;
 export const DECAL_ASPECTS = ["1:1", "16:9", "9:16", "4:3", "3:4", "2:1"] as const;
@@ -78,11 +80,15 @@ export const ROBLOX_PRESETS = {
 export type RobloxPreset = keyof typeof ROBLOX_PRESETS;
 export const ROBLOX_PRESET_IDS = Object.keys(ROBLOX_PRESETS) as RobloxPreset[];
 
-/** What the plugin does with the picture after Muse: written next to the original in the job's folder. */
+/**
+ * What the plugin does with the picture after Muse: written next to the original in the job's folder. `round`:
+ * badges, passes and products are shown in a circle, and a transparent icon shows up on black or white after the
+ * upload, so each is put on an opaque square filled with its own rim colour.
+ */
 export type RobloxOutput =
   | { kind: "cover"; file: string; width: number; height: number }
   | { kind: "limit"; file: string; max: number; transparent: boolean }
-  | { kind: "parts"; size: number; key: "green" | "black" }
+  | { kind: "parts"; size: number; key: "green" | "black"; round?: boolean }
   | { kind: "white-parts" }
   | { kind: "texture"; size: number }
   | { kind: "skybox"; size: number }
@@ -112,13 +118,21 @@ export type RobloxRequest = {
   designCount: number;
 };
 
+// Rules from how top Roblox games make their art and what Roblox moderation and upload do (see references/roblox.md).
+const SAFE =
+  "Moderation-safe: no URLs, social handles, QR codes or barcodes, no prices, discounts or the word FREE, no real brands; characters fully clothed in non-suggestive poses.";
 const NO_TEXT = "Text: no letters, words, numbers or logos anywhere in the picture.";
 const QUOTED_TEXT =
   "Text: no title, caption, slogan or description written anywhere (the game line below is context, never text in the picture), except text the request gives in quotes, drawn exactly as written in big bold readable letters; no watermark.";
+const AVATARS =
+  "Player characters are Roblox avatars (blocky Roblox bodies and classic Roblox faces) rendered like Blender game GFX, unless the request or the game says otherwise; creatures, pets and bosses keep their own designs.";
 const GREEN = "Background: one flat solid pure green colour (#00FF00) everywhere around the items, with no shadow, glow or gradient on it; nothing inside the items is green (use another colour instead).";
-const BLACK = "Background: pure black (#000000) everywhere; the effects are made only of light (glowing colour on black), with no dark outlines and nothing else in the picture.";
+const BLACK = "Background: pure black (#000000) everywhere, nothing else in the picture.";
 const WHITE =
-  "Background: plain flat pure white (#FFFFFF) everywhere, no floor, no ground shadow, no scenery. Lighting: soft even studio light from the front, no strong cast shadows, true colours: the picture is the texture source for a 3D model.";
+  "Background: plain flat pure white (#FFFFFF) everywhere, no floor, no ground shadow, no scenery. Lighting: soft even studio light from the front, no strong cast shadows, no coloured light, no baked reflections, true colours: the picture is the texture source for a 3D model.";
+/** Roblox tints particle textures with ParticleEmitter.Color, so they are drawn white. */
+const TINTABLE =
+  "Colour: white and light grey light only (Roblox colours the texture with the emitter's Color), unless the item itself names a colour; the brightest core white, fading softly to black at the edges, nothing touching the cell border.";
 
 /** The first text in quotes: "\"Treasure Dig\", a skull" → Treasure Dig. */
 export function quoted(text: string): string | null {
@@ -171,17 +185,24 @@ function gridRule(layout: SheetLayout, gap: string): string {
   return `Layout: a strict grid of ${layout.rows} rows and ${layout.cols} columns, exactly the rows above, one item per cell${layout.cells.length < layout.rows * layout.cols ? "; the cells after the last item stay empty" : ""}; every item centred in its own cell, complete and fully visible, never touching another item or the image border, with ${gap} between cells. No captions, numbers or grid lines.`;
 }
 
-const VARIANT_HINTS = [
-  "",
+const TAKES = [
   "Take 2: a different composition and camera angle from the obvious one.",
   "Take 3: a bolder, more dramatic treatment with stronger colours and contrast.",
   "Take 4: an unexpected but fitting idea for the same request.",
 ];
+/** Roblox tests 2–5 thumbnails per game against each other: the takes are a set of different shots, not retries. */
+const THUMBNAIL_TAKES = [
+  "Shot 1 of the set: a close-up hero shot, like a widened game icon: the main character or creature big, with its strongest emotion.",
+  "Shot 2 of the set: a gameplay scene: players in the middle of the core activity, the game's mechanic obvious at a glance.",
+  "Shot 3 of the set: the reward or feature shot: the rarest prize, the biggest boss or the best upgrade, players reacting to it.",
+  "Shot 4 of the set: a social or event moment: a group of players together, a dramatic moment of the world, a different colour mood from the others.",
+];
 
-function single(base: string[], lines: string[], request: RobloxRequest, aspect: string, label: string, output: RobloxOutput): RobloxJob[] {
+function single(base: string[], lines: string[], request: RobloxRequest, aspect: string, label: string, output: RobloxOutput, takes = TAKES): RobloxJob[] {
   const count = Math.max(1, Math.min(MAX_VARIANTS, request.variants));
+  const set = takes === THUMBNAIL_TAKES && count > 1;
   return Array.from({ length: count }, (_, index) => ({
-    prompt: [...base, ...lines, ...(index > 0 ? [VARIANT_HINTS[index]!] : [])].join("\n"),
+    prompt: [...base, ...lines, ...(set ? [takes[index]!] : index > 0 ? [takes[index - 1]!] : []), SAFE].join("\n"),
     aspectRatio: aspect,
     label: count > 1 ? `${label} ${index + 1}` : label,
     output,
@@ -192,7 +213,7 @@ function sheet(request: RobloxRequest, intro: string, view: string, background: 
   const items = parseList(request.prompt);
   const layout = sheetLayout(items, false);
   return {
-    prompt: [intro, `Items, in this exact order:\n${listRows(layout)}`, gridRule(layout, "wide empty gaps"), view, background, ...lines].join("\n"),
+    prompt: [intro, `Items, in this exact order:\n${listRows(layout)}`, gridRule(layout, "wide empty gaps"), view, background, ...lines, SAFE].join("\n"),
     aspectRatio: sheetAspect(layout, cellRatio),
     label: request.mode,
     layout,
@@ -208,16 +229,19 @@ export function robloxJobs(request: RobloxRequest, game: GuiStyle | null): Roblo
     const count = parseList(what).length;
     if (count === 0) throw new Error(`List the ${request.mode}, one per line or separated by ";", e.g. "VIP; 2x Coins; Speed boost".`);
     if (count > MAX_LIST[request.mode]!) throw new Error(`At most ${MAX_LIST[request.mode]} ${request.mode} per sheet; got ${count}. Split the list.`);
-  } else if (!what && request.mode !== "logo") {
+  } else if (!what && request.mode !== "logo" && request.mode !== "loading") {
     throw new Error(`Describe the ${request.mode}, e.g. "${request.mode === "skybox" ? "sunset over a pirate sea" : "a hero vampire in front of a burning castle"}".`);
   }
+  const round = "Roblox shows it in a circle: the whole design inside one circle, nothing important outside it.";
   switch (request.mode) {
     case "icon":
       return single(
         [
           `Deliverable: the icon of a Roblox game on its game page: ${what}.`,
-          "Composition: one bold central subject (a character, a creature or the key object) large and close, filling the square edge to edge with a simple dramatic background behind it; readable at 150 pixels: strong silhouette, high contrast, few big shapes, vivid colours. Square, full-bleed, no border, no frame, no rounded corners.",
-          QUOTED_TEXT,
+          "Composition: one hero subject (a character, creature, pet or the key object) cropped tight, filling 60–80% of the square, with an exaggerated readable emotion (huge glossy eyes, a wide grin or a scream) when it has a face; at most one secondary element; nothing important within 8% of the edges (the tile has rounded corners). The genre reads at 150 pixels.",
+          "Background: simple, a single-hue gradient or radial burst in a colour complementary to the hero, with a soft rim light around the hero to separate it; no scenery, no small symbols in the corners. Square, full-bleed, no border.",
+          "Text: no title, caption, slogan or description (the game line below is context, never text in the picture), unless the request gives a title in quotes: then 1–3 ultra-chunky words in white or gold with a thick dark outline in the bottom third, nothing smaller.",
+          AVATARS,
         ],
         lines,
         request,
@@ -229,20 +253,36 @@ export function robloxJobs(request: RobloxRequest, game: GuiStyle | null): Roblo
       return single(
         [
           `Deliverable: a thumbnail of a Roblox game for its game page carousel (16:9): ${what}.`,
-          "Composition: exciting key art of the game in action, a clear focal point, depth and dramatic light, the main subject large in the frame; reads well small. Full-bleed, no border, no UI, no cursor.",
-          QUOTED_TEXT,
+          "Composition: one focal subject big in the frame plus one clearly readable secondary element that explains the mechanic (an egg being carried, a boss behind the player); exaggerated action poses; high contrast between subject and background, one clear light direction; the main content in the central 80%, and the bottom 15% holds nothing important (Roblox puts the player count there). Full-bleed, no border, no UI, no cursor.",
+          "Text: no title, caption, slogan or description (the game line below is context, never text in the picture), unless the request gives a hook in quotes: then 1–3 big words or a big number in capitals with a thick outline, in the upper two thirds.",
+          AVATARS,
         ],
         lines,
         request,
         "16:9",
         "thumbnail",
         { kind: "cover", file: "thumbnail.png", width: 1920, height: 1080 },
+        THUMBNAIL_TAKES,
+      );
+    case "loading":
+      return single(
+        [
+          `Deliverable: the loading screen background of a Roblox game (16:9)${what ? `: ${what}` : ""}.`,
+          "Composition: atmospheric key art of the game's world with the hero subjects on the left and right thirds and a calm, darker, uncluttered area in the centre and along the bottom, where the game's logo and the loading bar go on top; full-bleed, no UI drawn.",
+          NO_TEXT,
+          AVATARS,
+        ],
+        lines,
+        request,
+        "16:9",
+        "loading",
+        { kind: "cover", file: "loading.png", width: 1920, height: 1080 },
       );
     case "logo":
       return single(
         [
           `Deliverable: the title logo of a Roblox game${what ? `: ${what}` : ""}.`,
-          "The game's name as a bold 3D game logo: chunky stylized letters with depth, outline and shine, in the game's style, optionally with a small fitting emblem; one compact piece, centred, filling about 80% of the width.",
+          "The game's name as a chunky 3D game logo: thick extruded letters with a two-layer outline (a light inner line and a dark outer line), a gradient of at most two colours with a highlight on the top edges, a soft drop shadow, a slight upward arc; one small fitting ornament (an icon in place of a letter, a flame, a leaf), much smaller than the letters; no texture inside the letters; readable at a quarter size. One compact piece, centred, filling about 80% of the width.",
           `Text: only the words "${quoted(what) ?? game?.name ?? "the game's name"}", spelled exactly; nothing else written.`,
           GREEN,
         ],
@@ -256,56 +296,61 @@ export function robloxJobs(request: RobloxRequest, game: GuiStyle | null): Roblo
       return [
         sheet(
           request,
-          "Deliverable: a sheet of Roblox badge icons (achievements a player earns), to be cut apart; Roblox crops every badge to a circle.",
-          "Each badge is a round medallion seen straight from the front: the whole design inside one circle (a rim and an emblem of the achievement, a bold simple symbol), nothing outside the circle; readable at 150 pixels.",
+          `Deliverable: a sheet of Roblox badge icons (achievements a player earns), to be cut apart. ${round}`,
+          "Each badge is one round medallion seen straight from the front, all of one series: the same ring (border) design, thickness and lighting on every badge; inside the ring full-bleed art of the achievement with one bold central symbol, readable at 150 pixels; only the central symbol and the accent colour change between badges.",
           GREEN,
-          [NO_TEXT, ...lines],
+          ["Text: none, except a short number or word the badge name gives in quotes, big with a thick outline.", ...lines],
           1,
-          { kind: "parts", size: 512, key: "green" },
+          { kind: "parts", size: 512, key: "green", round: true },
         ),
       ];
     case "passes":
       return [
         sheet(
           request,
-          "Deliverable: a sheet of Roblox game pass icons (perks players buy), to be cut apart; Roblox shows every pass in a circle.",
-          "Each pass is a round icon seen straight from the front: a bold symbol of the perk (a crown for VIP, a coin stack for 2x coins, a lightning bolt for speed) on a coloured round plate with a rim, the whole design inside the circle; readable at 150 pixels.",
+          `Deliverable: a sheet of Roblox game pass icons (perks players buy), to be cut apart. ${round}`,
+          "Each pass is a glossy round disc with a golden ring: inside, a saturated radial burst in the colour of the benefit (gold for premium and VIP, green for money, pink for pets, blue for speed) with faint sparkles, and one big glossy 3D symbol of the perk filling 55–70% of the disc (a crown for VIP, a coin stack for money, a lightning bolt for speed). All passes the same light direction and outline thickness.",
           GREEN,
-          [QUOTED_TEXT, ...lines],
+          [
+            "Text: a multiplier in the name (2x, x3) is drawn as a chunky outlined numeral at the lower right of the symbol; VIP as gold 3D block letters; otherwise at most one short word from the name in bold white with a thick dark outline, or no text.",
+            ...lines,
+          ],
           1,
-          { kind: "parts", size: 512, key: "green" },
+          { kind: "parts", size: 512, key: "green", round: true },
         ),
       ];
     case "products":
       return [
         sheet(
           request,
-          "Deliverable: a sheet of Roblox developer product icons (repeatable purchases such as currency packs, boosts, revives), to be cut apart.",
-          "Each product is one bold object or pile shown straight from the front or slightly from above, like a shop item: bigger packs look bigger and richer; readable at 150 pixels.",
+          `Deliverable: a sheet of Roblox developer product icons (repeatable purchases: currency packs, boosts, revives), to be cut apart. ${round}`,
+          "Each product is a glossy round disc in the same style as the game passes (a golden ring, a saturated radial burst) with its item big in the middle; currency packs are one currency drawn in tiers that grow down the list (a small pile, a bag, a chest, an overflowing vault) from the same angle and light; bigger tiers get warmer light and more sparkles.",
           GREEN,
-          [QUOTED_TEXT, ...lines],
+          ["Text: none, except an amount the product name gives (x500, 1000) as a big outlined number under the item; no currency symbols.", ...lines],
           1,
-          { kind: "parts", size: 512, key: "green" },
+          { kind: "parts", size: 512, key: "green", round: true },
         ),
       ];
-    case "items":
+    case "items": {
+      const count = parseList(what).length;
       return [
         sheet(
           request,
           "Deliverable: a sheet of in-game item icons (inventory items, resources, currency, tools) for a Roblox game, to be cut into separate transparent icons.",
-          "Each item alone, straight from the front or at a slight three-quarter angle, the same size class and the same light from the top left, a clean readable silhouette; no slot frames, no backgrounds behind the items.",
+          "Each item alone in a three-quarter view from slightly above, filling 75–85% of its cell, the whole set with one camera and one light from the top left and a soft rim light; chunky shapes and a clean silhouette that reads at 64 pixels, with the outline the art style uses; no slot frames, no rarity backgrounds, no shadows on the ground.",
           GREEN,
-          [NO_TEXT, ...lines],
+          ["Text: none, except a number that is part of the item.", ...lines],
           1,
-          { kind: "parts", size: 256, key: "green" },
+          { kind: "parts", size: count <= 6 ? 512 : 256, key: "green" },
         ),
       ];
+    }
     case "props":
       return [
         sheet(
           request,
           "Deliverable: a sheet of separate game props and buildings for a Roblox game, each to be made into its own 3D model by an image-to-3D generator.",
-          "Each prop alone, complete, in a three-quarter view from the front and slightly above (orthographic, no perspective distortion), showing its front, one side and its top; standing upright on nothing; nothing attached around it.",
+          "Each prop alone, complete with its base, in a three-quarter view from the front and slightly above (about 25 degrees to the side, a long lens with almost no perspective), showing its front, one side and its top; clearly separated parts, a simple chunky silhouette without tiny details; no glass, transparent or mirror-like materials; standing on nothing, nothing attached around it.",
           WHITE,
           [NO_TEXT, ...lines],
           1,
@@ -315,8 +360,8 @@ export function robloxJobs(request: RobloxRequest, game: GuiStyle | null): Roblo
     case "texture":
       return single(
         [
-          `Deliverable: a square seamless tileable surface texture for a Roblox game (a material for walls, floors or terrain): ${what}.`,
-          "Seen straight from above, perfectly flat and evenly lit (no shadows, no light falloff, no vignette), the pattern spread evenly over the whole square with no single focal point, tileable on all sides; no objects, no perspective, no border.",
+          `Deliverable: a square seamless tileable surface texture for a Roblox game (the colour map of a material for walls, floors or terrain): ${what}.`,
+          "Seen straight from above, perfectly flat and evenly lit: no shadows, no ambient occlusion, no highlights, no light falloff, no vignette (Roblox lights it); the pattern spread evenly over the whole square, no single focal point and no large unique landmark that would show when it repeats; detail sized for a face about 10 studs wide; no objects, no perspective, no border.",
           NO_TEXT,
         ],
         lines,
@@ -329,7 +374,7 @@ export function robloxJobs(request: RobloxRequest, game: GuiStyle | null): Roblo
       return single(
         [
           `Deliverable: a 360-degree panorama of a sky and distant horizon for a Roblox game skybox: ${what}.`,
-          "A very wide continuous panorama all around the viewer: the horizon a straight level line across the middle of the image, sky above with clouds, sun or moon, stars, the distant landscape or sea below the horizon; the left edge continues seamlessly into the right edge. No nearby objects, no ground details close to the viewer, no people, no frame.",
+          "A very wide continuous panorama all around the viewer: the horizon a straight level line across the middle of the image, the sky above, the distant landscape or sea below; the left edge continues seamlessly into the right edge. Soft, fairly low-contrast sky so Roblox's fog and atmosphere blend in. No sun disc and no moon (Roblox draws them), unless the request asks for them; no nearby objects, no ground details close to the viewer, no people, no frame.",
           NO_TEXT,
         ],
         lines,
@@ -342,7 +387,7 @@ export function robloxJobs(request: RobloxRequest, game: GuiStyle | null): Roblo
       return single(
         [
           `Deliverable: a flat decal image for a surface inside a Roblox game (a poster, sign, painting, mural or graffiti): ${what}.`,
-          "Shown straight-on and flat, filling the whole frame edge to edge, as the printed picture itself (not a photo of it on a wall), no perspective, no frame around it unless asked.",
+          "Shown straight-on and flat, filling the whole frame edge to edge, as the printed picture itself (not a photo of it on a wall), no perspective, no frame around it unless asked; nothing important within 4% of the edges.",
           QUOTED_TEXT,
         ],
         lines,
@@ -356,9 +401,9 @@ export function robloxJobs(request: RobloxRequest, game: GuiStyle | null): Roblo
         sheet(
           request,
           "Deliverable: a sheet of particle and effect textures for a Roblox game (ParticleEmitter, Beam and Trail textures), to be cut apart.",
-          "Each effect a single soft glowing shape (a spark, a puff of smoke, a flame, a magic swirl, a star burst, a ring) seen straight-on, symmetric where natural, fading softly at its edges.",
+          "Each effect a single soft glowing shape (a soft dot, a spark, a star, a puff of smoke, a flame, a ring or shockwave, a slash arc) seen straight-on, symmetric where natural, with a soft falloff to nothing at its edges.",
           BLACK,
-          [NO_TEXT, ...lines],
+          [TINTABLE, NO_TEXT, ...lines],
           1,
           { kind: "parts", size: 256, key: "black" },
         ),
@@ -368,8 +413,9 @@ export function robloxJobs(request: RobloxRequest, game: GuiStyle | null): Roblo
       return single(
         [
           `Deliverable: a flipbook sprite sheet for a Roblox ParticleEmitter: ${grid * grid} frames of one short looping animation: ${what}.`,
-          `Layout: a strict ${grid}×${grid} grid of equal square cells, frames in reading order (left to right, then top to bottom); each frame centred in its own cell at the same scale, never crossing into the next cell; the motion changes smoothly from frame to frame and the last frame leads back into the first.`,
+          `Layout: a strict ${grid}×${grid} grid of equal square cells, frames in reading order (left to right, then top to bottom); each frame centred in its own cell at the same scale with black padding around it, never crossing into the next cell; the motion changes smoothly from frame to frame and the last frame leads back into the first.`,
           BLACK,
+          TINTABLE,
           NO_TEXT,
         ],
         lines,
