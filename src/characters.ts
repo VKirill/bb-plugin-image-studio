@@ -30,7 +30,7 @@ export type CharacterPreset = keyof typeof CHARACTER_PRESETS;
 export const CHARACTER_PRESET_IDS = Object.keys(CHARACTER_PRESETS) as CharacterPreset[];
 
 /** The views of a turnaround, left to right; the file names in views/. */
-export const TURNAROUND_VIEWS = ["front", "right", "back", "left"] as const;
+export const TURNAROUND_VIEWS = ["front", "back"] as const;
 
 const VARIATIONS = [
   "Take 1 of 4: the most faithful, straightforward reading of the description.",
@@ -50,13 +50,13 @@ const LEGS = "legs straight, feet shoulder-width apart and pointing forward, wit
 const CLOTH =
   "Nothing hangs between or in front of the legs: tabards, loincloths, robes, skirts, coat tails and belts' flaps end above the knees or are split at the sides, so each leg is fully visible and separate. Long hair and capes fall behind the shoulders and never cover the arms.";
 /**
- * A classic Roblox R15 block avatar in Roblox units, from the standard rig (mannequin r15-down: head 1.16×1.18,
- * torso 1.94×2.1, arms 1×2.68 hanging down, legs 1×2 under the torso, 4 wide and 5.2 tall in all). The toolkit's
- * roblox_blocky.py builds these blocks in Blender and projects the turnaround views onto their faces, so the drawing
- * must keep the block outline exactly and paint everything flat.
+ * A classic Roblox R15 block avatar in Roblox units, from the standard rig (r15-down: head 1.16×1.18, torso
+ * 1.94×2.05, arms 1×2 hanging down level with the torso, legs 1×2 under it, 4 wide and 5.18 tall in all). The
+ * toolkit's roblox_blocky.py builds these blocks in Blender and projects the front and back views onto their faces,
+ * so the drawing must keep the block outline exactly and paint everything flat.
  */
 const BLOCKY_BODY =
-  "Body: a classic Roblox R15 block avatar built only from rectangular blocks with flat faces and slightly rounded edges, in these exact proportions (units): the head a rounded cube 1.15 wide and 1.2 tall; the torso a box 2 wide, 2.1 tall and 1 deep; each arm a box 1 wide, 2.7 long and 1 deep, its top level with the top of the torso; each leg a box 1 wide, 2 tall and 1 deep, straight under its half of the torso. The whole figure is exactly 4 units wide (arm, torso, arm) and 5.2 units tall. The hands are simply the lower ends of the arm blocks; the feet the lower ends of the leg blocks.";
+  "Body: a classic Roblox R15 block avatar built only from rectangular blocks with flat faces and slightly rounded edges, in these exact proportions (units): the head a rounded cube 1.15 wide and 1.2 tall; the torso a box 2 wide, 2.05 tall and 1 deep; each arm a box 1 wide, 2 long and 1 deep, exactly as long as the torso: its top level with the top of the torso and its end level with the bottom of the torso; each leg a box 1 wide, 2 tall and 1 deep, straight under its half of the torso. The whole figure is exactly 4 units wide (arm, torso, arm) and 5.2 units tall. The hands are simply the lower ends of the arm blocks; the feet the lower ends of the leg blocks.";
 const BLOCKY_FLAT =
   "Clothing, armour, belts and the face are painted flat onto the block faces, like a Roblox shirt, pants and face decal: they add no volume and never change the block outline. Nothing sticks out of the blocks: helmets, hats, hair, pauldrons, wings, capes, cloaks, skirts, pouches, backpacks and every other piece with volume are left out; they are made separately as accessories. Every block face shows its own painted detail (front, back and sides), in the style below.";
 const POSES: Record<BodyType, string> = {
@@ -175,7 +175,9 @@ function bodyLines(request: CharacterRequest): string[] {
 }
 
 export function ideasJobs(request: CharacterRequest, style: GuiStyle | null): CharacterJob[] {
-  const held = request.equipment.length > 0 ? ` holding its equipment (${request.equipment.join("; ")})` : "";
+  const held =
+    (request.accessories.length > 0 ? ` wearing ${request.accessories.join("; ")}` : "") +
+    (request.equipment.length > 0 ? `${request.accessories.length > 0 ? " and" : ""} holding its equipment (${request.equipment.join("; ")})` : "");
   const design = designLine(request.refCount + 1, request.designCount, "extra references from the user: follow them as the description says.");
   const base = [
     `Deliverable: a character design concept for a 3D game: ${request.description.trim()}.`,
@@ -223,29 +225,27 @@ export function modelJob(request: CharacterRequest, style: GuiStyle | null): Cha
   };
 }
 
-/** Four views in one row: the same design from every side, cut into views/front|right|back|left.png. */
+/**
+ * Front and back of the same character on one sheet, cut into views/front.png and views/back.png. Two views only:
+ * Muse keeps one design across two, while four drifted (a wing lost in one profile, a profile facing the wrong way).
+ */
 export function turnaroundJob(request: CharacterRequest, style: GuiStyle | null): CharacterJob {
-  // Tall bodies fit four in a row; long or wide ones (spread wings, a horse) need a 2×2 grid to stay large.
-  const row = request.body === "humanoid" || request.body === "blocky" || request.body === "legless";
+  // Spread wings make a wide view: those stack, everything else stands side by side.
+  const stacked = request.body === "winged";
   const layout: SheetLayout = {
-    rows: row ? 1 : 2,
-    cols: row ? 4 : 2,
+    rows: stacked ? 2 : 1,
+    cols: stacked ? 1 : 2,
     cells: TURNAROUND_VIEWS.map((view) => ({ name: view, element: view })),
   };
-  const order =
-    "1. front view, facing the camera; 2. right side view, a strict profile with the nose pointing to the right edge of the image; 3. back view, the back of the head toward the camera; 4. left side view, a strict profile with the nose pointing to the left edge of the image";
   return {
     prompt: [
-      "Deliverable: a character turnaround sheet for 3D modelling: the same character seen from four sides.",
+      "Deliverable: a character turnaround sheet for 3D modelling: the same character seen from the front and from the back.",
       ...bodyLines(request),
-      row
-        ? `Layout: four full-body views in one row, left to right, STRICTLY in this order: ${order}.`
-        : `Layout: a 2×2 grid of four full-body views, STRICTLY: top left, top right, bottom left, bottom right = ${order}.`,
-      `All four views the same scale, the feet on one horizontal line${row ? "" : " within each row"}. Each view sits in its own ${row ? "quarter of the image width" : "quarter of the image"}, centred in it and taking at most three quarters of its width and height, so a wide empty white gap separates every pair of neighbours: no spike, wing, hoof, hair or cloth reaches into the next view. Orthographic camera at chest height in every view, no perspective.`,
-      "Identical character in every view: the same face, body, proportions, clothes, colours and worn gear, in the same pose; in the side views the limbs stay where the pose puts them and do not hide the torso.",
-      ...(request.body === "winged"
-        ? ["The wings are in every view, spread exactly as in the front view: in the side views they are seen edge-on and foreshortened, the near wing reaching toward the camera and the far wing showing behind the body; in the back view both wings are spread wide. Never fold or drop the wings in any view."]
-        : []),
+      stacked
+        ? "Layout: two full-body views, one above the other: top - the front view, facing the camera; bottom - the back view, the back of the head toward the camera."
+        : "Layout: two full-body views side by side: left half - the front view, facing the camera; right half - the back view, the back of the head toward the camera.",
+      `Both views the same scale and height${stacked ? "" : ", the feet on one horizontal line"}, each centred in its own half of the image and taking at most 80% of it, with a wide empty white gap between them. Orthographic camera at chest height, exactly straight-on from the front and exactly straight-on from the back (turned 180 degrees), no perspective, no three-quarter angle.`,
+      "Identical character in both views: the same body, proportions, clothes, colours and worn gear, in the same pose; the back view shows what the back really looks like (the back of the clothes, hair from behind), mirrored left to right as a real back view is.",
       POSES[request.body],
       CARRY_RULE,
       BACKGROUND_RULE,
@@ -253,7 +253,7 @@ export function turnaroundJob(request: CharacterRequest, style: GuiStyle | null)
       ...lookLines(style, request.refCount),
       FINISH_RULE,
     ].join("\n"),
-    aspectRatio: row ? "16:9" : "4:3",
+    aspectRatio: stacked ? "3:4" : request.body === "blocky" ? "3:2" : "4:3",
     label: "turnaround",
     layout,
   };
@@ -454,54 +454,3 @@ export function cutOnWhite(image: Rgba, layout: SheetLayout): WhiteCutResult {
   return { parts, missing, clean };
 }
 
-/** A view's silhouette on a coarse grid: 1 where the square has ink, for comparing poses regardless of size. */
-function silhouette(image: Rgba, size = 64): Uint8Array {
-  const out = new Uint8Array(size * size);
-  for (let y = 0; y < size; y++) {
-    for (let x = 0; x < size; x++) {
-      const sx = Math.min(image.width - 1, Math.floor(((x + 0.5) * image.width) / size));
-      const sy = Math.min(image.height - 1, Math.floor(((y + 0.5) * image.height) / size));
-      out[y * size + x] = inked(image.data, (sy * image.width + sx) * 4) ? 1 : 0;
-    }
-  }
-  return out;
-}
-
-function overlap(a: Uint8Array, b: Uint8Array, size: number, mirrorB: boolean): number {
-  let both = 0;
-  let either = 0;
-  for (let y = 0; y < size; y++) {
-    for (let x = 0; x < size; x++) {
-      const va = a[y * size + x]!;
-      const vb = b[y * size + (mirrorB ? size - 1 - x : x)]!;
-      both += va & vb;
-      either += va | vb;
-    }
-  }
-  return either === 0 ? 0 : both / either;
-}
-
-/**
- * Generators sometimes draw the left side view facing the same way as the right one. The two side views of a
- * symmetric pose are mirror images, so a left view that matches the right view better as is than mirrored faces the
- * wrong way; it is flipped in place. Returns true when it flipped.
- */
-export function fixLeftFacing(right: Rgba, left: Rgba): boolean {
-  const size = 64;
-  const r = silhouette(right, size);
-  const l = silhouette(left, size);
-  if (overlap(l, r, size, false) <= overlap(l, r, size, true) + 0.03) return false;
-  const { data, width, height } = left;
-  for (let y = 0; y < height; y++) {
-    for (let x = 0; x < width >> 1; x++) {
-      const p = (y * width + x) * 4;
-      const q = (y * width + (width - 1 - x)) * 4;
-      for (let c = 0; c < 4; c++) {
-        const t = data[p + c]!;
-        data[p + c] = data[q + c]!;
-        data[q + c] = t;
-      }
-    }
-  }
-  return true;
-}

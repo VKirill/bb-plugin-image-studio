@@ -2,11 +2,9 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   CHARACTER_PRESETS,
-  TURNAROUND_VIEWS,
   characterJobs,
   characterSlug,
   cutOnWhite,
-  fixLeftFacing,
   parseEquipment,
   type CharacterRequest,
 } from "../src/characters.ts";
@@ -85,12 +83,13 @@ test("design pictures are numbered after the style references", () => {
   assert.doesNotMatch(turn!.prompt, /Character: \./);
 });
 
-test("turnaround: one row of front, right, back, left on a wide frame", () => {
+test("turnaround: front and back side by side, nothing else", () => {
   const [job] = characterJobs("turnaround", request(), null);
-  assert.equal(job!.aspectRatio, "16:9");
-  assert.deepEqual(job!.layout!.cells.map((cell) => cell.name), [...TURNAROUND_VIEWS]);
-  assert.deepEqual([job!.layout!.rows, job!.layout!.cols], [1, 4]);
-  assert.match(job!.prompt, /nose pointing to the right edge/);
+  assert.equal(job!.aspectRatio, "4:3");
+  assert.deepEqual(job!.layout!.cells.map((cell) => cell.name), ["front", "back"]);
+  assert.deepEqual([job!.layout!.rows, job!.layout!.cols], [1, 2]);
+  assert.match(job!.prompt, /right half - the back view/);
+  assert.doesNotMatch(job!.prompt, /profile/);
   assert.match(job!.prompt, /Carries nothing/);
 });
 
@@ -143,7 +142,7 @@ test("white cut: views found by their white gaps even off-centre, each on a whit
     [200, 25, 270, 190],
     [330, 20, 380, 190],
   ]);
-  const layout = { rows: 1, cols: 4, cells: TURNAROUND_VIEWS.map((name) => ({ name, element: name })) };
+  const layout = { rows: 1, cols: 4, cells: ["front", "right", "back", "left"].map((name) => ({ name, element: name })) };
   const cut = cutOnWhite(image, layout);
   assert.equal(cut.clean, true);
   assert.deepEqual(cut.missing, []);
@@ -172,7 +171,7 @@ test("white cut: an empty cell is reported missing; a grid is cut row by row", (
   assert.deepEqual(cut.missing, ["shield"]);
 });
 
-test("body types: their own pose, camera and frame; long and wide bodies get a 2x2 turnaround", () => {
+test("body types: their own pose, camera and frame; spread wings stack the turnaround", () => {
   const [horse] = characterJobs("model", request({ body: "quadruped", description: "war horse" }), null);
   assert.equal(horse!.aspectRatio, "3:2");
   assert.match(horse!.prompt, /three-quarter front view/);
@@ -182,9 +181,11 @@ test("body types: their own pose, camera and frame; long and wide bodies get a 2
   assert.equal(harpy!.aspectRatio, "4:3");
   assert.match(harpy!.prompt, /wings fully spread out/);
   const [turn] = characterJobs("turnaround", request({ body: "quadruped" }), null);
-  assert.deepEqual([turn!.layout!.rows, turn!.layout!.cols], [2, 2]);
-  assert.equal(turn!.aspectRatio, "4:3");
-  assert.match(turn!.prompt, /2×2 grid/);
+  assert.deepEqual([turn!.layout!.rows, turn!.layout!.cols], [1, 2]);
+  const [wings] = characterJobs("turnaround", request({ body: "winged" }), null);
+  assert.deepEqual([wings!.layout!.rows, wings!.layout!.cols], [2, 1]);
+  assert.equal(wings!.aspectRatio, "3:4");
+  assert.match(wings!.prompt, /one above the other/);
 });
 
 test("equipment follows the project's style when one is set", () => {
@@ -218,16 +219,6 @@ test("white cut: touching figures are parted at their narrowest point and a neig
   assert.deepEqual(second.parts[0]!.box.x1 <= 152, true);
 });
 
-test("a left side view drawn facing right is mirrored; a correct one is left alone", () => {
-  // A profile: a body with a nose sticking out to the right.
-  const right = sheet(100, 100, [[30, 10, 60, 95], [60, 20, 75, 28]]);
-  const wrong = sheet(100, 100, [[30, 10, 60, 95], [60, 20, 75, 28]]);
-  const correct = sheet(100, 100, [[40, 10, 70, 95], [25, 20, 40, 28]]);
-  assert.equal(fixLeftFacing(right, correct), false);
-  assert.equal(fixLeftFacing(right, wrong), true);
-  const nose = (20 * 100 + 30) * 4;
-  assert.equal(wrong.data[nose], 90);
-});
 
 test("blocky: Roblox block proportions, arms down, everything painted flat; accessories left out and drawn apart", () => {
   const [model] = characterJobs("model", request({ body: "blocky", accessories: ["knight helmet", "golden wings"] }), null);
@@ -238,7 +229,8 @@ test("blocky: Roblox block proportions, arms down, everything painted flat; acce
   assert.match(model!.prompt, /painted flat onto the block faces/);
   assert.match(model!.prompt, /Leave out its accessories \(knight helmet; golden wings\)/);
   const [turn] = characterJobs("turnaround", request({ body: "blocky" }), null);
-  assert.deepEqual([turn!.layout!.rows, turn!.layout!.cols], [1, 4]);
+  assert.deepEqual([turn!.layout!.rows, turn!.layout!.cols], [1, 2]);
+  assert.equal(turn!.aspectRatio, "3:2");
   const [acc] = characterJobs("accessories", request({ body: "blocky", description: "", accessories: ["knight helmet", "left pauldron"] }), null);
   assert.equal(acc!.label, "accessories");
   assert.deepEqual(acc!.layout!.cells.map((cell) => cell.name), ["knight-helmet", "left-pauldron"]);

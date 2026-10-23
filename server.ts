@@ -88,7 +88,6 @@ import {
   characterJobs,
   characterSlug,
   cutOnWhite,
-  fixLeftFacing,
   parseEquipment,
   type BodyType,
   type CharacterJob,
@@ -1270,10 +1269,6 @@ export default async function plugin(bb: BbPluginApi) {
       try {
         const sub = gui.mode === "turnaround" ? "views" : "parts";
         const cut = cutOnWhite(await decodeRgba(original), gui.layout);
-        const view = (name: string) => cut.parts.find((part) => part.name === name)?.image;
-        const right = view("right");
-        const left = view("left");
-        const leftFlipped = gui.mode === "turnaround" && right && left ? fixLeftFacing(right, left) : false;
         for (const part of cut.parts) await write(join(dir, sub, `${part.name}.png`), await encodePng(part.image));
         const manifest = {
           project: gui.styleName,
@@ -1283,7 +1278,6 @@ export default async function plugin(bb: BbPluginApi) {
           sheet: `sheet.${ext}`,
           grid: { rows: gui.layout.rows, cols: gui.layout.cols },
           cleanGaps: cut.clean,
-          ...(leftFlipped ? { leftFlipped: true } : {}),
           missing: cut.missing,
           [sub]: cut.parts.map((part) => ({
             name: part.name,
@@ -2007,7 +2001,7 @@ export default async function plugin(bb: BbPluginApi) {
     "  bb image-studio character projects|project|ref|delete …   (the same options as gui; --tags stylized,blocky,chibi,…)",
     "  bb image-studio character generate --mode ideas|model|turnaround|equipment|accessories [--project <name>] [--name soldier] [--body humanoid|blocky|quadruped|winged|legless]",
     "                                     [--equipment \"rifle; knife\"] [--accessories \"helmet; left pauldron\"] [--image <design picture>]… --prompt <who the character is> [--json]",
-    "  bb image-studio character cut --sheet <path> [--grid 1x4 | --items \"rifle; knife\"] [--json]   (re-cut a white sheet; free)",
+    "  bb image-studio character cut --sheet <path> [--grid 1x2 | --items \"rifle; knife\"] [--json]   (re-cut a white sheet; free)",
   ].join("\n");
 
   bb.cli.register({
@@ -2046,7 +2040,7 @@ export default async function plugin(bb: BbPluginApi) {
       },
       {
         name: "character",
-        summary: "Characters section: game characters for 3D — ideas, an A-pose front view with empty hands, a 4-view turnaround, held items on their own sheet",
+        summary: "Characters section: game characters for 3D — ideas, an A-pose front view with empty hands, a front-and-back turnaround, held items and worn accessories on their own sheets",
         usage: "bb image-studio character projects|project|ref|generate|cut|delete …",
       },
     ],
@@ -2488,20 +2482,17 @@ export default async function plugin(bb: BbPluginApi) {
         const file = await bb.sdk.files.read({ path });
         const bytes = Buffer.from(file.content, file.contentEncoding === "base64" ? "base64" : "utf8");
         if (section === "characters") {
-          // A turnaround (--grid 1x4, the default) or an equipment sheet (--items, in the sheet's order).
+          // A turnaround (--grid 1x2, the default; 2x1 for winged) or an equipment sheet (--items, in the sheet's order).
           const items = parseEquipment(flag(argv, "--items"));
-          const grid = flag(argv, "--grid") ?? "1x4";
+          const grid = flag(argv, "--grid") ?? "1x2";
           const [rows, cols] = grid.split("x").map(Number);
-          if (items.length === 0 && !(rows! >= 1 && cols! >= 1)) return { exitCode: 1, stderr: "--grid takes ROWSxCOLS, e.g. 1x4." };
-          const turnaround = items.length === 0 && (grid === "1x4" || grid === "2x2");
+          if (items.length === 0 && !(rows! >= 1 && cols! >= 1)) return { exitCode: 1, stderr: "--grid takes ROWSxCOLS, e.g. 1x2." };
+          const turnaround = items.length === 0 && (grid === "1x2" || grid === "2x1");
           const names = items.length > 0 ? [] : turnaround ? [...TURNAROUND_VIEWS] : Array.from({ length: rows! * cols! }, (_, index) => `part-${String(index + 1).padStart(2, "0")}`);
           const layout: SheetLayout = items.length > 0
             ? sheetLayout(items, false)
             : { rows: rows!, cols: cols!, cells: names.map((name) => ({ name, element: name })) };
           const cut = cutOnWhite(await decodeRgba(bytes), layout);
-          const right = cut.parts.find((part) => part.name === "right")?.image;
-          const left = cut.parts.find((part) => part.name === "left")?.image;
-          const leftFlipped = turnaround && right && left ? fixLeftFacing(right, left) : false;
           const dir = join(path, "..", turnaround ? "views" : "parts");
           for (const part of cut.parts) {
             await bb.sdk.files.write({
@@ -2512,8 +2503,8 @@ export default async function plugin(bb: BbPluginApi) {
             });
           }
           return reply(
-            { dir, cleanGaps: cut.clean, leftFlipped, missing: cut.missing, parts: cut.parts.map((part) => ({ name: part.name, ...part.box })) },
-            `${cut.parts.length} pictures in ${dir}${cut.clean ? "" : " (figures touched: cut at their narrowest point, check the edges)"}${leftFlipped ? "\nleft view mirrored: it faced the same way as the right one" : ""}${cut.missing.length > 0 ? `\nempty: ${cut.missing.join(", ")}` : ""}`,
+            { dir, cleanGaps: cut.clean, missing: cut.missing, parts: cut.parts.map((part) => ({ name: part.name, ...part.box })) },
+            `${cut.parts.length} pictures in ${dir}${cut.clean ? "" : " (figures touched: cut at their narrowest point, check the edges)"}${cut.missing.length > 0 ? `\nempty: ${cut.missing.join(", ")}` : ""}`,
           );
         }
         const elements = parseElementList(flag(argv, "--elements") ?? "");
@@ -2579,9 +2570,9 @@ export default async function plugin(bb: BbPluginApi) {
   bb.agents.registerTool({
     name: "image_studio_character",
     description:
-      "Game characters for 3D through Image Studio's Characters section, one Characters project per folder (Muse Image). Modes: ideas (4 full-body concepts, may hold their equipment), model (the front view for image-to-3D and rigging: symmetric A-pose, empty hands, plain white, orthographic), turnaround (front, right, back, left in one row, cut into views/*.png), equipment (the held items alone on one sheet, side view, cut into parts/*.png), accessories (worn pieces — helmet, hair, pauldrons, wings, cape — alone on one sheet, cut into parts/*.png). body blocky = a Roblox R15 block avatar with flat-painted clothing whose turnaround the toolkit's roblox_blocky.py builds in Blender. Runs at once, no Send form.",
+      "Game characters for 3D through Image Studio's Characters section, one Characters project per folder (Muse Image). Modes: ideas (4 full-body concepts, may hold their equipment), model (the front view for image-to-3D and rigging: symmetric A-pose, empty hands, plain white, orthographic), turnaround (front and back side by side, cut into views/front.png and views/back.png), equipment (the held items alone on one sheet, side view, cut into parts/*.png), accessories (worn pieces — helmet, hair, pauldrons, wings, cape — alone on one sheet, cut into parts/*.png). body blocky = a Roblox R15 block avatar with flat-painted clothing whose turnaround the toolkit's roblox_blocky.py builds in Blender. Runs at once, no Send form.",
     instructions:
-      "For a game character meant for a 3D model (Hunyuan3D / TRELLIS on gpu3d, Roblox Avatar Setup, UniRig) call image_studio_character, not image_studio_generate. Split the request: prompt = who the character is and what it wears (helmet, mask, vest, pouches, boots stay on the body); equipment = everything held in the hands or carried apart (rifle, axe, torch, shield, backpack if it should come off), \";\"-separated. The plugin keeps equipment out of model and turnaround and draws it with mode equipment, so a weapon never grows into the body mesh. name = a short file name (\"soldier\"). body = humanoid (default; also zombies, robots, anything on two legs with arms) | quadruped (horse, wolf, beast on four legs; its 3D picture is a three-quarter view) | winged (wings spread out: harpy, dragon, bat) | legless (serpent, slime, ghost, floating body) | blocky (a Roblox R15 block avatar: exact block proportions, arms down, clothing painted flat on the block faces; put helmets, hair, pauldrons, wings, capes in accessories and draw them with mode accessories; the turnaround goes to Roblox/toolkit assets3d/roblox_blocky.py, which builds the 15 R15 blocks in Blender with the views projected onto them): it picks the neutral rigging pose. Flow: ideas → the user picks one → model with images=[that picture] → turnaround with images=[the model front.png] → equipment with images=[the idea picture]. Do not describe the pose, background, camera or art style in prompt: the plugin adds the A-pose, white background, orthographic camera and the project's theme, presets and approved characters. Set the look: bb image-studio character project --theme … --tags stylized|blocky|chibi|lowpoly|realistic|toon|painted; make an approved character a reference: bb image-studio character ref --image <path>. Report front.png, views/ and parts/ paths; the front.png (or views/front.png) is the image-to-3D input.",
+      "For a game character meant for a 3D model (Hunyuan3D / TRELLIS on gpu3d, Roblox Avatar Setup, UniRig) call image_studio_character, not image_studio_generate. Split the request: prompt = who the character is and what it wears (helmet, mask, vest, pouches, boots stay on the body); equipment = everything held in the hands or carried apart (rifle, axe, torch, shield, backpack if it should come off), \";\"-separated. The plugin keeps equipment out of model and turnaround and draws it with mode equipment, so a weapon never grows into the body mesh. name = a short file name (\"soldier\"). body = humanoid (default; also zombies, robots, anything on two legs with arms) | quadruped (horse, wolf, beast on four legs; its 3D picture is a three-quarter view) | winged (wings spread out: harpy, dragon, bat) | legless (serpent, slime, ghost, floating body) | blocky (a Roblox R15 block avatar: exact block proportions, arms down, clothing painted flat on the block faces; put helmets, hair, pauldrons, wings, capes in accessories and draw them with mode accessories; the turnaround goes to Roblox/toolkit assets3d/roblox_blocky.py, which builds the 15 R15 blocks in Blender with the views projected onto them): it picks the neutral rigging pose. Flow: ideas → the user picks one → model with images=[that picture] → turnaround (front and back) with images=[the model front.png] → equipment with images=[the idea picture]. Do not describe the pose, background, camera or art style in prompt: the plugin adds the A-pose, white background, orthographic camera and the project's theme, presets and approved characters. Set the look: bb image-studio character project --theme … --tags stylized|blocky|chibi|lowpoly|realistic|toon|painted; make an approved character a reference: bb image-studio character ref --image <path>. Report front.png, views/ and parts/ paths; the front.png (or views/front.png) is the image-to-3D input.",
     presentation: {
       label: { pending: "Drawing a character", completed: "Drew a character" },
       icon: { glyph: "UserRound" },

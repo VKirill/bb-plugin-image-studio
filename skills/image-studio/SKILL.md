@@ -9,7 +9,7 @@ Read this skill only when the user wants an image.
 
 **Game GUI** (menus, HUD, windows, buttons, frames, UI icons, UI kits): use the GUI section — tool `image_studio_gui` / `bb image-studio gui …`, see [references/gui.md](references/gui.md). Not `image_studio_generate`.
 
-**Game characters for 3D** (a character that becomes a 3D model or gets a skeleton: concept ideas, the A-pose front view for image-to-3D, a front/right/back/left turnaround, weapons and held items drawn apart): use the Characters section — tool `image_studio_character` / `bb image-studio character …`, see [references/characters.md](references/characters.md). Put held items in `equipment`, never in the description, so they are not drawn on the body. Not `image_studio_generate`.
+**Game characters for 3D** (a character that becomes a 3D model or gets a skeleton: concept ideas, the A-pose front view for image-to-3D, a front-and-back turnaround, weapons and held items drawn apart): use the Characters section — tool `image_studio_character` / `bb image-studio character …`, see [references/characters.md](references/characters.md). Put held items in `equipment`, never in the description, so they are not drawn on the body. Not `image_studio_generate`.
 
 Both sections keep one project per folder with its own style and history, run at once (no Send form), always on Muse Image at the frame size the section picks, and save full-size files into the folder (`image-studio/gui/…`, `image-studio/characters/…`). **Do not ask the user to confirm GUI or character generations** and never route them through `image_studio_generate` (that opens the Send form): call the section tool directly and report the files.
 
