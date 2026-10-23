@@ -36,7 +36,7 @@ export const generationSchema = z.object({
   refsDropped: z.array(z.string()).optional(),
   /** GUI section: the style, mode and job label ("idea 2: gothic", "kit wide") of a GUI picture. */
   guiStyleId: z.string().nullable().optional(),
-  guiMode: z.enum(["ideas", "screen", "elements", "kit", "model", "turnaround", "equipment"]).optional(),
+  guiMode: z.enum(["ideas", "screen", "elements", "kit", "model", "turnaround", "equipment", "accessories"]).optional(),
   guiLabel: z.string().optional(),
   /** One request (four ideas, two kit sheets) shares a run id. */
   guiRun: z.string().optional(),

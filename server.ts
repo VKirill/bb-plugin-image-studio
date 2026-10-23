@@ -223,6 +223,7 @@ export const rpcContract = defineRpcContract({
       equipment: z.string().max(2000).default(""),
       character: z.string().max(80).default(""),
       body: bodySchema.default("humanoid"),
+      accessories: z.string().max(2000).default(""),
       images: z.array(z.string().min(1)).max(4).default([]),
     }),
     output: guiResultSchema,
@@ -1403,6 +1404,7 @@ export default async function plugin(bb: BbPluginApi) {
     equipment?: string;
     character?: string;
     body?: BodyType;
+    accessories?: string;
     cwd?: string;
     hostId?: string;
     /** Name for a project created for this place (BB project name); the folder name otherwise. */
@@ -1426,6 +1428,7 @@ export default async function plugin(bb: BbPluginApi) {
               description: input.prompt.trim(),
               body: input.body ?? "humanoid",
               equipment: parseEquipment(input.equipment),
+              accessories: parseEquipment(input.accessories),
               name: character!,
               refCount: lead.length,
               designCount: extra.length,
@@ -1443,7 +1446,7 @@ export default async function plugin(bb: BbPluginApi) {
           projectId: input.projectId,
           prompt: job.prompt,
           rawPrompt: true,
-          recordPrompt: input.prompt.trim() || (input.equipment ?? "").trim() || job.label,
+          recordPrompt: input.prompt.trim() || (input.equipment ?? "").trim() || (input.accessories ?? "").trim() || job.label,
           leadUris: lead,
           images: extra,
           model: section === "characters" ? CHARACTER_MODEL : GUI_MODEL,
@@ -2002,8 +2005,8 @@ export default async function plugin(bb: BbPluginApi) {
     "  bb image-studio gui delete --project <name>   (the list and references; saved files stay)",
     "  bb image-studio gui cut --sheet <path> [--elements \"a; b; c\"] [--states] [--json]   (re-cut a green-key sheet; free)",
     "  bb image-studio character projects|project|ref|delete …   (the same options as gui; --tags stylized,blocky,chibi,…)",
-    "  bb image-studio character generate --mode ideas|model|turnaround|equipment [--project <name>] [--name soldier] [--body humanoid|quadruped|winged|legless]",
-    "                                     [--equipment \"rifle; knife\"] [--image <design picture>]… --prompt <who the character is> [--json]",
+    "  bb image-studio character generate --mode ideas|model|turnaround|equipment|accessories [--project <name>] [--name soldier] [--body humanoid|blocky|quadruped|winged|legless]",
+    "                                     [--equipment \"rifle; knife\"] [--accessories \"helmet; left pauldron\"] [--image <design picture>]… --prompt <who the character is> [--json]",
     "  bb image-studio character cut --sheet <path> [--grid 1x4 | --items \"rifle; knife\"] [--json]   (re-cut a white sheet; free)",
   ].join("\n");
 
@@ -2472,6 +2475,7 @@ export default async function plugin(bb: BbPluginApi) {
           equipment: flag(argv, "--equipment"),
           character: flag(argv, "--name"),
           body: body.data,
+          accessories: flag(argv, "--accessories"),
           cwd: ctx.cwd,
         });
         const out = reply({ generations: run.generations, errors: run.errors }, guiSummary(run));
@@ -2575,9 +2579,9 @@ export default async function plugin(bb: BbPluginApi) {
   bb.agents.registerTool({
     name: "image_studio_character",
     description:
-      "Game characters for 3D through Image Studio's Characters section, one Characters project per folder (Muse Image). Modes: ideas (4 full-body concepts, may hold their equipment), model (the front view for image-to-3D and rigging: symmetric A-pose, empty hands, plain white, orthographic), turnaround (front, right, back, left in one row, cut into views/*.png), equipment (the held items alone on one sheet, side view, cut into parts/*.png). Runs at once, no Send form.",
+      "Game characters for 3D through Image Studio's Characters section, one Characters project per folder (Muse Image). Modes: ideas (4 full-body concepts, may hold their equipment), model (the front view for image-to-3D and rigging: symmetric A-pose, empty hands, plain white, orthographic), turnaround (front, right, back, left in one row, cut into views/*.png), equipment (the held items alone on one sheet, side view, cut into parts/*.png), accessories (worn pieces — helmet, hair, pauldrons, wings, cape — alone on one sheet, cut into parts/*.png). body blocky = a Roblox R15 block avatar with flat-painted clothing whose turnaround the toolkit's roblox_blocky.py builds in Blender. Runs at once, no Send form.",
     instructions:
-      "For a game character meant for a 3D model (Hunyuan3D / TRELLIS on gpu3d, Roblox Avatar Setup, UniRig) call image_studio_character, not image_studio_generate. Split the request: prompt = who the character is and what it wears (helmet, mask, vest, pouches, boots stay on the body); equipment = everything held in the hands or carried apart (rifle, axe, torch, shield, backpack if it should come off), \";\"-separated. The plugin keeps equipment out of model and turnaround and draws it with mode equipment, so a weapon never grows into the body mesh. name = a short file name (\"soldier\"). body = humanoid (default; also zombies, robots, anything on two legs with arms) | quadruped (horse, wolf, beast on four legs; its 3D picture is a three-quarter view) | winged (wings spread out: harpy, dragon, bat) | legless (serpent, slime, ghost, floating body): it picks the neutral rigging pose. Flow: ideas → the user picks one → model with images=[that picture] → turnaround with images=[the model front.png] → equipment with images=[the idea picture]. Do not describe the pose, background, camera or art style in prompt: the plugin adds the A-pose, white background, orthographic camera and the project's theme, presets and approved characters. Set the look: bb image-studio character project --theme … --tags stylized|blocky|chibi|lowpoly|realistic|toon|painted; make an approved character a reference: bb image-studio character ref --image <path>. Report front.png, views/ and parts/ paths; the front.png (or views/front.png) is the image-to-3D input.",
+      "For a game character meant for a 3D model (Hunyuan3D / TRELLIS on gpu3d, Roblox Avatar Setup, UniRig) call image_studio_character, not image_studio_generate. Split the request: prompt = who the character is and what it wears (helmet, mask, vest, pouches, boots stay on the body); equipment = everything held in the hands or carried apart (rifle, axe, torch, shield, backpack if it should come off), \";\"-separated. The plugin keeps equipment out of model and turnaround and draws it with mode equipment, so a weapon never grows into the body mesh. name = a short file name (\"soldier\"). body = humanoid (default; also zombies, robots, anything on two legs with arms) | quadruped (horse, wolf, beast on four legs; its 3D picture is a three-quarter view) | winged (wings spread out: harpy, dragon, bat) | legless (serpent, slime, ghost, floating body) | blocky (a Roblox R15 block avatar: exact block proportions, arms down, clothing painted flat on the block faces; put helmets, hair, pauldrons, wings, capes in accessories and draw them with mode accessories; the turnaround goes to Roblox/toolkit assets3d/roblox_blocky.py, which builds the 15 R15 blocks in Blender with the views projected onto them): it picks the neutral rigging pose. Flow: ideas → the user picks one → model with images=[that picture] → turnaround with images=[the model front.png] → equipment with images=[the idea picture]. Do not describe the pose, background, camera or art style in prompt: the plugin adds the A-pose, white background, orthographic camera and the project's theme, presets and approved characters. Set the look: bb image-studio character project --theme … --tags stylized|blocky|chibi|lowpoly|realistic|toon|painted; make an approved character a reference: bb image-studio character ref --image <path>. Report front.png, views/ and parts/ paths; the front.png (or views/front.png) is the image-to-3D input.",
     presentation: {
       label: { pending: "Drawing a character", completed: "Drew a character" },
       icon: { glyph: "UserRound" },
@@ -2588,6 +2592,7 @@ export default async function plugin(bb: BbPluginApi) {
       equipment: z.string().optional(),
       name: z.string().optional(),
       body: bodySchema.optional(),
+      accessories: z.string().optional(),
       project: z.string().optional(),
       images: z.array(z.string().min(1)).max(4).optional(),
     }),
@@ -2604,6 +2609,7 @@ export default async function plugin(bb: BbPluginApi) {
           equipment: input.equipment,
           character: input.name,
           body: input.body,
+          accessories: input.accessories,
           ...(await threadFolder(ctx.threadId, ctx.projectId || null)),
         });
         const text = guiSummary(run);

@@ -67,7 +67,7 @@ type GenerationItem = {
   height?: number;
   projectPath: string | null;
   guiStyleId?: string | null;
-  guiMode?: "ideas" | "screen" | "elements" | "kit" | "model" | "turnaround" | "equipment";
+  guiMode?: "ideas" | "screen" | "elements" | "kit" | "model" | "turnaround" | "equipment" | "accessories";
   guiLabel?: string;
   guiParts?: number;
   guiMissing?: string[];

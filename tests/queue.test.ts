@@ -65,11 +65,14 @@ test("raising the limit lets queued jobs start at once", async () => {
   const limiter = new Limiter(1);
   let running = 0;
   let peak = 0;
+  // Jobs hold until the gate opens, so a slow machine cannot finish one before the checks (timers made it flaky).
+  let open!: () => void;
+  const gate = new Promise<void>((resolve) => (open = resolve));
   const jobs = Array.from({ length: 6 }, () =>
     limiter.run(async () => {
       running += 1;
       peak = Math.max(peak, running);
-      await tick(20);
+      await gate;
       running -= 1;
     }),
   );
@@ -78,6 +81,7 @@ test("raising the limit lets queued jobs start at once", async () => {
   limiter.setLimit(6);
   await tick(5);
   assert.equal(limiter.active, 6);
+  open();
   await Promise.all(jobs);
   assert.equal(peak, 6);
 });

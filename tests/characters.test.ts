@@ -33,6 +33,7 @@ const request = (patch: Partial<CharacterRequest> = {}): CharacterRequest => ({
   description: "colony soldier, olive uniform, steel helmet, gas mask",
   body: "humanoid",
   equipment: [],
+  accessories: [],
   name: "soldier",
   refCount: 0,
   designCount: 0,
@@ -226,4 +227,22 @@ test("a left side view drawn facing right is mirrored; a correct one is left alo
   assert.equal(fixLeftFacing(right, wrong), true);
   const nose = (20 * 100 + 30) * 4;
   assert.equal(wrong.data[nose], 90);
+});
+
+test("blocky: Roblox block proportions, arms down, everything painted flat; accessories left out and drawn apart", () => {
+  const [model] = characterJobs("model", request({ body: "blocky", accessories: ["knight helmet", "golden wings"] }), null);
+  assert.equal(model!.aspectRatio, "3:4");
+  assert.match(model!.prompt, /Roblox R15 block avatar/);
+  assert.match(model!.prompt, /exactly 4 units wide/);
+  assert.match(model!.prompt, /arms hanging straight down/);
+  assert.match(model!.prompt, /painted flat onto the block faces/);
+  assert.match(model!.prompt, /Leave out its accessories \(knight helmet; golden wings\)/);
+  const [turn] = characterJobs("turnaround", request({ body: "blocky" }), null);
+  assert.deepEqual([turn!.layout!.rows, turn!.layout!.cols], [1, 4]);
+  const [acc] = characterJobs("accessories", request({ body: "blocky", description: "", accessories: ["knight helmet", "left pauldron"] }), null);
+  assert.equal(acc!.label, "accessories");
+  assert.deepEqual(acc!.layout!.cells.map((cell) => cell.name), ["knight-helmet", "left-pauldron"]);
+  assert.match(acc!.prompt, /hollow and empty/);
+  assert.match(acc!.prompt, /1.15 cube head/);
+  assert.throws(() => characterJobs("accessories", request(), null), /List the worn pieces/);
 });

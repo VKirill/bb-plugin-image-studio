@@ -9,7 +9,7 @@ import { sheetAspect, sheetLayout, slugify, type GuiStyle, type SheetLayout } fr
  */
 
 export const CHARACTER_MODEL = "muse-image" as const;
-export const CHARACTER_MODES = ["ideas", "model", "turnaround", "equipment"] as const;
+export const CHARACTER_MODES = ["ideas", "model", "turnaround", "equipment", "accessories"] as const;
 export type CharacterMode = (typeof CHARACTER_MODES)[number];
 export const CHARACTER_IDEAS = 4;
 export const MAX_EQUIPMENT = 8;
@@ -40,7 +40,7 @@ const VARIATIONS = [
 ];
 
 /** Body plans: each has its own neutral rigging pose, camera and frame. */
-export const BODY_TYPES = ["humanoid", "quadruped", "winged", "legless"] as const;
+export const BODY_TYPES = ["humanoid", "blocky", "quadruped", "winged", "legless"] as const;
 export type BodyType = (typeof BODY_TYPES)[number];
 
 // The "system message" every 3D-ready picture carries: one figure, a riggable pose, nothing held.
@@ -49,7 +49,19 @@ const ARMS = "arms straight and lowered about 45 degrees from the shoulders, cle
 const LEGS = "legs straight, feet shoulder-width apart and pointing forward, with open background visible between the legs from the crotch down to the feet";
 const CLOTH =
   "Nothing hangs between or in front of the legs: tabards, loincloths, robes, skirts, coat tails and belts' flaps end above the knees or are split at the sides, so each leg is fully visible and separate. Long hair and capes fall behind the shoulders and never cover the arms.";
+/**
+ * A classic Roblox R15 block avatar in Roblox units, from the standard rig (mannequin r15-down: head 1.16×1.18,
+ * torso 1.94×2.1, arms 1×2.68 hanging down, legs 1×2 under the torso, 4 wide and 5.2 tall in all). The toolkit's
+ * roblox_blocky.py builds these blocks in Blender and projects the turnaround views onto their faces, so the drawing
+ * must keep the block outline exactly and paint everything flat.
+ */
+const BLOCKY_BODY =
+  "Body: a classic Roblox R15 block avatar built only from rectangular blocks with flat faces and slightly rounded edges, in these exact proportions (units): the head a rounded cube 1.15 wide and 1.2 tall; the torso a box 2 wide, 2.1 tall and 1 deep; each arm a box 1 wide, 2.7 long and 1 deep, its top level with the top of the torso; each leg a box 1 wide, 2 tall and 1 deep, straight under its half of the torso. The whole figure is exactly 4 units wide (arm, torso, arm) and 5.2 units tall. The hands are simply the lower ends of the arm blocks; the feet the lower ends of the leg blocks.";
+const BLOCKY_FLAT =
+  "Clothing, armour, belts and the face are painted flat onto the block faces, like a Roblox shirt, pants and face decal: they add no volume and never change the block outline. Nothing sticks out of the blocks: helmets, hats, hair, pauldrons, wings, capes, cloaks, skirts, pouches, backpacks and every other piece with volume are left out; they are made separately as accessories. Every block face shows its own painted detail (front, back and sides), in the style below.";
 const POSES: Record<BodyType, string> = {
+  blocky:
+    "Pose: the standard pose of a Roblox avatar for rigging: standing straight and symmetric, facing forward; both arms hanging straight down at the sides, parallel to the torso, with a thin strip of white background between each arm and the torso; legs straight and parallel with a thin strip of white between them. No bend at elbows, wrists or knees, no tilt.",
   humanoid: `Pose: a symmetric A-pose for 3D rigging. Standing straight, weight on both feet; ${ARMS}; ${LEGS}. Head upright, looking straight ahead, neutral expression. No action, no lean, no twist, no tilt. A tail, if any, points out behind the body or to one side, never between the legs. ${CLOTH}`,
   winged: `Pose: a symmetric neutral pose for 3D rigging with the wings fully spread out to both sides, flat to the camera, each wing whole and clear of the body, the head and the other wing. Arms only if the description gives the character arms besides its wings (wings "instead of arms" grow from the shoulders and there are no arms at all); arms it has: ${ARMS}. If it stands on legs: ${LEGS}. Head upright, looking straight ahead. A tail, if any, points out behind the body or to one side and never hangs between or in front of the legs. No flapping, no flight action. ${CLOTH}`,
   quadruped:
@@ -67,6 +79,7 @@ const FINISH_RULE = "Rendering: a clean game character in the character style ab
 
 /** The 3D front: humanoids from the front; a quadruped from three-quarters, where its length shows. */
 const MODEL_CAMERA: Record<BodyType, { camera: string; aspect: string }> = {
+  blocky: { camera: "straight-on front view, orthographic, camera at chest height, no perspective distortion; the character centred and filling about 85% of the frame height", aspect: "3:4" },
   humanoid: { camera: "straight-on front view, orthographic, camera at chest height, no perspective distortion; the character centred and filling about 88% of the frame height", aspect: "2:3" },
   winged: { camera: "straight-on front view, orthographic, camera at chest height, no perspective distortion; the character centred, the spread wings filling about 90% of the frame width", aspect: "4:3" },
   quadruped: { camera: "three-quarter front view from about 45 degrees to the side and slightly above, showing the face, one whole side and the full length of the body, orthographic, no perspective distortion; the character centred and filling about 88% of the frame width", aspect: "3:2" },
@@ -83,6 +96,8 @@ export type CharacterRequest = {
   body: BodyType;
   /** Things held in the hands or carried apart from the body: left out of model/turnaround, drawn by equipment. */
   equipment: string[];
+  /** Worn pieces made separately (helmet, hair, pauldrons, wings, cape): left out of model/turnaround, drawn by accessories. */
+  accessories: string[];
   /** Short name for files ("soldier"); falls back to the description's first words. */
   name: string;
   /** Style references go first as Image 1…N; the user's design pictures follow them. */
@@ -151,8 +166,12 @@ function bodyLines(request: CharacterRequest): string[] {
     request.designCount,
     "the approved design of this character (it may hold things or stand in another pose): redraw exactly this character, the same face, body, proportions, clothes, colours, materials and worn gear, in the pose and framing below, carrying nothing.",
   );
+  const worn = request.accessories.length > 0
+    ? [`Leave out its accessories (${request.accessories.join("; ")}): they are made separately and attached in the game.`]
+    : [];
   const who = request.description.trim() ? [`Character: ${request.description.trim()}.`] : [];
-  return [...who, ...held, ...(design ? [design] : [])];
+  const blocks = request.body === "blocky" ? [BLOCKY_BODY, BLOCKY_FLAT] : [];
+  return [...who, ...held, ...worn, ...(design ? [design] : []), ...blocks];
 }
 
 export function ideasJobs(request: CharacterRequest, style: GuiStyle | null): CharacterJob[] {
@@ -161,6 +180,9 @@ export function ideasJobs(request: CharacterRequest, style: GuiStyle | null): Ch
   const base = [
     `Deliverable: a character design concept for a 3D game: ${request.description.trim()}.`,
     `Presentation: the whole character, nothing cut off, in a relaxed confident natural pose${held}, three-quarter front view, centred, filling about 85% of the frame.`,
+    ...(request.body === "blocky"
+      ? ["Body: a classic Roblox block avatar (a cube head, a box torso, box arms and legs), wearing its accessories (helmet, hair, pauldrons, wings, cape) as chunky 3D pieces."]
+      : []),
     ONE_RULE,
     BACKGROUND_RULE,
     ...(design ? [design] : []),
@@ -204,7 +226,7 @@ export function modelJob(request: CharacterRequest, style: GuiStyle | null): Cha
 /** Four views in one row: the same design from every side, cut into views/front|right|back|left.png. */
 export function turnaroundJob(request: CharacterRequest, style: GuiStyle | null): CharacterJob {
   // Tall bodies fit four in a row; long or wide ones (spread wings, a horse) need a 2×2 grid to stay large.
-  const row = request.body === "humanoid" || request.body === "legless";
+  const row = request.body === "humanoid" || request.body === "blocky" || request.body === "legless";
   const layout: SheetLayout = {
     rows: row ? 1 : 2,
     cols: row ? 4 : 2,
@@ -238,8 +260,9 @@ export function turnaroundJob(request: CharacterRequest, style: GuiStyle | null)
 }
 
 /** Held items on their own: side view, horizontal, one per cell, cut into parts/<item>.png. */
-export function equipmentJob(request: CharacterRequest, style: GuiStyle | null): CharacterJob {
-  const items = request.equipment;
+export function equipmentJob(request: CharacterRequest, style: GuiStyle | null, kind: "equipment" | "accessories" = "equipment"): CharacterJob {
+  const worn = kind === "accessories";
+  const items = worn ? request.accessories : request.equipment;
   const layout = sheetLayout(items, false);
   const rows = Array.from({ length: layout.rows }, (_, row) => {
     const cells = layout.cells.slice(row * layout.cols, (row + 1) * layout.cols);
@@ -249,14 +272,18 @@ export function equipmentJob(request: CharacterRequest, style: GuiStyle | null):
   const design = designLine(
     request.refCount + 1,
     request.designCount,
-    "the approved design of the character who uses these items: draw each item exactly as it looks there (shape, colours, materials, wear), on its own.",
+    `the approved design of the character who ${worn ? "wears" : "uses"} these items: draw each item exactly as it looks there (shape, colours, materials, wear), on its own.`,
   );
   return {
     prompt: [
-      `Deliverable: a sheet of separate game props, each to be made into its own 3D model and attached to a character's hand.${request.description.trim() ? ` They belong to: ${request.description.trim()}.` : ""}`,
+      worn
+        ? `Deliverable: a sheet of separate character accessories, each to be made into its own 3D model and attached to the character's body (head, shoulders, back, waist).${request.description.trim() ? ` They belong to: ${request.description.trim()}.` : ""}`
+        : `Deliverable: a sheet of separate game props, each to be made into its own 3D model and attached to a character's hand.${request.description.trim() ? ` They belong to: ${request.description.trim()}.` : ""}`,
       `Items, in this exact order:\n${rows.join("\n")}`,
       `Layout: a strict grid of ${layout.rows} rows and ${layout.cols} columns, exactly the rows above, one item per cell${layout.cells.length < layout.rows * layout.cols ? "; the cells after the last item stay empty" : ""}, with wide empty white gaps between cells; every item centred, complete and fully visible, never touching another item or the image border.`,
-      "Each item alone: shown from the side, lying horizontal and flat to the camera (orthographic, no perspective), long items with the tip, blade or muzzle pointing to the right and the handle or grip on the left, a clearly visible grip. No hands, no character, no holster, stand or display, no straps hanging loose.",
+      worn
+        ? `Each item alone, as it sits when worn but with nobody inside: a three-quarter front view from slightly above (so its depth shows), upright in its worn orientation; a helmet or hat hollow and empty, a pair of pauldrons or wings drawn as two separate items when listed separately. No head, body, mannequin, stand or display.${request.body === "blocky" ? " Sized for a Roblox block avatar: a helmet fits over a 1.15 cube head, pauldrons sit on 1-unit-wide shoulders." : ""}`
+        : "Each item alone: shown from the side, lying horizontal and flat to the camera (orthographic, no perspective), long items with the tip, blade or muzzle pointing to the right and the handle or grip on the left, a clearly visible grip. No hands, no character, no holster, stand or display, no straps hanging loose.",
       ...(design ? [design] : []),
       BACKGROUND_RULE,
       LIGHT_RULE,
@@ -265,15 +292,15 @@ export function equipmentJob(request: CharacterRequest, style: GuiStyle | null):
         ? "Rendering: exactly the same art style and finish as the character style above (painting, shading, materials, outline), as if made for the same game; crisp edges; real-world proportions between the items."
         : "Rendering: clean game prop renders, crisp edges, real-world proportions between the items.",
     ].join("\n"),
-    aspectRatio: sheetAspect(layout, 1.8),
-    label: "equipment",
+    aspectRatio: sheetAspect(layout, worn ? 1 : 1.8),
+    label: kind,
     layout,
   };
 }
 
 /** The jobs of one request; throws a readable error for a missing description or item list. */
 export function characterJobs(mode: CharacterMode, request: CharacterRequest, style: GuiStyle | null): CharacterJob[] {
-  if (mode !== "equipment" && !request.description.trim() && request.designCount === 0) {
+  if (mode !== "equipment" && mode !== "accessories" && !request.description.trim() && request.designCount === 0) {
     throw new Error('Describe the character, e.g. "colony soldier: olive uniform, steel helmet, gas mask, leather boots", or pass its approved picture in images.');
   }
   switch (mode) {
@@ -283,6 +310,10 @@ export function characterJobs(mode: CharacterMode, request: CharacterRequest, st
       return [modelJob(request, style)];
     case "turnaround":
       return [turnaroundJob(request, style)];
+    case "accessories":
+      if (request.accessories.length === 0) throw new Error('List the worn pieces in accessories, e.g. "knight helmet; left pauldron; right pauldron".');
+      if (request.accessories.length > MAX_EQUIPMENT) throw new Error(`At most ${MAX_EQUIPMENT} items per sheet; got ${request.accessories.length}. Split the list.`);
+      return [equipmentJob(request, style, "accessories")];
     case "equipment":
       if (request.equipment.length === 0) throw new Error('List the held items in equipment, e.g. "rifle; combat knife".');
       if (request.equipment.length > MAX_EQUIPMENT) throw new Error(`At most ${MAX_EQUIPMENT} items per sheet; got ${request.equipment.length}. Split the list.`);

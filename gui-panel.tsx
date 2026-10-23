@@ -52,10 +52,12 @@ const MODES: Record<Section, readonly ModeInfo[]> = {
     { id: "model", label: "charModeModel", hint: "charHintModel", placeholder: "charPlaceholder" },
     { id: "turnaround", label: "charModeTurnaround", hint: "charHintTurnaround", placeholder: "charPlaceholder" },
     { id: "equipment", label: "charModeEquipment", hint: "charHintEquipment", placeholder: "charPlaceholderOwner" },
+    { id: "accessories", label: "charModeAccessories", hint: "charHintAccessories", placeholder: "charPlaceholderOwner" },
   ],
 };
 const BODY_LABEL: Record<BodyType, I18nKey> = {
   humanoid: "charBodyHumanoid",
+  blocky: "charBodyBlocky",
   quadruped: "charBodyQuadruped",
   winged: "charBodyWinged",
   legless: "charBodyLegless",
@@ -128,6 +130,7 @@ export function GuiPanel({
   const [mode, setMode] = useState<GuiMode | CharacterMode>("ideas");
   const [prompt, setPrompt] = useState("");
   const [equipment, setEquipment] = useState("");
+  const [accessories, setAccessories] = useState("");
   const [character, setCharacter] = useState("");
   const [body, setBody] = useState<BodyType>("humanoid");
   const characters = section === "characters";
@@ -186,8 +189,13 @@ export function GuiPanel({
 
   const ordered = groupRuns(items).flat();
   const modeInfo = MODES[section].find((item) => item.id === mode) ?? MODES[section][0]!;
-  const needsPrompt = characters ? (mode === "equipment" ? equipment.trim() !== "" : true) : mode !== "kit";
-  const ready = characters && mode === "equipment" ? equipment.trim() !== "" : !needsPrompt || prompt.trim() !== "";
+  const needsPrompt = characters ? mode !== "equipment" && mode !== "accessories" : mode !== "kit";
+  const ready =
+    characters && mode === "equipment"
+      ? equipment.trim() !== ""
+      : characters && mode === "accessories"
+        ? accessories.trim() !== ""
+        : !needsPrompt || prompt.trim() !== "";
 
   const saveDraft = async () => {
     const saved = await api.save_gui_style({
@@ -249,6 +257,7 @@ export function GuiPanel({
         ...(characters
           ? {
               equipment: equipment.trim(),
+              accessories: accessories.trim(),
               character: character.trim() || override?.item.guiCharacter || "",
               body,
               images: override ? [override.item.id] : [],
@@ -563,6 +572,13 @@ export function GuiPanel({
               placeholder={t("charName", {}, locale)}
               aria-label={t("charName", {}, locale)}
               onChange={(event) => setCharacter(event.target.value)}
+            />
+            <Input
+              className="min-w-[12rem] flex-1"
+              value={accessories}
+              placeholder={t("charAccessoriesPlaceholder", {}, locale)}
+              aria-label={t("charAccessories", {}, locale)}
+              onChange={(event) => setAccessories(event.target.value)}
             />
             <Input
               className="min-w-[12rem] flex-1"
