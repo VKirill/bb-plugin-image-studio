@@ -10,6 +10,18 @@ import { t } from "./i18n";
 import type { I18nKey, Locale } from "./i18n";
 import { GUI_MAX_REFS, GUI_PRESET_IDS, PALETTE_KEYS, type GuiMode, type GuiStyle, type PaletteKey } from "./src/gui";
 import { BODY_TYPES, CHARACTER_PRESET_IDS, type BodyType, type CharacterMode } from "./src/characters";
+import {
+  DECAL_ASPECTS,
+  FLIPBOOK_FRAMES,
+  LIST_MODES,
+  MAX_VARIANTS,
+  MODE_CATEGORY,
+  ROBLOX_CATEGORIES,
+  ROBLOX_PRESET_IDS,
+  VARIANT_MODES,
+  type RobloxCategory,
+  type RobloxMode,
+} from "./src/roblox";
 import type { RpcApi } from "./src/rpc-api";
 import { fileToBase64 } from "./lib/files";
 import { mapParallel } from "./src/queue";
@@ -26,20 +38,21 @@ export type GuiItem = {
   height?: number;
   projectPath: string | null;
   guiStyleId?: string | null;
-  guiMode?: GuiMode | CharacterMode;
+  guiMode?: GuiMode | CharacterMode | RobloxMode;
   guiLabel?: string;
   guiRun?: string;
   guiParts?: number;
   guiMissing?: string[];
   guiDir?: string | null;
   guiCharacter?: string;
+  guiFiles?: string[];
 };
 
-export type Section = "gui" | "characters";
+export type Section = "gui" | "characters" | "roblox";
 
 type Draft = Pick<GuiStyle, "name" | "theme" | "tags" | "palette" | "notes">;
 
-type ModeInfo = { id: GuiMode | CharacterMode; label: I18nKey; hint: I18nKey; placeholder: I18nKey };
+type ModeInfo = { id: GuiMode | CharacterMode | RobloxMode; label: I18nKey; hint: I18nKey; placeholder: I18nKey };
 const MODES: Record<Section, readonly ModeInfo[]> = {
   gui: [
     { id: "ideas", label: "guiModeIdeas", hint: "guiHintIdeas", placeholder: "guiPlaceholderIdeas" },
@@ -54,7 +67,34 @@ const MODES: Record<Section, readonly ModeInfo[]> = {
     { id: "equipment", label: "charModeEquipment", hint: "charHintEquipment", placeholder: "charPlaceholderOwner" },
     { id: "accessories", label: "charModeAccessories", hint: "charHintAccessories", placeholder: "charPlaceholderOwner" },
   ],
+  roblox: [
+    { id: "icon", label: "robloxModeIcon", hint: "robloxHintIcon", placeholder: "robloxPlaceholderSingle" },
+    { id: "thumbnail", label: "robloxModeThumbnail", hint: "robloxHintThumbnail", placeholder: "robloxPlaceholderSingle" },
+    { id: "logo", label: "robloxModeLogo", hint: "robloxHintLogo", placeholder: "robloxPlaceholderLogo" },
+    { id: "badges", label: "robloxModeBadges", hint: "robloxHintBadges", placeholder: "robloxPlaceholderList" },
+    { id: "passes", label: "robloxModePasses", hint: "robloxHintPasses", placeholder: "robloxPlaceholderList" },
+    { id: "products", label: "robloxModeProducts", hint: "robloxHintProducts", placeholder: "robloxPlaceholderList" },
+    { id: "items", label: "robloxModeItems", hint: "robloxHintItems", placeholder: "robloxPlaceholderList" },
+    { id: "props", label: "robloxModeProps", hint: "robloxHintProps", placeholder: "robloxPlaceholderList" },
+    { id: "texture", label: "robloxModeTexture", hint: "robloxHintTexture", placeholder: "robloxPlaceholderTexture" },
+    { id: "skybox", label: "robloxModeSkybox", hint: "robloxHintSkybox", placeholder: "robloxPlaceholderSkybox" },
+    { id: "decal", label: "robloxModeDecal", hint: "robloxHintDecal", placeholder: "robloxPlaceholderSingle" },
+    { id: "vfx", label: "robloxModeVfx", hint: "robloxHintVfx", placeholder: "robloxPlaceholderList" },
+    { id: "flipbook", label: "robloxModeFlipbook", hint: "robloxHintFlipbook", placeholder: "robloxPlaceholderSingle" },
+  ],
 };
+const CATEGORY_LABEL: Record<RobloxCategory, I18nKey> = {
+  store: "robloxCatStore",
+  monetization: "robloxCatMonetization",
+  items: "robloxCatItems",
+  props: "robloxCatProps",
+  world: "robloxCatWorld",
+  vfx: "robloxCatVfx",
+  gui: "robloxCatGui",
+  characters: "robloxCatCharacters",
+};
+/** The first mode of a Roblox tab: what the tab opens with. */
+const firstMode = (category: RobloxCategory): RobloxMode => MODES.roblox.find((item) => MODE_CATEGORY[item.id as RobloxMode] === category)?.id as RobloxMode;
 const BODY_LABEL: Record<BodyType, I18nKey> = {
   humanoid: "charBodyHumanoid",
   blocky: "charBodyBlocky",
@@ -98,6 +138,8 @@ function groupRuns(items: readonly GuiItem[]): GuiItem[][] {
 
 export function GuiPanel({
   section = "gui",
+  game,
+  allStyles = [],
   api,
   projectId,
   styles,
@@ -107,8 +149,12 @@ export function GuiPanel({
   onChanged,
   onOpen,
 }: {
-  /** GUI projects or Characters projects: the same projects machinery, different modes and prompts. */
+  /** GUI projects, Characters projects or Roblox games: the same projects machinery, different modes and prompts. */
   section?: Section;
+  /** Inside a Roblox game: this panel is the game's GUI or Characters (no project picker; made on first use). */
+  game?: GuiStyle;
+  /** Every project, so a game finds its linked GUI and Characters projects. */
+  allStyles?: GuiStyle[];
   api: RpcApi<typeof rpcContract>;
   projectId: string | null;
   /** This section's projects, most recently used first. */
@@ -127,13 +173,18 @@ export function GuiPanel({
   const [draft, setDraft] = useState<Draft>(draftOf(style));
   const [items, setItems] = useState<GuiItem[]>([]);
   const [thumbs, setThumbs] = useState<Record<string, string>>({});
-  const [mode, setMode] = useState<GuiMode | CharacterMode>("ideas");
+  const [mode, setMode] = useState<GuiMode | CharacterMode | RobloxMode>(section === "roblox" ? "icon" : "ideas");
   const [prompt, setPrompt] = useState("");
   const [equipment, setEquipment] = useState("");
   const [accessories, setAccessories] = useState("");
   const [character, setCharacter] = useState("");
   const [body, setBody] = useState<BodyType>("humanoid");
   const characters = section === "characters";
+  const roblox = section === "roblox";
+  const [category, setCategory] = useState<RobloxCategory>("store");
+  const [variants, setVariants] = useState(1);
+  const [frames, setFrames] = useState<number>(16);
+  const [aspect, setAspect] = useState<(typeof DECAL_ASPECTS)[number]>("1:1");
   const [states, setStates] = useState(false);
   const [running, setRunning] = useState(0);
   const [refPreviews, setRefPreviews] = useState<Record<string, string>>({});
@@ -187,9 +238,13 @@ export function GuiPanel({
     }
   }, [styles, api]);
 
-  const ordered = groupRuns(items).flat();
-  const modeInfo = MODES[section].find((item) => item.id === mode) ?? MODES[section][0]!;
-  const needsPrompt = characters ? mode !== "equipment" && mode !== "accessories" : mode !== "kit";
+  // A game's tab shows its own kind of pictures; its GUI and Characters tabs show the linked projects.
+  const ordered = groupRuns(items)
+    .flat()
+    .filter((item) => !roblox || (item.guiMode !== undefined && MODE_CATEGORY[item.guiMode as RobloxMode] === category));
+  const modes = roblox ? MODES.roblox.filter((item) => MODE_CATEGORY[item.id as RobloxMode] === category) : MODES[section];
+  const modeInfo = modes.find((item) => item.id === mode) ?? modes[0] ?? MODES[section][0]!;
+  const needsPrompt = characters ? mode !== "equipment" && mode !== "accessories" : roblox ? mode !== "logo" : mode !== "kit";
   const ready =
     characters && mode === "equipment"
       ? equipment.trim() !== ""
@@ -238,7 +293,7 @@ export function GuiPanel({
 
   const generate = (override?: { mode: CharacterMode; item: GuiItem }) => {
     if (!override && !ready) return;
-    const runMode = override?.mode ?? mode;
+    const runMode = override?.mode ?? modeInfo.id;
     // From a picture: its description and name carry over, the picture becomes the design reference.
     const description = override ? prompt.trim() || override.item.prompt : prompt.trim();
     if (override?.mode === "equipment" && equipment.trim() === "") {
@@ -254,6 +309,8 @@ export function GuiPanel({
         mode: runMode,
         prompt: description,
         states: runMode === "elements" && states,
+        ...(game ? { gameId: game.id } : {}),
+        ...(roblox ? { variants: VARIANT_MODES.includes(runMode as RobloxMode) ? variants : 1, frames, aspect } : {}),
         ...(characters
           ? {
               equipment: equipment.trim(),
@@ -279,28 +336,34 @@ export function GuiPanel({
       tags: current.tags.includes(preset) ? current.tags.filter((tag) => tag !== preset) : [...current.tags, preset],
     }));
 
+  // A game's GUI and Characters tabs: the linked project's own panel under the game's header.
+  const nested = roblox && (category === "gui" || category === "characters") && style !== null && !creating;
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className="mx-auto box-border flex w-full max-w-5xl flex-col gap-4 px-4 pb-6 pt-3 md:px-5 md:pt-4">
+      <div className={nested ? "max-h-[60%] shrink-0 overflow-y-auto" : "min-h-0 flex-1 overflow-y-auto"}>
+        <div className={`mx-auto box-border flex w-full max-w-5xl flex-col gap-4 px-4 pt-3 md:px-5 md:pt-4 ${nested || game ? "pb-2" : "pb-6"}`}>
           <div className="flex flex-wrap items-center gap-2">
-            <h1 className="mr-2 text-xl font-medium">{t(characters ? "tabCharacters" : "tabGui", {}, locale)}</h1>
-            <ProjectPicker
-              styles={styles}
-              value={styleId}
-              creating={creating}
-              locale={locale}
-              heading={t(characters ? "charProjects" : "guiProjects", {}, locale)}
-              onPick={(id) => {
-                setCreating(false);
-                setStyleId(id);
-              }}
-              onNew={() => {
-                setCreating(true);
-                setSettingsOpen(true);
-                setDraft(draftOf(null, `${t("guiNewStyle", {}, locale)} ${styles.length + 1}`));
-              }}
-            />
+            {game ? null : (
+              <>
+                <h1 className="mr-2 text-xl font-medium">{t(roblox ? "tabRoblox" : characters ? "tabCharacters" : "tabGui", {}, locale)}</h1>
+                <ProjectPicker
+                  styles={styles}
+                  value={styleId}
+                  creating={creating}
+                  locale={locale}
+                  heading={t(roblox ? "robloxProjects" : characters ? "charProjects" : "guiProjects", {}, locale)}
+                  onPick={(id) => {
+                    setCreating(false);
+                    setStyleId(id);
+                  }}
+                  onNew={() => {
+                    setCreating(true);
+                    setSettingsOpen(true);
+                    setDraft(draftOf(null, `${t("guiNewStyle", {}, locale)} ${styles.length + 1}`));
+                  }}
+                />
+              </>
+            )}
             {style && !creating ? (
               <Button
                 type="button"
@@ -315,9 +378,30 @@ export function GuiPanel({
             ) : null}
           </div>
 
-          {styles.length === 0 && !creating ? (
+          {roblox && style && !creating ? (
+            <div className="flex flex-wrap gap-1" role="tablist">
+              {ROBLOX_CATEGORIES.map((item) => (
+                <Button
+                  key={item}
+                  type="button"
+                  size="sm"
+                  role="tab"
+                  aria-selected={category === item}
+                  variant={category === item ? "secondary" : "ghost"}
+                  onClick={() => {
+                    setCategory(item);
+                    if (item !== "gui" && item !== "characters") setMode(firstMode(item));
+                  }}
+                >
+                  {t(CATEGORY_LABEL[item], {}, locale)}
+                </Button>
+              ))}
+            </div>
+          ) : null}
+
+          {styles.length === 0 && !creating && !game ? (
             <p className="rounded-lg border border-dashed border-border px-4 py-3 text-sm text-muted-foreground">
-              {t(characters ? "charNoStyles" : "guiNoStyles", {}, locale)}
+              {t(roblox ? "robloxNoStyles" : characters ? "charNoStyles" : "guiNoStyles", {}, locale)}
             </p>
           ) : null}
 
@@ -341,14 +425,14 @@ export function GuiPanel({
                   <span className="text-xs text-muted-foreground">{t("guiTheme", {}, locale)}</span>
                   <Input
                     value={draft.theme}
-                    placeholder={t(characters ? "charThemePlaceholder" : "guiThemePlaceholder", {}, locale)}
+                    placeholder={t(roblox ? "robloxThemePlaceholder" : characters ? "charThemePlaceholder" : "guiThemePlaceholder", {}, locale)}
                     onChange={(event) => setDraft({ ...draft, theme: event.target.value })}
                   />
                 </label>
                 <div className="flex flex-col gap-1">
                   <span className="text-xs text-muted-foreground">{t("guiPresets", {}, locale)}</span>
                   <div className="flex flex-wrap gap-1.5">
-                    {(characters ? CHARACTER_PRESET_IDS : GUI_PRESET_IDS).map((preset) => (
+                    {(roblox ? ROBLOX_PRESET_IDS : characters ? CHARACTER_PRESET_IDS : GUI_PRESET_IDS).map((preset) => (
                       <Button
                         key={preset}
                         type="button"
@@ -363,7 +447,7 @@ export function GuiPanel({
                     ))}
                   </div>
                 </div>
-                {characters ? null : <div className="flex flex-col gap-1">
+                {characters || roblox ? null : <div className="flex flex-col gap-1">
                   <span className="text-xs text-muted-foreground">{t("guiPalette", {}, locale)}</span>
                   <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
                     {PALETTE_KEYS.map((key) => (
@@ -397,20 +481,20 @@ export function GuiPanel({
                   <span className="text-xs text-muted-foreground">{t("guiNotes", {}, locale)}</span>
                   <Input
                     value={draft.notes}
-                    placeholder={t(characters ? "charNotesPlaceholder" : "guiNotesPlaceholder", {}, locale)}
+                    placeholder={t(roblox ? "robloxNotesPlaceholder" : characters ? "charNotesPlaceholder" : "guiNotesPlaceholder", {}, locale)}
                     onChange={(event) => setDraft({ ...draft, notes: event.target.value })}
                   />
                 </label>
                 {style && !creating ? (
                   <div className="flex flex-col gap-1">
                     <span className="text-xs text-muted-foreground">{t("guiRefs", {}, locale)}</span>
-                    <p className="text-xs text-muted-foreground">{t(characters ? "charRefsHint" : "guiRefsHint", { max: GUI_MAX_REFS }, locale)}</p>
+                    <p className="text-xs text-muted-foreground">{t(roblox ? "robloxRefsHint" : characters ? "charRefsHint" : "guiRefsHint", { max: GUI_MAX_REFS }, locale)}</p>
                     <div className="flex flex-wrap gap-2">
                       {style.refs.map((ref) => (
                         <div key={ref.id} className="relative h-20 w-28 overflow-hidden rounded-md border border-border bg-muted">
                           {refPreviews[ref.id] ? <img src={refPreviews[ref.id]} alt="" className="h-full w-full object-cover" /> : null}
                           <span className="absolute bottom-1 left-1 rounded bg-background/85 px-1 text-[10px]">
-                            {t(ref.role === "art" ? "guiRoleArt" : characters ? "charRoleConcept" : "guiRoleConcept", {}, locale)}
+                            {t(ref.role === "art" ? "guiRoleArt" : roblox ? "robloxRoleConcept" : characters ? "charRoleConcept" : "guiRoleConcept", {}, locale)}
                           </span>
                           <button
                             type="button"
@@ -466,7 +550,7 @@ export function GuiPanel({
             </div>
           ) : null}
 
-          {style && !creating ? (
+          {style && !creating && !nested ? (
             ordered.length === 0 ? (
               <p className="text-sm text-muted-foreground">{t("guiNoResults", {}, locale)}</p>
             ) : (
@@ -494,7 +578,7 @@ export function GuiPanel({
                           onReference={() => void makeReference(item).catch(onError)}
                           onRun={(next) => generate({ mode: next, item })}
                         />
-                      ) : item.guiMode === "ideas" || item.guiMode === "screen" ? (
+                      ) : item.guiMode === "ideas" || item.guiMode === "screen" || roblox ? (
                         <button
                           type="button"
                           className="absolute right-1.5 top-1.5 rounded-md bg-background/85 p-1.5 shadow-sm transition-opacity disabled:opacity-40 md:opacity-0 md:group-hover:opacity-100 md:focus-visible:opacity-100"
@@ -515,6 +599,21 @@ export function GuiPanel({
         </div>
       </div>
 
+      {nested && style ? (
+        <GuiPanel
+          key={`${style.id}-${category}`}
+          section={category as "gui" | "characters"}
+          game={style}
+          api={api}
+          projectId={projectId}
+          styles={allStyles.filter((item) => item.section === category && item.gameId === style.id)}
+          version={version}
+          locale={locale}
+          onError={onError}
+          onChanged={onChanged}
+          onOpen={onOpen}
+        />
+      ) : (
       <form
         className="flex shrink-0 flex-col gap-2 border-t border-border bg-background p-2 md:p-3"
         onSubmit={(event) => {
@@ -523,12 +622,12 @@ export function GuiPanel({
         }}
       >
         <div className="flex flex-wrap items-center gap-1" role="group">
-          {MODES[section].map((item) => (
+          {modes.map((item) => (
             <Button
               key={item.id}
               type="button"
               size="sm"
-              variant={mode === item.id ? "default" : "outline"}
+              variant={modeInfo.id === item.id ? "default" : "outline"}
               onClick={() => setMode(item.id)}
             >
               {t(item.label, {}, locale)}
@@ -539,7 +638,7 @@ export function GuiPanel({
         <textarea
           className={TEXTAREA_CLASS}
           value={prompt}
-          rows={mode === "elements" ? 4 : 2}
+          rows={mode === "elements" || (roblox && LIST_MODES.includes(modeInfo.id as RobloxMode)) ? 4 : 2}
           placeholder={t(modeInfo.placeholder, {}, locale)}
           aria-label={t(modeInfo.label, {}, locale)}
           onChange={(event) => setPrompt(event.target.value)}
@@ -590,7 +689,50 @@ export function GuiPanel({
           </div>
         ) : null}
         <div className="flex flex-wrap items-center justify-between gap-2">
-          {mode === "elements" ? (
+          {roblox ? (
+            <div className="flex flex-wrap items-center gap-2 text-sm">
+              {VARIANT_MODES.includes(modeInfo.id as RobloxMode) ? (
+                <label className="flex items-center gap-1.5">
+                  {t("robloxVariants", {}, locale)}
+                  <select className="h-8 rounded-md border border-input bg-background px-2" value={variants} onChange={(event) => setVariants(Number(event.target.value))}>
+                    {Array.from({ length: MAX_VARIANTS }, (_, index) => index + 1).map((count) => (
+                      <option key={count} value={count}>
+                        {count}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ) : null}
+              {modeInfo.id === "flipbook" ? (
+                <label className="flex items-center gap-1.5">
+                  {t("robloxFrames", {}, locale)}
+                  <select className="h-8 rounded-md border border-input bg-background px-2" value={frames} onChange={(event) => setFrames(Number(event.target.value))}>
+                    {FLIPBOOK_FRAMES.map((count) => (
+                      <option key={count} value={count}>
+                        {count}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ) : null}
+              {modeInfo.id === "decal" ? (
+                <label className="flex items-center gap-1.5">
+                  {t("robloxAspect", {}, locale)}
+                  <select
+                    className="h-8 rounded-md border border-input bg-background px-2"
+                    value={aspect}
+                    onChange={(event) => setAspect(event.target.value as (typeof DECAL_ASPECTS)[number])}
+                  >
+                    {DECAL_ASPECTS.map((ratio) => (
+                      <option key={ratio} value={ratio}>
+                        {ratio}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ) : null}
+            </div>
+          ) : mode === "elements" ? (
             <label className="flex items-center gap-2 text-sm">
               <input type="checkbox" checked={states} onChange={(event) => setStates(event.target.checked)} />
               {t("guiStates", {}, locale)}
@@ -604,6 +746,7 @@ export function GuiPanel({
           </Button>
         </div>
       </form>
+      )}
     </div>
   );
 }

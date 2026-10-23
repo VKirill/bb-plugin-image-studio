@@ -1,6 +1,6 @@
 ---
 name: image-studio
-description: Generate or edit images for the current BB project through Image Studio (fal.ai / kie.ai, Nano Banana 2, Nano Banana 2.1, Nano Banana Pro, Muse Image, optional GPT Image 2.5, FLUX.2 Pro, Seedream 5, Grok Imagine, Qwen Image 2.1, Wan 2.7, people profiles, game GUI, game characters for 3D). Use when the user asks to generate a picture, a game interface (GUI, HUD, buttons, UI kit), a game character for a 3D model (A-pose front view, turnaround, weapons and held items apart), photo, poster, a scene with a named person from Image Studio profiles, or 18+ / adult / NSFW images (Qwen Image 2.1 by default, Wan 2.7 as the fallback).
+description: Generate or edit images for the current BB project through Image Studio (fal.ai / kie.ai, Nano Banana 2, Nano Banana 2.1, Nano Banana Pro, Muse Image, optional GPT Image 2.5, FLUX.2 Pro, Seedream 5, Grok Imagine, Qwen Image 2.1, Wan 2.7, people profiles, game GUI, game characters for 3D, Roblox game assets). Use when the user asks to generate a picture, a game interface (GUI, HUD, buttons, UI kit), a game character for a 3D model (A-pose front view, turnaround, weapons and held items apart), Roblox game art (game icon, thumbnails, logo, badges, game passes, developer products, item icons, props for 3D, textures, skyboxes, decals, particle effects), photo, poster, a scene with a named person from Image Studio profiles, or 18+ / adult / NSFW images (Qwen Image 2.1 by default, Wan 2.7 as the fallback).
 ---
 
 # Image Studio
@@ -11,7 +11,9 @@ Read this skill only when the user wants an image.
 
 **Game characters for 3D** (a character that becomes a 3D model or gets a skeleton: concept ideas, the A-pose front view for image-to-3D, a front-and-back turnaround, weapons and held items drawn apart): use the Characters section — tool `image_studio_character` / `bb image-studio character …`, see [references/characters.md](references/characters.md). Put held items in `equipment`, never in the description, so they are not drawn on the body. Not `image_studio_generate`.
 
-Both sections keep one project per folder with its own style and history, run at once (no Send form), always on Muse Image at the frame size the section picks, and save full-size files into the folder (`image-studio/gui/…`, `image-studio/characters/…`). **Do not ask the user to confirm GUI or character generations** and never route them through `image_studio_generate` (that opens the Send form): call the section tool directly and report the files.
+**Roblox game assets** (game icon, thumbnails, logo, badges, game passes, developer products, item icons, props for 3D, textures, skyboxes, decals, particles and flipbooks): use the Roblox section — tool `image_studio_roblox` / `bb image-studio roblox …`, see [references/roblox.md](references/roblox.md). It fits every picture to Roblox (exact sizes, transparent cut-outs, round-safe badges and passes, tiling textures, the six Sky faces). A Roblox game's GUI and characters still go through `image_studio_gui` and `image_studio_character`: in the game's folder they land in that game and share its look.
+
+These sections keep one project per folder with its own style and history, run at once (no Send form), always on Muse Image at the frame size the section picks, and save full-size files into the folder (`image-studio/gui/…`, `image-studio/characters/…`; a Roblox game's everything under `image-studio/roblox/<game>/…`). **Do not ask the user to confirm GUI, character or Roblox generations** and never route them through `image_studio_generate` (that opens the Send form): call the section tool directly and report the files.
 
 ## Do this
 

@@ -94,7 +94,22 @@ import {
   type CharacterJob,
   type CharacterMode,
 } from "./src/characters.js";
-import { decodeRgba, encodePng } from "./src/image-io.js";
+import { decodeRgba, encodePng, type Rgba } from "./src/image-io.js";
+import {
+  DECAL_ASPECTS,
+  MAX_VARIANTS,
+  MODE_CATEGORY,
+  ROBLOX_MODEL,
+  ROBLOX_MODES,
+  ROBLOX_PRESET_IDS,
+  mergeGameStyle,
+  planGameMigration,
+  robloxJobs,
+  type RobloxJob,
+  type RobloxMode,
+  type RobloxOutput,
+} from "./src/roblox.js";
+import { SKYBOX_FACES, cover, fitSquare, glowToAlpha, limit, normalMap, opaque, resize, seamless, skyboxFaces, trimAlpha } from "./src/raster.js";
 import { enabledFromSettings, mergeSettings, settingsSchema, type StudioSettings } from "./src/settings.js";
 import {
   GENERATE_PICKER_ID,
@@ -128,10 +143,13 @@ const paletteInputSchema = guiStyleSchema.shape.palette;
 const guiModeSchema = z.enum(GUI_MODES);
 const characterModeSchema = z.enum(CHARACTER_MODES);
 const bodySchema = z.enum(BODY_TYPES);
-const sectionSchema = z.enum(["gui", "characters"]);
+const robloxModeSchema = z.enum(ROBLOX_MODES);
+const sectionSchema = z.enum(["gui", "characters", "roblox"]);
 type Section = z.infer<typeof sectionSchema>;
 /** "GUI project" / "Characters project": the word the CLI and the tools use for a section. */
-const SECTION_WORD: Record<Section, string> = { gui: "GUI", characters: "Characters" };
+const SECTION_WORD: Record<Section, string> = { gui: "GUI", characters: "Characters", roblox: "Roblox" };
+/** One-time move of the GUI and Characters projects into Roblox games. */
+const GAMES_MIGRATED_KEY = "roblox-games-migrated";
 const guiResultSchema = z.object({
   generations: z.array(generationSchema),
   errors: z.array(z.string()),
@@ -214,8 +232,14 @@ export const rpcContract = defineRpcContract({
       projectId: z.string().nullable(),
       styleId: z.string().optional(),
       section: sectionSchema.default("gui"),
-      /** GUI: ideas | screen | elements | kit. Characters: ideas | model | turnaround | equipment. */
-      mode: z.enum([...new Set([...GUI_MODES, ...CHARACTER_MODES])] as [string, ...string[]]),
+      /** GUI: ideas | screen | elements | kit. Characters: ideas | model | turnaround | equipment. Roblox: icon | thumbnail | … */
+      mode: z.enum([...new Set([...GUI_MODES, ...CHARACTER_MODES, ...ROBLOX_MODES])] as [string, ...string[]]),
+      /** GUI / Characters of a Roblox game: the game's id (its linked project is used, or created). */
+      gameId: z.string().optional(),
+      /** Roblox: takes of one picture, flipbook frames (4 or 16), decal frame. */
+      variants: z.number().int().min(1).max(MAX_VARIANTS).default(1),
+      frames: z.number().int().default(16),
+      aspect: z.enum(DECAL_ASPECTS).default("1:1"),
       prompt: z.string().trim().max(8000).default(""),
       /** Elements: every element in its four states (normal, hover, pressed, disabled). */
       states: z.boolean().default(false),
@@ -352,7 +376,7 @@ function flags(argv: string[], name: string): string[] {
 }
 
 function restAfter(argv: string[], command: string): string {
-  const skip = new Set(["--model", "--gateway", "--profile", "--image", "--aspect", "--resolution", "--refs", "--seed", "--count", "--batch", "--parallel", "--slots", "--json", "--mode", "--style", "--project", "--rename", "--name", "--theme", "--tags", "--palette", "--notes", "--role", "--sheet", "--elements"]);
+  const skip = new Set(["--model", "--gateway", "--profile", "--image", "--aspect", "--resolution", "--refs", "--seed", "--count", "--batch", "--parallel", "--slots", "--json", "--mode", "--style", "--project", "--rename", "--name", "--theme", "--tags", "--palette", "--notes", "--role", "--sheet", "--elements", "--items", "--variants", "--frames"]);
   const out: string[] = [];
   for (let i = 0; i < argv.length; i++) {
     const token = argv[i]!;
@@ -821,12 +845,16 @@ export default async function plugin(bb: BbPluginApi) {
       styleId: string | null;
       styleName: string | null;
       section?: Section;
-      mode: GuiMode | CharacterMode;
+      mode: GuiMode | CharacterMode | RobloxMode;
       label: string;
       run: string;
       layout?: SheetLayout;
       /** Characters: the character's file name. */
       character?: string;
+      /** Folders under image-studio/ in the project: ["roblox", "<game>", "store"]; else [section, project]. */
+      folder?: string[];
+      /** Roblox: what to make from the picture. */
+      output?: RobloxOutput;
     };
   };
 
@@ -1113,6 +1141,7 @@ export default async function plugin(bb: BbPluginApi) {
             ...(guiOut?.parts !== undefined ? { guiParts: guiOut.parts } : {}),
             ...(guiOut && guiOut.missing.length > 0 ? { guiMissing: guiOut.missing } : {}),
             ...(input.gui.character ? { guiCharacter: input.gui.character } : {}),
+            ...(guiOut?.files?.length ? { guiFiles: guiOut.files } : {}),
           }
         : {}),
     };
@@ -1156,10 +1185,26 @@ export default async function plugin(bb: BbPluginApi) {
 
   /** Styles are one KV list (small: text and file names), changed under a lock like the profiles. */
   const guiLock = new Mutex();
-  const readGuiStyles = async (): Promise<GuiStyle[]> => parseGuiStyles(await bb.storage.kv.get<unknown>(GUI_STYLES_KEY));
+  const readStoredStyles = async (): Promise<GuiStyle[]> => parseGuiStyles(await bb.storage.kv.get<unknown>(GUI_STYLES_KEY));
+  // Projects are read only after the one-time move of GUI and Characters projects into Roblox games.
+  let gamesMigration: Promise<void> | null = null;
+  function gamesReady(): Promise<void> {
+    gamesMigration ??= migrateGames().catch((error) => {
+      gamesMigration = null;
+      throw error;
+    });
+    return gamesMigration;
+  }
+  const readGuiStyles = async (): Promise<GuiStyle[]> => {
+    await gamesReady();
+    return readStoredStyles();
+  };
   function withGuiStyles<T>(change: (styles: GuiStyle[]) => Promise<T> | T): Promise<T> {
+    return gamesReady().then(() => lockedStyles(change));
+  }
+  function lockedStyles<T>(change: (styles: GuiStyle[]) => Promise<T> | T): Promise<T> {
     return guiLock.run(async () => {
-      const styles = await readGuiStyles();
+      const styles = await readStoredStyles();
       const result = await change(styles);
       await bb.storage.kv.set(GUI_STYLES_KEY, styles);
       bb.realtime.publish(CHANGED, { kind: "gui" });
@@ -1214,17 +1259,18 @@ export default async function plugin(bb: BbPluginApi) {
     });
   }
 
-  async function guiRefUris(style: GuiStyle | null): Promise<string[]> {
+  /** `owners[i]`: the project whose folder holds ref i (a game's GUI project also sends the game's art). */
+  async function guiRefUris(style: GuiStyle | null, owners?: readonly string[]): Promise<string[]> {
     if (!style) return [];
     const uris: string[] = [];
-    for (const ref of style.refs) {
-      const bytes = await readFile(join(guiDir(style.id), ref.filename));
+    for (const [index, ref] of style.refs.entries()) {
+      const bytes = await readFile(join(guiDir(owners?.[index] ?? style.id), ref.filename));
       uris.push(`data:${ref.mimeType};base64,${bytes.toString("base64")}`);
     }
     return uris;
   }
 
-  type GuiExport = { dir: string; mainPath: string; parts?: number; missing: string[] };
+  type GuiExport = { dir: string; mainPath: string; parts?: number; missing: string[]; files?: string[] };
 
   /**
    * GUI pictures are saved at full size (not the 1600px gallery WebP): image-studio/gui/<style>/<id>-<label>/ in the
@@ -1238,12 +1284,14 @@ export default async function plugin(bb: BbPluginApi) {
     projectId: string,
   ): Promise<GuiExport> {
     const characters = gui.section === "characters";
+    const roblox = gui.section === "roblox";
     const folder = `${id}-${slugify(characters ? `${gui.character ?? ""} ${gui.label}` : gui.label, gui.mode)}`;
     const styleFolder = slugify(gui.styleName ?? "", "no-style");
     const sectionFolder = characters ? "characters" : "gui";
+    const base = gui.folder ?? [sectionFolder, styleFolder];
     const dir = input.cwd
-      ? join(input.cwd, "image-studio", sectionFolder, styleFolder, folder)
-      : join(rootDir, "generations", projectId, sectionFolder, folder);
+      ? join(input.cwd, "image-studio", ...base, folder)
+      : join(rootDir, "generations", projectId, ...base, folder);
     const write = async (path: string, bytes: Buffer): Promise<void> => {
       if (input.cwd) {
         await bb.sdk.files.write({
@@ -1261,9 +1309,17 @@ export default async function plugin(bb: BbPluginApi) {
     };
     const mime = sniffImageMime(original);
     const ext = mime === "image/png" ? "png" : mime === "image/jpeg" ? "jpg" : "webp";
-    const mainName = gui.layout ? "sheet" : !characters ? "mockup" : gui.mode === "model" ? "front" : "idea";
+    const mainName = gui.layout ? "sheet" : roblox ? "source" : !characters ? "mockup" : gui.mode === "model" ? "front" : "idea";
     const mainPath = join(dir, `${mainName}.${ext}`);
     await write(mainPath, original);
+    if (roblox && gui.output) {
+      try {
+        return await exportRoblox(input, gui, gui.output, original, dir, ext, write);
+      } catch (error) {
+        warn(`Roblox export failed: ${describe(error)}`);
+        return { dir, mainPath, missing: [] };
+      }
+    }
     if (!gui.layout) return { dir, mainPath, missing: [] };
     if (characters) {
       // White-background sheets: turnaround views go to views/, props to parts/, each on a white square.
@@ -1330,6 +1386,106 @@ export default async function plugin(bb: BbPluginApi) {
     }
   }
 
+  /**
+   * The finished Roblox files next to the picture: exact sizes (icon 512², thumbnail 1920×1080), transparent parts cut
+   * from a green or black sheet and centred on squares, props cut on white for 3D, a tiling texture with its normal
+   * map, the six Sky faces, a flipbook; manifest.json says what each file is for in Studio.
+   */
+  async function exportRoblox(
+    input: RenderInput,
+    gui: NonNullable<RenderInput["gui"]>,
+    output: RobloxOutput,
+    original: Buffer,
+    dir: string,
+    ext: string,
+    write: (path: string, bytes: Buffer) => Promise<void>,
+  ): Promise<GuiExport> {
+    const mainPath = join(dir, gui.layout ? `sheet.${ext}` : `source.${ext}`);
+    const image = await decodeRgba(original);
+    const files: Array<{ name: string; file: string; width: number; height: number; [key: string]: unknown }> = [];
+    const put = async (name: string, file: string, picture: Rgba, extra: Record<string, unknown> = {}) => {
+      await write(join(dir, file), await encodePng(picture));
+      files.push({ name, file, width: picture.width, height: picture.height, ...extra });
+    };
+    let missing: string[] = [];
+    let use = "";
+    switch (output.kind) {
+      case "cover":
+        await put(gui.mode, output.file, opaque(cover(image, output.width, output.height)));
+        use = gui.mode === "icon" ? "Game icon: Creator Dashboard → the experience → Places/Icon (512×512)." : "Thumbnail: Creator Dashboard → the experience → Thumbnails (1920×1080, up to 10).";
+        break;
+      case "limit": {
+        const picture = output.transparent ? trimAlpha(keyGreen(image)) : opaque(image);
+        await put(gui.mode, output.file, limit(picture, output.max));
+        use = gui.mode === "logo" ? "Transparent logo for thumbnails, the loading screen and ImageLabels." : "Decal: upload as an Image/Decal and put it on a part (Decal or SurfaceGui ImageLabel).";
+        break;
+      }
+      case "parts": {
+        const keyed = output.key === "green" ? keyGreen(image) : glowToAlpha(image);
+        const cut = cutSheet(keyed, gui.layout);
+        missing = cut.missing;
+        for (const part of cut.parts) {
+          await put(part.name, `parts/${part.name}.png`, fitSquare(part.image, output.size), part.cell ? { element: part.cell.element } : {});
+        }
+        use =
+          gui.mode === "badges"
+            ? "Badges: Creator Dashboard → Badges → Create (512×512, shown in a circle)."
+            : gui.mode === "passes"
+              ? "Game passes: Creator Dashboard → Passes → Create (512×512, shown in a circle)."
+              : gui.mode === "products"
+                ? "Developer products: Creator Dashboard → Developer Products → Create."
+                : gui.mode === "vfx"
+                  ? "Particle textures: ParticleEmitter/Beam/Trail .Texture; light on black, so LightEmission 1 looks right."
+                  : "Item icons for ImageLabels/ImageButtons (transparent, 256×256).";
+        break;
+      }
+      case "white-parts": {
+        const cut = cutOnWhite(image, gui.layout!);
+        missing = cut.missing;
+        for (const part of cut.parts) {
+          await put(part.name, `parts/${part.name}.png`, part.image, { element: gui.layout!.cells.find((cell) => cell.name === part.name)?.element ?? part.name });
+        }
+        use = "Props for image-to-3D (Hunyuan3D / TRELLIS on gpu3d): each parts/*.png is one model's input picture.";
+        break;
+      }
+      case "texture": {
+        const color = resize(seamless(opaque(image)), output.size, output.size);
+        await put("color", "color.png", color, { property: "SurfaceAppearance.ColorMap / MaterialVariant.ColorMap" });
+        await put("normal", "normal.png", normalMap(color), { property: "SurfaceAppearance.NormalMap / MaterialVariant.NormalMap" });
+        use = "A tiling material: MaterialVariant (StudsPerTile) or SurfaceAppearance; or the color alone as a Texture.";
+        break;
+      }
+      case "skybox": {
+        const faces = skyboxFaces(opaque(image), output.size);
+        for (const face of SKYBOX_FACES) await put(face, `${face}.png`, faces[face], { property: `Sky.${face}` });
+        use = "Sky object in Lighting: each file goes to the Sky property of its name. Turning right: Ft → Rt → Bk → Lf.";
+        break;
+      }
+      case "flipbook": {
+        const side = Math.min(image.width, image.height);
+        const square = cover(image, side, side);
+        await put("flipbook", "flipbook.png", resize(glowToAlpha(square), output.size, output.size), {
+          property: `ParticleEmitter.Texture with FlipbookLayout Grid${output.grid}x${output.grid}`,
+        });
+        use = `ParticleEmitter: Texture = flipbook.png, FlipbookLayout = Grid${output.grid}x${output.grid}, FlipbookMode = Loop.`;
+        break;
+      }
+    }
+    const manifest = {
+      game: gui.styleName,
+      mode: gui.mode,
+      label: gui.label,
+      request: input.recordPrompt ?? null,
+      source: mainPath.split(/[\\/]/).pop(),
+      use,
+      missing,
+      files,
+    };
+    await write(join(dir, "manifest.json"), Buffer.from(JSON.stringify(manifest, null, 2)));
+    const parts = output.kind === "parts" || output.kind === "white-parts" ? files.length : undefined;
+    return { dir, mainPath, missing, files: files.map((file) => join(dir, file.file)), ...(parts !== undefined ? { parts } : {}) };
+  }
+
   /** The jobs of one GUI request. Throws a readable error for an empty or oversized element list. */
   function guiJobs(mode: GuiMode, prompt: string, style: GuiStyle | null, states: boolean): GuiJob[] {
     switch (mode) {
@@ -1359,9 +1515,24 @@ export default async function plugin(bb: BbPluginApi) {
     projectId: string | null;
     name?: string;
     section?: Section;
+    /** A game's GUI or Characters: its linked project, made on first use. */
+    gameId?: string;
   }): Promise<GuiStyle> {
     const section = input.section ?? "gui";
     const inSection = (styles: readonly GuiStyle[]) => styles.filter((style) => style.section === section);
+    if (input.gameId && section !== "roblox") {
+      const gameId = input.gameId;
+      return withGuiStyles((styles) => {
+        const game = styles.find((style) => style.id === gameId && style.section === "roblox");
+        if (!game) throw new Error(`No Roblox game "${gameId}".`);
+        const linked = inSection(styles).filter((style) => style.gameId === game.id).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
+        if (linked) return linked;
+        const created = blankProject(section, game.origin, game.projectId, game.name);
+        created.gameId = game.id;
+        styles.push(created);
+        return created;
+      });
+    }
     if (input.styleId) {
       const found = findGuiStyle(inSection(await readGuiStyles()), input.styleId, input.origin);
       if (!found) throw new Error(`No ${SECTION_WORD[section]} project "${input.styleId}". Run bb image-studio ${section === "gui" ? "gui" : "character"} projects.`);
@@ -1370,31 +1541,61 @@ export default async function plugin(bb: BbPluginApi) {
     return withGuiStyles((styles) => {
       const bound = originProject(inSection(styles), input.origin);
       if (bound) return bound;
-      const now = new Date().toISOString();
-      const created: GuiStyle = {
-        id: randomUUID().slice(0, 8),
-        projectId: input.projectId ?? "unscoped",
-        origin: input.origin,
+      const created = blankProject(
         section,
-        name: (input.name || (input.origin === "unscoped" ? "" : originName(input.origin)) || `${SECTION_WORD[section]} ${inSection(styles).length + 1}`).slice(0, 80),
-        theme: "",
-        tags: [],
-        palette: { background: "", button: "", outline: "", highlight: "", text: "" },
-        notes: "",
-        refs: [],
-        createdAt: now,
-        updatedAt: now,
-      };
+        input.origin,
+        input.projectId ?? "unscoped",
+        input.name || (input.origin === "unscoped" ? "" : originName(input.origin)) || `${SECTION_WORD[section]} ${inSection(styles).length + 1}`,
+      );
+      // A folder that has a Roblox game: its GUI and Characters belong to that game.
+      if (section !== "roblox") created.gameId = originProject(styles.filter((style) => style.section === "roblox"), input.origin)?.id ?? "";
       styles.push(created);
       return created;
     });
+  }
+
+  function blankProject(section: Section, origin: string, projectId: string, name: string): GuiStyle {
+    const now = new Date().toISOString();
+    return {
+      id: randomUUID().slice(0, 8),
+      projectId,
+      origin,
+      section,
+      gameId: "",
+      name: name.slice(0, 80),
+      theme: "",
+      tags: [],
+      palette: { background: "", button: "", outline: "", highlight: "", text: "" },
+      notes: "",
+      refs: [],
+      createdAt: now,
+      updatedAt: now,
+    };
+  }
+
+  /** The game a project belongs to (a game is its own). */
+  async function gameOf(style: GuiStyle): Promise<GuiStyle | null> {
+    if (style.section === "roblox") return style;
+    if (!style.gameId) return null;
+    return (await readGuiStyles()).find((item) => item.id === style.gameId && item.section === "roblox") ?? null;
+  }
+
+  /** Moves the GUI and Characters projects made before games existed into games, once. */
+  async function migrateGames(): Promise<void> {
+    if (await bb.storage.kv.get<boolean>(GAMES_MIGRATED_KEY)) return;
+    await lockedStyles((styles) => {
+      const plan = planGameMigration(styles, new Date().toISOString(), () => randomUUID().slice(0, 8));
+      styles.push(...plan.games);
+      for (const style of styles) if (plan.links[style.id]) style.gameId = plan.links[style.id]!;
+    });
+    await bb.storage.kv.set(GAMES_MIGRATED_KEY, true);
   }
 
   async function runGui(input: {
     projectId: string | null;
     styleId?: string;
     section?: Section;
-    mode: GuiMode | CharacterMode;
+    mode: GuiMode | CharacterMode | RobloxMode;
     prompt: string;
     states: boolean;
     images?: string[];
@@ -1407,19 +1608,45 @@ export default async function plugin(bb: BbPluginApi) {
     hostId?: string;
     /** Name for a project created for this place (BB project name); the folder name otherwise. */
     originLabel?: string;
-  }): Promise<{ generations: Generation[]; errors: string[]; style: GuiStyle | null; jobs: Array<GuiJob | CharacterJob> }> {
+    /** GUI / Characters of this Roblox game. */
+    gameId?: string;
+    /** Roblox: takes, flipbook frames, decal frame. */
+    variants?: number;
+    frames?: number;
+    aspect?: string;
+  }): Promise<{ generations: Generation[]; errors: string[]; style: GuiStyle | null; jobs: Array<GuiJob | CharacterJob | RobloxJob> }> {
     const section = input.section ?? "gui";
-    const modes: readonly string[] = section === "gui" ? GUI_MODES : CHARACTER_MODES;
+    const modes: readonly string[] = section === "gui" ? GUI_MODES : section === "roblox" ? ROBLOX_MODES : CHARACTER_MODES;
     if (!modes.includes(input.mode)) throw new Error(`${SECTION_WORD[section]} modes: ${modes.join(", ")}.`);
     const origin = input.cwd ?? input.projectId ?? "unscoped";
-    const style = await resolveGuiProject({ styleId: input.styleId, origin, projectId: input.projectId, name: input.originLabel, section });
+    const style = await resolveGuiProject({ styleId: input.styleId, origin, projectId: input.projectId, name: input.originLabel, section, gameId: input.gameId });
+    const game = await gameOf(style);
+    // A game's GUI and Characters see the game's theme, art style and approved art.
+    const merged = section !== "roblox" && game ? mergeGameStyle(style, game) : { style, owners: style.refs.map(() => style.id) };
     const run = randomUUID().slice(0, 8);
-    const lead = await guiRefUris(style);
+    const lead = await guiRefUris(merged.style, merged.owners);
     const extra = input.images ?? [];
     const character = section === "characters" ? characterSlug(input.character ?? "", input.prompt) : undefined;
+    // Everything of a game goes to its folder: image-studio/roblox/<game>/<store|gui|characters|…>/.
+    const folder = (mode: string) =>
+      game ? ["roblox", slugify(game.name, "game"), section === "roblox" ? MODE_CATEGORY[mode as RobloxMode] : section] : undefined;
+    const cwd = game && isAbsolute(game.origin) ? game.origin : input.cwd;
     // Character prompts number the user's design pictures themselves; GUI prompts get the general line.
-    const jobs: Array<GuiJob | CharacterJob> =
-      section === "characters"
+    const jobs: Array<GuiJob | CharacterJob | RobloxJob> =
+      section === "roblox"
+        ? robloxJobs(
+            {
+              mode: input.mode as RobloxMode,
+              prompt: input.prompt,
+              variants: input.variants ?? 1,
+              frames: input.frames ?? 16,
+              aspect: input.aspect ?? "1:1",
+              refCount: lead.length,
+              designCount: extra.length,
+            },
+            style,
+          )
+        : section === "characters"
         ? characterJobs(
             input.mode as CharacterMode,
             {
@@ -1431,9 +1658,9 @@ export default async function plugin(bb: BbPluginApi) {
               refCount: lead.length,
               designCount: extra.length,
             },
-            style,
+            merged.style,
           )
-        : guiJobs(input.mode as GuiMode, input.prompt.trim(), style, input.states).map((job) =>
+        : guiJobs(input.mode as GuiMode, input.prompt.trim(), merged.style, input.states).map((job) =>
             extra.length > 0
               ? { ...job, prompt: `${job.prompt}\nImages ${lead.length + 1}–${lead.length + extra.length} are extra references from the user: use them as the request says.` }
               : job,
@@ -1447,10 +1674,10 @@ export default async function plugin(bb: BbPluginApi) {
           recordPrompt: input.prompt.trim() || (input.equipment ?? "").trim() || (input.accessories ?? "").trim() || job.label,
           leadUris: lead,
           images: extra,
-          model: section === "characters" ? CHARACTER_MODEL : GUI_MODEL,
+          model: section === "characters" ? CHARACTER_MODEL : section === "roblox" ? ROBLOX_MODEL : GUI_MODEL,
           gateway: "fal",
           aspectRatio: job.aspectRatio,
-          cwd: input.cwd,
+          cwd,
           hostId: input.hostId,
           gui: {
             styleId: style.id,
@@ -1461,6 +1688,8 @@ export default async function plugin(bb: BbPluginApi) {
             run,
             layout: job.layout,
             ...(character ? { character } : {}),
+            ...(folder(input.mode) ? { folder: folder(input.mode) } : {}),
+            ...("output" in job ? { output: job.output } : {}),
           },
         }),
       ),
@@ -1511,6 +1740,7 @@ export default async function plugin(bb: BbPluginApi) {
         [
           `${record.guiLabel}${record.guiCharacter ? ` (${record.guiCharacter})` : ""}: ${record.projectPath ?? record.filename}`,
           record.guiParts !== undefined ? `  ${record.guiParts} ${sub(record)} in ${record.guiDir}/${sub(record)} (manifest.json beside them)` : null,
+          record.guiFiles?.length && record.guiParts === undefined ? `  ${record.guiFiles.join("\n  ")}\n  (manifest.json beside them says where each goes in Roblox)` : null,
           record.guiMissing?.length ? `  not found on the sheet: ${record.guiMissing.join(", ")}` : null,
         ]
           .filter(Boolean)
@@ -1899,6 +2129,7 @@ export default async function plugin(bb: BbPluginApi) {
         projectId: input.projectId ?? "unscoped",
         origin: input.origin ?? "",
         section: input.section,
+        gameId: "",
         ...fields,
         refs: [],
         createdAt: now,
@@ -1912,6 +2143,8 @@ export default async function plugin(bb: BbPluginApi) {
       const index = styles.findIndex((item) => item.id === id);
       if (index === -1) return { removed: false };
       styles.splice(index, 1);
+      // A deleted game's GUI and Characters projects stay, back in their own tabs.
+      for (const style of styles) if (style.gameId === id) style.gameId = "";
       await rm(guiDir(id), { recursive: true, force: true });
       await bb.storage.kv.set(GUI_GEN_PREFIX + id, []);
       return { removed: true };
@@ -1953,7 +2186,7 @@ export default async function plugin(bb: BbPluginApi) {
     const source = await projectSource(input.projectId);
     const run = await runGui({
       ...input,
-      mode: input.mode as GuiMode | CharacterMode,
+      mode: input.mode as GuiMode | CharacterMode | RobloxMode,
       cwd: source.cwd,
       hostId: source.hostId,
       originLabel: source.name,
@@ -2006,6 +2239,10 @@ export default async function plugin(bb: BbPluginApi) {
     "  bb image-studio character generate --mode ideas|model|turnaround|equipment|accessories [--project <name>] [--name soldier] [--body humanoid|blocky|quadruped|winged|legless]",
     "                                     [--equipment \"rifle; knife\"] [--accessories \"helmet; left pauldron\"] [--image <design picture>]… --prompt <who the character is> [--json]",
     "  bb image-studio character cut --sheet <path> [--grid 1x2 | --items \"rifle; knife\"] [--json]   (re-cut a white sheet; free)",
+    "  bb image-studio roblox projects|project|ref|delete …   (games; the same options as gui; --tags simulator,stylized,lowpoly,…)",
+    "  bb image-studio roblox generate --mode icon|thumbnail|logo|badges|passes|products|items|props|texture|skybox|decal|vfx|flipbook",
+    "                                  [--project <game>] [--variants 1-4] [--frames 4|16] [--aspect 1:1|16:9|…] [--image <path>]… --prompt <what> [--json]",
+    "                                  (list modes take the list in --prompt or --items: \"VIP; 2x Coins\")",
   ].join("\n");
 
   bb.cli.register({
@@ -2046,6 +2283,11 @@ export default async function plugin(bb: BbPluginApi) {
         name: "character",
         summary: "Characters section: game characters for 3D — ideas, an A-pose front view with empty hands, a front-and-back turnaround, held items and worn accessories on their own sheets",
         usage: "bb image-studio character projects|project|ref|generate|cut|delete …",
+      },
+      {
+        name: "roblox",
+        summary: "Roblox games: icon, thumbnails, logo, badges, passes, products, item icons, props for 3D, textures, skyboxes, decals, VFX — fitted to Roblox sizes",
+        usage: "bb image-studio roblox projects|project|ref|generate|delete …",
       },
     ],
     async run(argv, ctx) {
@@ -2275,6 +2517,8 @@ export default async function plugin(bb: BbPluginApi) {
         case "character":
         case "characters":
           return runGuiCommand(argv, ctx, reply, "characters");
+        case "roblox":
+          return runGuiCommand(argv, ctx, reply, "roblox");
         case "generate": {
           const defaults = {
             model: flag(argv, "--model"),
@@ -2386,13 +2630,13 @@ export default async function plugin(bb: BbPluginApi) {
     reply: (value: unknown, text: string) => { exitCode: number; stdout: string },
     section: Section = "gui",
   ) {
-    const command = section === "gui" ? "gui" : argv.includes("character") ? "character" : "characters";
+    const command = section === "gui" ? "gui" : section === "roblox" ? "roblox" : argv.includes("character") ? "character" : "characters";
     const sub = argv[argv.indexOf(command) + 1];
     const projectId = ctx.projectId ?? null;
     const origin = ctx.cwd ?? projectId ?? "unscoped";
     const projectFlag = flag(argv, "--project") ?? flag(argv, "--style");
     const word = SECTION_WORD[section];
-    const presetIds: readonly string[] = section === "gui" ? GUI_PRESET_IDS : CHARACTER_PRESET_IDS;
+    const presetIds: readonly string[] = section === "gui" ? GUI_PRESET_IDS : section === "roblox" ? ROBLOX_PRESET_IDS : CHARACTER_PRESET_IDS;
     // Only this section's projects: a folder has one GUI project and one Characters project.
     const readStyles = async () => (await readGuiStyles()).filter((style) => style.section === section);
     switch (sub) {
@@ -2457,11 +2701,15 @@ export default async function plugin(bb: BbPluginApi) {
         return reply(saved, `Added ${role === "art" ? "an art" : "a concept"} reference to ${saved.name}: ${saved.refs.length} of ${GUI_MAX_REFS}.`);
       }
       case "generate": {
-        const mode = (section === "gui" ? guiModeSchema : characterModeSchema).safeParse(flag(argv, "--mode") ?? "ideas");
+        const mode = (section === "gui" ? guiModeSchema : section === "roblox" ? robloxModeSchema : characterModeSchema).safeParse(
+          flag(argv, "--mode") ?? (section === "roblox" ? "icon" : "ideas"),
+        );
         const body = bodySchema.safeParse(flag(argv, "--body") ?? "humanoid");
         if (!body.success) return { exitCode: 1, stderr: `--body takes ${BODY_TYPES.join(", ")}.` };
-        if (!mode.success) return { exitCode: 1, stderr: `--mode takes ${(section === "gui" ? GUI_MODES : CHARACTER_MODES).join(", ")}.` };
-        const prompt = flag(argv, "--prompt") || restAfter(argv, "generate").replace(/^(?:gui|characters?)\s*/, "");
+        if (!mode.success) return { exitCode: 1, stderr: `--mode takes ${(section === "gui" ? GUI_MODES : section === "roblox" ? ROBLOX_MODES : CHARACTER_MODES).join(", ")}.` };
+        const aspect = flag(argv, "--aspect") ?? "1:1";
+        if (section === "roblox" && !(DECAL_ASPECTS as readonly string[]).includes(aspect)) return { exitCode: 1, stderr: `--aspect takes ${DECAL_ASPECTS.join(", ")}.` };
+        const prompt = flag(argv, "--items") || flag(argv, "--prompt") || restAfter(argv, "generate").replace(/^(?:gui|roblox|characters?)\s*/, "");
         const run = await runGui({
           projectId,
           styleId: projectFlag,
@@ -2474,12 +2722,16 @@ export default async function plugin(bb: BbPluginApi) {
           character: flag(argv, "--name"),
           body: body.data,
           accessories: flag(argv, "--accessories"),
+          variants: Math.max(1, Math.min(MAX_VARIANTS, Number(flag(argv, "--variants") ?? 1) || 1)),
+          frames: Number(flag(argv, "--frames") ?? 16) || 16,
+          aspect,
           cwd: ctx.cwd,
         });
         const out = reply({ generations: run.generations, errors: run.errors }, guiSummary(run));
         return run.generations.length === 0 ? { exitCode: 1, stderr: guiSummary(run) || "Nothing was generated." } : out;
       }
       case "cut": {
+        if (section === "roblox") break;
         const sheet = flag(argv, "--sheet");
         if (!sheet) return { exitCode: 1, stderr: usage };
         const path = isAbsolute(sheet) || !ctx.cwd ? sheet : join(ctx.cwd, sheet);
@@ -2612,6 +2864,51 @@ export default async function plugin(bb: BbPluginApi) {
       } catch (error) {
         if (isStaleHandleError(error) || error instanceof ReloadingError) {
           return { content: [{ type: "text", text: "Image Studio was reloaded while this ran and nothing was saved. Call image_studio_character again." }], isError: true };
+        }
+        return { content: [{ type: "text", text: describe(error) }], isError: true };
+      }
+    },
+  });
+
+  bb.agents.registerTool({
+    name: "image_studio_roblox",
+    description:
+      "Roblox game assets through Image Studio's Roblox section, one game per folder (Muse Image), fitted to what Roblox takes. Modes: icon (512×512), thumbnail (1920×1080), logo (transparent title logo), badges / passes (round-safe 512×512 icons cut from one sheet), products (developer product icons), items (transparent 256×256 item icons), props (props and buildings on white, cut for image-to-3D), texture (seamless color.png + normal.png 1024), skybox (the six Sky faces), decal (a flat picture for a surface), vfx (glowing particle textures, transparent), flipbook (a 2×2 or 4×4 particle animation). Runs at once, no Send form.",
+    instructions:
+      "For Roblox game art call image_studio_roblox: the game icon, thumbnails, logo, badges, game passes, developer products, item icons, props for 3D, textures, skyboxes, decals and particle effects. The game's GUI goes to image_studio_gui and its characters to image_studio_character: in a game's folder they land in that game and share its look. Generations go to the game of this thread's folder (created on first use, named after the folder); pass project only for another game (`bb image-studio roblox projects`). prompt: what the picture shows (icon, thumbnail, decal, flipbook), the surface (texture), the sky (skybox), the name in quotes (logo); for badges, passes, products, items, props and vfx the list, one per line or separated by \";\" (\"VIP; 2x Coins; Speed boost\"). variants 1-4 draws takes of single pictures; frames 4|16 for flipbook; aspect for decal. Do not describe the art style: the plugin adds the game's theme, art style and approved art. Report the finished files (icon.png, thumbnail.png, parts/, SkyboxFt.png…) and manifest.json, which says where each goes in Roblox. Set the look: bb image-studio roblox project --theme … --tags simulator|stylized|lowpoly|realistic|anime|horror|cartoon|voxel; make approved art a reference: bb image-studio roblox ref --image <path>.",
+    presentation: {
+      label: { pending: "Drawing Roblox assets", completed: "Drew Roblox assets" },
+      icon: { glyph: "Palette" },
+    },
+    parameters: z.object({
+      mode: robloxModeSchema,
+      prompt: z.string().default(""),
+      project: z.string().optional(),
+      variants: z.number().int().min(1).max(MAX_VARIANTS).optional(),
+      frames: z.number().int().optional(),
+      aspect: z.enum(DECAL_ASPECTS).optional(),
+      images: z.array(z.string().min(1)).max(4).optional(),
+    }),
+    async execute(input, ctx) {
+      try {
+        const run = await runGui({
+          projectId: ctx.projectId || null,
+          styleId: input.project,
+          section: "roblox",
+          mode: input.mode,
+          prompt: input.prompt,
+          states: false,
+          images: input.images,
+          variants: input.variants,
+          frames: input.frames,
+          aspect: input.aspect,
+          ...(await threadFolder(ctx.threadId, ctx.projectId || null)),
+        });
+        const text = guiSummary(run);
+        return run.generations.length === 0 ? { content: [{ type: "text", text: text || "Nothing was generated." }], isError: true } : text;
+      } catch (error) {
+        if (isStaleHandleError(error) || error instanceof ReloadingError) {
+          return { content: [{ type: "text", text: "Image Studio was reloaded while this ran and nothing was saved. Call image_studio_roblox again." }], isError: true };
         }
         return { content: [{ type: "text", text: describe(error) }], isError: true };
       }
@@ -2762,7 +3059,7 @@ export default async function plugin(bb: BbPluginApi) {
   });
 
   bb.agents.configure(() => ({
-    tools: ["image_studio_generate", "image_studio_gui", "image_studio_character"],
+    tools: ["image_studio_generate", "image_studio_gui", "image_studio_character", "image_studio_roblox"],
     skills: ["image-studio"],
   }));
 
