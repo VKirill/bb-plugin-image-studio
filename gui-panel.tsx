@@ -9,6 +9,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { t } from "./i18n";
 import type { I18nKey, Locale } from "./i18n";
 import { GUI_MAX_REFS, GUI_PRESET_IDS, PALETTE_KEYS, type GuiMode, type GuiStyle, type PaletteKey } from "./src/gui";
+import { CHARACTER_PRESET_IDS, type CharacterMode } from "./src/characters";
 import type { RpcApi } from "./src/rpc-api";
 import { fileToBase64 } from "./lib/files";
 import { mapParallel } from "./src/queue";
@@ -25,22 +26,34 @@ export type GuiItem = {
   height?: number;
   projectPath: string | null;
   guiStyleId?: string | null;
-  guiMode?: GuiMode;
+  guiMode?: GuiMode | CharacterMode;
   guiLabel?: string;
   guiRun?: string;
   guiParts?: number;
   guiMissing?: string[];
   guiDir?: string | null;
+  guiCharacter?: string;
 };
+
+export type Section = "gui" | "characters";
 
 type Draft = Pick<GuiStyle, "name" | "theme" | "tags" | "palette" | "notes">;
 
-const MODES: ReadonlyArray<{ id: GuiMode; label: I18nKey; hint: I18nKey; placeholder: I18nKey }> = [
-  { id: "ideas", label: "guiModeIdeas", hint: "guiHintIdeas", placeholder: "guiPlaceholderIdeas" },
-  { id: "screen", label: "guiModeScreen", hint: "guiHintScreen", placeholder: "guiPlaceholderIdeas" },
-  { id: "elements", label: "guiModeElements", hint: "guiHintElements", placeholder: "guiPlaceholderElements" },
-  { id: "kit", label: "guiModeKit", hint: "guiHintKit", placeholder: "guiPlaceholderKit" },
-];
+type ModeInfo = { id: GuiMode | CharacterMode; label: I18nKey; hint: I18nKey; placeholder: I18nKey };
+const MODES: Record<Section, readonly ModeInfo[]> = {
+  gui: [
+    { id: "ideas", label: "guiModeIdeas", hint: "guiHintIdeas", placeholder: "guiPlaceholderIdeas" },
+    { id: "screen", label: "guiModeScreen", hint: "guiHintScreen", placeholder: "guiPlaceholderIdeas" },
+    { id: "elements", label: "guiModeElements", hint: "guiHintElements", placeholder: "guiPlaceholderElements" },
+    { id: "kit", label: "guiModeKit", hint: "guiHintKit", placeholder: "guiPlaceholderKit" },
+  ],
+  characters: [
+    { id: "ideas", label: "guiModeIdeas", hint: "charHintIdeas", placeholder: "charPlaceholder" },
+    { id: "model", label: "charModeModel", hint: "charHintModel", placeholder: "charPlaceholder" },
+    { id: "turnaround", label: "charModeTurnaround", hint: "charHintTurnaround", placeholder: "charPlaceholder" },
+    { id: "equipment", label: "charModeEquipment", hint: "charHintEquipment", placeholder: "charPlaceholderOwner" },
+  ],
+};
 const PALETTE_LABEL: Record<PaletteKey, I18nKey> = {
   background: "guiPaletteBackground",
   button: "guiPaletteButton",
@@ -76,6 +89,7 @@ function groupRuns(items: readonly GuiItem[]): GuiItem[][] {
 }
 
 export function GuiPanel({
+  section = "gui",
   api,
   projectId,
   styles,
@@ -85,9 +99,11 @@ export function GuiPanel({
   onChanged,
   onOpen,
 }: {
+  /** GUI projects or Characters projects: the same projects machinery, different modes and prompts. */
+  section?: Section;
   api: RpcApi<typeof rpcContract>;
   projectId: string | null;
-  /** All GUI projects, most recently used first. */
+  /** This section's projects, most recently used first. */
   styles: GuiStyle[];
   /** Bumped by the parent on every change event, so the open project's list reloads. */
   version: number;
@@ -103,8 +119,11 @@ export function GuiPanel({
   const [draft, setDraft] = useState<Draft>(draftOf(style));
   const [items, setItems] = useState<GuiItem[]>([]);
   const [thumbs, setThumbs] = useState<Record<string, string>>({});
-  const [mode, setMode] = useState<GuiMode>("ideas");
+  const [mode, setMode] = useState<GuiMode | CharacterMode>("ideas");
   const [prompt, setPrompt] = useState("");
+  const [equipment, setEquipment] = useState("");
+  const [character, setCharacter] = useState("");
+  const characters = section === "characters";
   const [states, setStates] = useState(false);
   const [running, setRunning] = useState(0);
   const [refPreviews, setRefPreviews] = useState<Record<string, string>>({});
@@ -159,13 +178,15 @@ export function GuiPanel({
   }, [styles, api]);
 
   const ordered = groupRuns(items).flat();
-  const modeInfo = MODES.find((item) => item.id === mode)!;
-  const needsPrompt = mode !== "kit";
+  const modeInfo = MODES[section].find((item) => item.id === mode) ?? MODES[section][0]!;
+  const needsPrompt = characters ? (mode === "equipment" ? equipment.trim() !== "" : true) : mode !== "kit";
+  const ready = characters && mode === "equipment" ? equipment.trim() !== "" : !needsPrompt || prompt.trim() !== "";
 
   const saveDraft = async () => {
     const saved = await api.save_gui_style({
       id: creating ? undefined : styleId || undefined,
       projectId,
+      section,
       name: draft.name.trim() || t("guiNewStyle", {}, locale),
       theme: draft.theme,
       tags: draft.tags,
@@ -200,11 +221,32 @@ export function GuiPanel({
     onChanged();
   };
 
-  const generate = () => {
-    if (needsPrompt && prompt.trim() === "") return;
+  const generate = (override?: { mode: CharacterMode; item: GuiItem }) => {
+    if (!override && !ready) return;
+    const runMode = override?.mode ?? mode;
+    // From a picture: its description and name carry over, the picture becomes the design reference.
+    const description = override ? prompt.trim() || override.item.prompt : prompt.trim();
+    if (override?.mode === "equipment" && equipment.trim() === "") {
+      onError(t("charNeedEquipment", {}, locale));
+      return;
+    }
     setRunning((count) => count + 1);
     api
-      .gui_generate({ projectId, styleId: styleId || undefined, mode, prompt: prompt.trim(), states: mode === "elements" && states })
+      .gui_generate({
+        projectId,
+        styleId: styleId || undefined,
+        section,
+        mode: runMode,
+        prompt: description,
+        states: runMode === "elements" && states,
+        ...(characters
+          ? {
+              equipment: equipment.trim(),
+              character: character.trim() || override?.item.guiCharacter || "",
+              images: override ? [override.item.id] : [],
+            }
+          : {}),
+      })
       .then((result) => {
         if (result.errors.length > 0) onError(result.errors.join(" | "));
         const made = result.generations[0]?.guiStyleId;
@@ -225,12 +267,13 @@ export function GuiPanel({
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto box-border flex w-full max-w-5xl flex-col gap-4 px-4 pb-6 pt-3 md:px-5 md:pt-4">
           <div className="flex flex-wrap items-center gap-2">
-            <h1 className="mr-2 text-xl font-medium">{t("tabGui", {}, locale)}</h1>
+            <h1 className="mr-2 text-xl font-medium">{t(characters ? "tabCharacters" : "tabGui", {}, locale)}</h1>
             <ProjectPicker
               styles={styles}
               value={styleId}
               creating={creating}
               locale={locale}
+              heading={t(characters ? "charProjects" : "guiProjects", {}, locale)}
               onPick={(id) => {
                 setCreating(false);
                 setStyleId(id);
@@ -257,7 +300,7 @@ export function GuiPanel({
 
           {styles.length === 0 && !creating ? (
             <p className="rounded-lg border border-dashed border-border px-4 py-3 text-sm text-muted-foreground">
-              {t("guiNoStyles", {}, locale)}
+              {t(characters ? "charNoStyles" : "guiNoStyles", {}, locale)}
             </p>
           ) : null}
 
@@ -281,14 +324,14 @@ export function GuiPanel({
                   <span className="text-xs text-muted-foreground">{t("guiTheme", {}, locale)}</span>
                   <Input
                     value={draft.theme}
-                    placeholder={t("guiThemePlaceholder", {}, locale)}
+                    placeholder={t(characters ? "charThemePlaceholder" : "guiThemePlaceholder", {}, locale)}
                     onChange={(event) => setDraft({ ...draft, theme: event.target.value })}
                   />
                 </label>
                 <div className="flex flex-col gap-1">
                   <span className="text-xs text-muted-foreground">{t("guiPresets", {}, locale)}</span>
                   <div className="flex flex-wrap gap-1.5">
-                    {GUI_PRESET_IDS.map((preset) => (
+                    {(characters ? CHARACTER_PRESET_IDS : GUI_PRESET_IDS).map((preset) => (
                       <Button
                         key={preset}
                         type="button"
@@ -303,7 +346,7 @@ export function GuiPanel({
                     ))}
                   </div>
                 </div>
-                <div className="flex flex-col gap-1">
+                {characters ? null : <div className="flex flex-col gap-1">
                   <span className="text-xs text-muted-foreground">{t("guiPalette", {}, locale)}</span>
                   <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
                     {PALETTE_KEYS.map((key) => (
@@ -332,25 +375,25 @@ export function GuiPanel({
                       </div>
                     ))}
                   </div>
-                </div>
+                </div>}
                 <label className="flex flex-col gap-1">
                   <span className="text-xs text-muted-foreground">{t("guiNotes", {}, locale)}</span>
                   <Input
                     value={draft.notes}
-                    placeholder={t("guiNotesPlaceholder", {}, locale)}
+                    placeholder={t(characters ? "charNotesPlaceholder" : "guiNotesPlaceholder", {}, locale)}
                     onChange={(event) => setDraft({ ...draft, notes: event.target.value })}
                   />
                 </label>
                 {style && !creating ? (
                   <div className="flex flex-col gap-1">
                     <span className="text-xs text-muted-foreground">{t("guiRefs", {}, locale)}</span>
-                    <p className="text-xs text-muted-foreground">{t("guiRefsHint", { max: GUI_MAX_REFS }, locale)}</p>
+                    <p className="text-xs text-muted-foreground">{t(characters ? "charRefsHint" : "guiRefsHint", { max: GUI_MAX_REFS }, locale)}</p>
                     <div className="flex flex-wrap gap-2">
                       {style.refs.map((ref) => (
                         <div key={ref.id} className="relative h-20 w-28 overflow-hidden rounded-md border border-border bg-muted">
                           {refPreviews[ref.id] ? <img src={refPreviews[ref.id]} alt="" className="h-full w-full object-cover" /> : null}
                           <span className="absolute bottom-1 left-1 rounded bg-background/85 px-1 text-[10px]">
-                            {t(ref.role === "art" ? "guiRoleArt" : "guiRoleConcept", {}, locale)}
+                            {t(ref.role === "art" ? "guiRoleArt" : characters ? "charRoleConcept" : "guiRoleConcept", {}, locale)}
                           </span>
                           <button
                             type="button"
@@ -426,7 +469,15 @@ export function GuiPanel({
                           <span className="block w-full" style={{ aspectRatio: ratio }} />
                         )}
                       </button>
-                      {item.guiMode === "ideas" || item.guiMode === "screen" ? (
+                      {characters ? (
+                        <CharacterActions
+                          item={item}
+                          locale={locale}
+                          refsFull={style.refs.length >= GUI_MAX_REFS}
+                          onReference={() => void makeReference(item).catch(onError)}
+                          onRun={(next) => generate({ mode: next, item })}
+                        />
+                      ) : item.guiMode === "ideas" || item.guiMode === "screen" ? (
                         <button
                           type="button"
                           className="absolute right-1.5 top-1.5 rounded-md bg-background/85 p-1.5 shadow-sm transition-opacity disabled:opacity-40 md:opacity-0 md:group-hover:opacity-100 md:focus-visible:opacity-100"
@@ -455,7 +506,7 @@ export function GuiPanel({
         }}
       >
         <div className="flex flex-wrap items-center gap-1" role="group">
-          {MODES.map((item) => (
+          {MODES[section].map((item) => (
             <Button
               key={item.id}
               type="button"
@@ -482,6 +533,25 @@ export function GuiPanel({
             }
           }}
         />
+        {characters ? (
+          <div className="flex flex-wrap gap-2">
+            <Input
+              className="w-40"
+              value={character}
+              maxLength={80}
+              placeholder={t("charName", {}, locale)}
+              aria-label={t("charName", {}, locale)}
+              onChange={(event) => setCharacter(event.target.value)}
+            />
+            <Input
+              className="min-w-[12rem] flex-1"
+              value={equipment}
+              placeholder={t("charEquipmentPlaceholder", {}, locale)}
+              aria-label={t("charEquipment", {}, locale)}
+              onChange={(event) => setEquipment(event.target.value)}
+            />
+          </div>
+        ) : null}
         <div className="flex flex-wrap items-center justify-between gap-2">
           {mode === "elements" ? (
             <label className="flex items-center gap-2 text-sm">
@@ -491,12 +561,52 @@ export function GuiPanel({
           ) : (
             <span />
           )}
-          <Button type="submit" disabled={(needsPrompt && prompt.trim() === "") || creating}>
+          <Button type="submit" disabled={!ready || creating}>
             {running > 0 ? <Icon name="Loading" className="size-4 animate-spin" /> : <Icon name="Palette" className="size-4" />}
             {running > 0 ? `${t("guiGenerating", {}, locale)} (${running})` : t("guiGenerate", {}, locale)}
           </Button>
         </div>
       </form>
+    </div>
+  );
+}
+
+/** Hover actions on a character picture: make it a style reference, or take it to the next step with it as the design. */
+function CharacterActions({
+  item,
+  locale,
+  refsFull,
+  onReference,
+  onRun,
+}: {
+  item: GuiItem;
+  locale: Locale;
+  refsFull: boolean;
+  onReference: () => void;
+  onRun: (mode: CharacterMode) => void;
+}) {
+  const next: ReadonlyArray<{ mode: CharacterMode; icon: "ArrowRight" | "RotateCcw" | "PackageReceive"; label: I18nKey }> =
+    item.guiMode === "ideas"
+      ? [
+          { mode: "model", icon: "ArrowRight", label: "charToModel" },
+          { mode: "equipment", icon: "PackageReceive", label: "charToEquipment" },
+        ]
+      : item.guiMode === "model"
+        ? [{ mode: "turnaround", icon: "RotateCcw", label: "charToTurnaround" }]
+        : [];
+  if (item.guiMode !== "ideas" && item.guiMode !== "model") return null;
+  const button =
+    "rounded-md bg-background/85 p-1.5 shadow-sm transition-opacity disabled:opacity-40 md:opacity-0 md:group-hover:opacity-100 md:focus-visible:opacity-100";
+  return (
+    <div className="absolute right-1.5 top-1.5 flex gap-1">
+      {next.map((action) => (
+        <button key={action.mode} type="button" className={button} title={t(action.label, {}, locale)} aria-label={t(action.label, {}, locale)} onClick={() => onRun(action.mode)}>
+          <Icon name={action.icon} className="size-4" />
+        </button>
+      ))}
+      <button type="button" className={button} title={t("guiUseRef", {}, locale)} aria-label={t("guiUseRef", {}, locale)} disabled={refsFull} onClick={onReference}>
+        <Icon name="Star" className="size-4" />
+      </button>
     </div>
   );
 }
@@ -507,6 +617,7 @@ function ProjectPicker({
   value,
   creating,
   locale,
+  heading,
   onPick,
   onNew,
 }: {
@@ -514,6 +625,7 @@ function ProjectPicker({
   value: string;
   creating: boolean;
   locale: Locale;
+  heading: string;
   onPick: (id: string) => void;
   onNew: () => void;
 }) {
@@ -527,7 +639,7 @@ function ProjectPicker({
           variant="outline"
           role="combobox"
           aria-expanded={open}
-          aria-label={t("guiProjects", {}, locale)}
+          aria-label={heading}
           className="h-9 min-w-[12rem] max-w-full justify-between gap-2 px-3 font-normal"
         >
           <span className="min-w-0 truncate">
@@ -536,13 +648,13 @@ function ProjectPicker({
           <Icon name="ChevronDown" className="size-4 shrink-0 opacity-50" />
         </Button>
       </PopoverTrigger>
-      <PopoverContent align="start" className="w-[min(22rem,calc(100vw-2rem))] p-0" mobileTitle={t("guiProjects", {}, locale)}>
+      <PopoverContent align="start" className="w-[min(22rem,calc(100vw-2rem))] p-0" mobileTitle={heading}>
         <Command>
           <CommandInput placeholder={t("guiSearchProjects", {}, locale)} />
           <CommandList>
             <CommandEmpty>{t("guiNoMatch", {}, locale)}</CommandEmpty>
             {styles.length > 0 ? (
-              <CommandGroup heading={t("guiProjects", {}, locale)}>
+              <CommandGroup heading={heading}>
                 {styles.map((item) => (
                   <CommandItem
                     key={item.id}

@@ -28,7 +28,7 @@ import { rpcApi } from "./src/rpc-api";
 import { fileToBase64 } from "./lib/files";
 import { GuiPanel, type GuiItem } from "./gui-panel";
 
-type Tab = "settings" | "people" | "gallery" | "gui";
+type Tab = "settings" | "people" | "gallery" | "gui" | "characters";
 type UiLocale = "auto" | "en" | "ru";
 type PhotoSlotId = SlotId;
 /** The three face slots one multi-file pick fills, in order. */
@@ -67,7 +67,7 @@ type GenerationItem = {
   height?: number;
   projectPath: string | null;
   guiStyleId?: string | null;
-  guiMode?: "ideas" | "screen" | "elements" | "kit";
+  guiMode?: "ideas" | "screen" | "elements" | "kit" | "model" | "turnaround" | "equipment";
   guiLabel?: string;
   guiParts?: number;
   guiMissing?: string[];
@@ -1105,9 +1105,10 @@ function StudioPage({ initialView = "gallery" }: { initialView?: Tab }) {
   const falOnlySelected = modelFalOnly(selectedModel);
   const kieOnlySelected = modelKieOnly(selectedModel);
 
-  const navItems: Array<{ id: Tab; icon: "GridView" | "Layers" | "UserRound" | "Settings"; label: string }> = [
+  const navItems: Array<{ id: Tab; icon: "GridView" | "Layers" | "Puzzle" | "UserRound" | "Settings"; label: string }> = [
     { id: "gallery", icon: "GridView", label: t("tabGallery", {}, locale) },
     { id: "gui", icon: "Layers", label: t("tabGui", {}, locale) },
+    { id: "characters", icon: "Puzzle", label: t("tabCharacters", {}, locale) },
     { id: "people", icon: "UserRound", label: t("tabProfiles", {}, locale) },
     { id: "settings", icon: "Settings", label: t("tabSettings", {}, locale) },
   ];
@@ -1308,7 +1309,7 @@ function StudioPage({ initialView = "gallery" }: { initialView?: Tab }) {
               />
             ) : null}
           </>
-        ) : tab === "gui" ? (
+        ) : tab === "gui" || tab === "characters" ? (
           <>
             {error ? (
               <p role="alert" className="border-b border-border px-4 py-2 text-sm text-destructive">
@@ -1316,9 +1317,11 @@ function StudioPage({ initialView = "gallery" }: { initialView?: Tab }) {
               </p>
             ) : null}
             <GuiPanel
+              key={tab}
+              section={tab}
               api={api}
               projectId={projectId ?? null}
-              styles={guiStyles}
+              styles={guiStyles.filter((style) => style.section === tab)}
               version={guiVersion}
               locale={locale}
               onError={report}

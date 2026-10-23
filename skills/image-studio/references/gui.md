@@ -13,7 +13,10 @@ bb image-studio gui projects [--json]            # * marks this folder's project
 bb image-studio gui project --theme "vampires vs humans, night" --tags cartoon,gothic --palette button=#C0203A,outline=#2A1238
 bb image-studio gui project --name "Vampire night"   # bind an existing project to this folder / create one with that name
 bb image-studio gui ref --image image-studio/gui/<project>/<id>-idea-2/mockup.png
+bb image-studio gui delete --project <name>          # its list and references; saved files stay
 ```
+
+Game characters for 3D have their own section with the same kind of projects: [characters.md](characters.md).
 
 Pass `--project <name>` (tool: `project`) only to write into a project other than this folder's.
 

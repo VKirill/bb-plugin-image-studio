@@ -36,6 +36,8 @@ export const guiStyleSchema = z.object({
   projectId: z.string(),
   /** The folder (or BB project) whose generations go here when no project is named. */
   origin: z.string().default(""),
+  /** Which section the project belongs to: game/site interface, or game characters for 3D. */
+  section: z.enum(["gui", "characters"]).default("gui"),
   name: z.string(),
   theme: z.string().default(""),
   tags: z.array(z.string()).default([]),

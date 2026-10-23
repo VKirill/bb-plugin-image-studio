@@ -16,6 +16,7 @@ Generate project photos in BB through [fal.ai](https://fal.ai/) and [kie.ai](htt
 - **Generate in chat** — ask the agent for a photo. It opens a Send form with the last model, aspect ratio, and size. Change them, then Send. The agent must call `image_studio_generate`, not `bb image-studio generate`.
 - **People profiles** — name, body, and a labeled **reference sheet**: face (front, 3/4 left, 3/4 right, profile, smile), body in fitted clothing (front, side, back), and close-ups (hands, chest, waist, legs, buttocks, moles/tattoos, hair from behind). Each generation sends only the slots the prompt needs, within the model's image cap, so the same face and body carry across models. **Build sheet** generates the missing slots from the front face; results wait as candidates you accept. Profiles are shared across projects; outputs are per project. Older profiles migrate automatically: selfies become the first three face slots, the manicure becomes hands.
 - **GUI** — interface work in **GUI projects**: generations from a folder go to that folder's project (created on first use, named after the folder), each with its own history grouped by request. A project also holds the theme, presets (cartoon, gothic, fantasy, sci-fi, horror, cozy, minimal, crystal, pixel), a five-colour palette, extra rules and up to six approved reference pictures, all added to every GUI prompt. Modes: **Ideas ×4** (four mockups of a screen: four directions for a fresh style, four takes inside a fixed one), **Screen**, **Elements** (a list drawn on a green-key sheet in a strict grid and cut into transparent PNGs named after the elements, optionally with normal / hover / pressed / disabled states) and **UI kit** (frame, panel, buttons, tabs, slider, toggles, checkbox, slots, bars in two cut sheets). Always Muse Image, English labels, full-size files in `image-studio/gui/<project>/` with `manifest.json`. Agents use the `image_studio_gui` tool or `bb image-studio gui …`.
+- **Characters** — game characters for 3D in **Characters projects** (one per folder, like GUI: theme, presets stylized / blocky / chibi / lowpoly / realistic / toon / painted, extra rules, up to six approved characters as references). Modes: **Ideas ×4** (full-body concepts, may hold their equipment), **3D front** (the image-to-3D and rigging input: orthographic front view, symmetric A-pose, empty hands, white background), **Turnaround** (front, right, back, left in one row, cut into `views/*.png`) and **Equipment** (held items alone on one sheet, side view, cut into `parts/*.png`). Held items are never drawn on the body, so a weapon does not grow into the mesh. Each picture can start the next step from the panel. Files in `image-studio/characters/<project>/`. Agents use the `image_studio_character` tool or `bb image-studio character …`.
 
 ![Person profile with selfie slots and body fields](screenshots/profiles.png)
 
@@ -23,7 +24,7 @@ Generate project photos in BB through [fal.ai](https://fal.ai/) and [kie.ai](htt
 
 ![Settings: models, language, and API keys](screenshots/settings.png)
 
-On a phone, Gallery / GUI / Profiles / Settings sit in a bottom bar so the prompt field stays usable.
+On a phone, Gallery / GUI / Characters / Profiles / Settings sit in a bottom bar so the prompt field stays usable.
 
 ## Install
 

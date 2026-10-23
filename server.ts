@@ -78,6 +78,19 @@ import {
   type GuiStyle,
   type SheetLayout,
 } from "./src/gui.js";
+import {
+  CHARACTER_MODEL,
+  CHARACTER_MODES,
+  CHARACTER_PRESET_IDS,
+  MAX_EQUIPMENT,
+  TURNAROUND_VIEWS,
+  characterJobs,
+  characterSlug,
+  cutOnWhite,
+  parseEquipment,
+  type CharacterJob,
+  type CharacterMode,
+} from "./src/characters.js";
 import { decodeRgba, encodePng } from "./src/image-io.js";
 import { enabledFromSettings, mergeSettings, settingsSchema, type StudioSettings } from "./src/settings.js";
 import {
@@ -110,6 +123,11 @@ export type { Generation } from "./src/generation.js";
 
 const paletteInputSchema = guiStyleSchema.shape.palette;
 const guiModeSchema = z.enum(GUI_MODES);
+const characterModeSchema = z.enum(CHARACTER_MODES);
+const sectionSchema = z.enum(["gui", "characters"]);
+type Section = z.infer<typeof sectionSchema>;
+/** "GUI project" / "Characters project": the word the CLI and the tools use for a section. */
+const SECTION_WORD: Record<Section, string> = { gui: "GUI", characters: "Characters" };
 const guiResultSchema = z.object({
   generations: z.array(generationSchema),
   errors: z.array(z.string()),
@@ -148,6 +166,8 @@ export const rpcContract = defineRpcContract({
       projectId: z.string().nullable(),
       /** Bind a new project to a folder (CLI); panel-made projects stay unbound. */
       origin: z.string().optional(),
+      /** A new project's section; an existing project keeps its own. */
+      section: sectionSchema.default("gui"),
       name: z.string().trim().min(1).max(80),
       theme: z.string().max(2000).default(""),
       tags: z.array(z.string().max(300)).max(12).default([]),
@@ -189,10 +209,16 @@ export const rpcContract = defineRpcContract({
     input: z.object({
       projectId: z.string().nullable(),
       styleId: z.string().optional(),
-      mode: guiModeSchema,
+      section: sectionSchema.default("gui"),
+      /** GUI: ideas | screen | elements | kit. Characters: ideas | model | turnaround | equipment. */
+      mode: z.enum([...new Set([...GUI_MODES, ...CHARACTER_MODES])] as [string, ...string[]]),
       prompt: z.string().trim().max(8000).default(""),
       /** Elements: every element in its four states (normal, hover, pressed, disabled). */
       states: z.boolean().default(false),
+      /** Characters: held items (left out of model/turnaround, drawn by equipment), the file name, design pictures. */
+      equipment: z.string().max(2000).default(""),
+      character: z.string().max(80).default(""),
+      images: z.array(z.string().min(1)).max(4).default([]),
     }),
     output: guiResultSchema,
   },
@@ -785,7 +811,17 @@ export default async function plugin(bb: BbPluginApi) {
     leadUris?: string[];
     /** What the gallery shows as the prompt, when `prompt` is a composed one. */
     recordPrompt?: string;
-    gui?: { styleId: string | null; styleName: string | null; mode: GuiMode; label: string; run: string; layout?: SheetLayout };
+    gui?: {
+      styleId: string | null;
+      styleName: string | null;
+      section?: Section;
+      mode: GuiMode | CharacterMode;
+      label: string;
+      run: string;
+      layout?: SheetLayout;
+      /** Characters: the character's file name. */
+      character?: string;
+    };
   };
 
   type Rendered = {
@@ -1070,6 +1106,7 @@ export default async function plugin(bb: BbPluginApi) {
             guiDir: guiOut?.dir ?? null,
             ...(guiOut?.parts !== undefined ? { guiParts: guiOut.parts } : {}),
             ...(guiOut && guiOut.missing.length > 0 ? { guiMissing: guiOut.missing } : {}),
+            ...(input.gui.character ? { guiCharacter: input.gui.character } : {}),
           }
         : {}),
     };
@@ -1194,11 +1231,13 @@ export default async function plugin(bb: BbPluginApi) {
     id: string,
     projectId: string,
   ): Promise<GuiExport> {
-    const folder = `${id}-${slugify(gui.label, gui.mode)}`;
+    const characters = gui.section === "characters";
+    const folder = `${id}-${slugify(characters ? `${gui.character ?? ""} ${gui.label}` : gui.label, gui.mode)}`;
     const styleFolder = slugify(gui.styleName ?? "", "no-style");
+    const sectionFolder = characters ? "characters" : "gui";
     const dir = input.cwd
-      ? join(input.cwd, "image-studio", "gui", styleFolder, folder)
-      : join(rootDir, "generations", projectId, "gui", folder);
+      ? join(input.cwd, "image-studio", sectionFolder, styleFolder, folder)
+      : join(rootDir, "generations", projectId, sectionFolder, folder);
     const write = async (path: string, bytes: Buffer): Promise<void> => {
       if (input.cwd) {
         await bb.sdk.files.write({
@@ -1216,9 +1255,42 @@ export default async function plugin(bb: BbPluginApi) {
     };
     const mime = sniffImageMime(original);
     const ext = mime === "image/png" ? "png" : mime === "image/jpeg" ? "jpg" : "webp";
-    const mainPath = join(dir, `${gui.layout ? "sheet" : "mockup"}.${ext}`);
+    const mainName = gui.layout ? "sheet" : !characters ? "mockup" : gui.mode === "model" ? "front" : "idea";
+    const mainPath = join(dir, `${mainName}.${ext}`);
     await write(mainPath, original);
     if (!gui.layout) return { dir, mainPath, missing: [] };
+    if (characters) {
+      // White-background sheets: turnaround views go to views/, props to parts/, each on a white square.
+      try {
+        const sub = gui.mode === "turnaround" ? "views" : "parts";
+        const cut = cutOnWhite(await decodeRgba(original), gui.layout);
+        for (const part of cut.parts) await write(join(dir, sub, `${part.name}.png`), await encodePng(part.image));
+        const manifest = {
+          project: gui.styleName,
+          character: gui.character ?? null,
+          mode: gui.mode,
+          request: input.recordPrompt ?? null,
+          sheet: `sheet.${ext}`,
+          grid: { rows: gui.layout.rows, cols: gui.layout.cols },
+          evenSplit: cut.even,
+          missing: cut.missing,
+          [sub]: cut.parts.map((part) => ({
+            name: part.name,
+            file: `${sub}/${part.name}.png`,
+            element: gui.layout!.cells.find((cell) => cell.name === part.name)?.element ?? part.name,
+            x: part.box.x0,
+            y: part.box.y0,
+            width: part.box.x1 - part.box.x0,
+            height: part.box.y1 - part.box.y0,
+          })),
+        };
+        await write(join(dir, "manifest.json"), Buffer.from(JSON.stringify(manifest, null, 2)));
+        return { dir, mainPath, parts: cut.parts.length, missing: cut.missing };
+      } catch (error) {
+        warn(`character sheet cut failed: ${describe(error)}`);
+        return { dir, mainPath, missing: [] };
+      }
+    }
     try {
       const cut = cutSheet(keyGreen(await decodeRgba(original)), gui.layout);
       for (const part of cut.parts) await write(join(dir, "parts", `${part.name}.png`), await encodePng(part.image));
@@ -1272,21 +1344,30 @@ export default async function plugin(bb: BbPluginApi) {
    * The project a run writes to: the named one; else the latest project bound to this folder (or BB project);
    * else a new project named after the folder. "Make GUI from this place" therefore always lands in one project.
    */
-  async function resolveGuiProject(input: { styleId?: string; origin: string; projectId: string | null; name?: string }): Promise<GuiStyle> {
+  async function resolveGuiProject(input: {
+    styleId?: string;
+    origin: string;
+    projectId: string | null;
+    name?: string;
+    section?: Section;
+  }): Promise<GuiStyle> {
+    const section = input.section ?? "gui";
+    const inSection = (styles: readonly GuiStyle[]) => styles.filter((style) => style.section === section);
     if (input.styleId) {
-      const found = findGuiStyle(await readGuiStyles(), input.styleId, input.origin);
-      if (!found) throw new Error(`No GUI project "${input.styleId}". Run bb image-studio gui projects.`);
+      const found = findGuiStyle(inSection(await readGuiStyles()), input.styleId, input.origin);
+      if (!found) throw new Error(`No ${SECTION_WORD[section]} project "${input.styleId}". Run bb image-studio ${section === "gui" ? "gui" : "character"} projects.`);
       return found;
     }
     return withGuiStyles((styles) => {
-      const bound = originProject(styles, input.origin);
+      const bound = originProject(inSection(styles), input.origin);
       if (bound) return bound;
       const now = new Date().toISOString();
       const created: GuiStyle = {
         id: randomUUID().slice(0, 8),
         projectId: input.projectId ?? "unscoped",
         origin: input.origin,
-        name: (input.name || (input.origin === "unscoped" ? "" : originName(input.origin)) || `GUI ${styles.length + 1}`).slice(0, 80),
+        section,
+        name: (input.name || (input.origin === "unscoped" ? "" : originName(input.origin)) || `${SECTION_WORD[section]} ${inSection(styles).length + 1}`).slice(0, 80),
         theme: "",
         tags: [],
         palette: { background: "", button: "", outline: "", highlight: "", text: "" },
@@ -1303,39 +1384,71 @@ export default async function plugin(bb: BbPluginApi) {
   async function runGui(input: {
     projectId: string | null;
     styleId?: string;
-    mode: GuiMode;
+    section?: Section;
+    mode: GuiMode | CharacterMode;
     prompt: string;
     states: boolean;
     images?: string[];
+    /** Characters: held items and the file name. */
+    equipment?: string;
+    character?: string;
     cwd?: string;
     hostId?: string;
     /** Name for a project created for this place (BB project name); the folder name otherwise. */
     originLabel?: string;
-  }): Promise<{ generations: Generation[]; errors: string[]; style: GuiStyle | null; jobs: GuiJob[] }> {
+  }): Promise<{ generations: Generation[]; errors: string[]; style: GuiStyle | null; jobs: Array<GuiJob | CharacterJob> }> {
+    const section = input.section ?? "gui";
+    const modes: readonly string[] = section === "gui" ? GUI_MODES : CHARACTER_MODES;
+    if (!modes.includes(input.mode)) throw new Error(`${SECTION_WORD[section]} modes: ${modes.join(", ")}.`);
     const origin = input.cwd ?? input.projectId ?? "unscoped";
-    const style = await resolveGuiProject({ styleId: input.styleId, origin, projectId: input.projectId, name: input.originLabel });
+    const style = await resolveGuiProject({ styleId: input.styleId, origin, projectId: input.projectId, name: input.originLabel, section });
     const run = randomUUID().slice(0, 8);
     const lead = await guiRefUris(style);
     const extra = input.images ?? [];
-    const jobs = guiJobs(input.mode, input.prompt.trim(), style, input.states);
+    const character = section === "characters" ? characterSlug(input.character ?? "", input.prompt) : undefined;
+    // Character prompts number the user's design pictures themselves; GUI prompts get the general line.
+    const jobs: Array<GuiJob | CharacterJob> =
+      section === "characters"
+        ? characterJobs(
+            input.mode as CharacterMode,
+            {
+              description: input.prompt.trim(),
+              equipment: parseEquipment(input.equipment),
+              name: character!,
+              refCount: lead.length,
+              designCount: extra.length,
+            },
+            style,
+          )
+        : guiJobs(input.mode as GuiMode, input.prompt.trim(), style, input.states).map((job) =>
+            extra.length > 0
+              ? { ...job, prompt: `${job.prompt}\nImages ${lead.length + 1}–${lead.length + extra.length} are extra references from the user: use them as the request says.` }
+              : job,
+          );
     const results = await Promise.allSettled(
       jobs.map((job) =>
         runGenerate({
           projectId: input.projectId,
-          prompt:
-            extra.length > 0
-              ? `${job.prompt}\nImages ${lead.length + 1}–${lead.length + extra.length} are extra references from the user: use them as the request says.`
-              : job.prompt,
+          prompt: job.prompt,
           rawPrompt: true,
-          recordPrompt: input.prompt.trim() || job.label,
+          recordPrompt: input.prompt.trim() || (input.equipment ?? "").trim() || job.label,
           leadUris: lead,
           images: extra,
-          model: GUI_MODEL,
+          model: section === "characters" ? CHARACTER_MODEL : GUI_MODEL,
           gateway: "fal",
           aspectRatio: job.aspectRatio,
           cwd: input.cwd,
           hostId: input.hostId,
-          gui: { styleId: style.id, styleName: style.name, mode: input.mode, label: job.label, run, layout: job.layout },
+          gui: {
+            styleId: style.id,
+            styleName: style.name,
+            section,
+            mode: input.mode,
+            label: job.label,
+            run,
+            layout: job.layout,
+            ...(character ? { character } : {}),
+          },
         }),
       ),
     );
@@ -1378,12 +1491,13 @@ export default async function plugin(bb: BbPluginApi) {
   }
 
   function guiSummary(run: { generations: Generation[]; errors: string[]; style?: GuiStyle | null }): string {
+    const sub = (record: Generation) => (record.guiMode === "turnaround" ? "views" : "parts");
     return [
-      ...(run.style ? [`GUI project: ${run.style.name} (${run.style.id})`] : []),
+      ...(run.style ? [`${SECTION_WORD[run.style.section]} project: ${run.style.name} (${run.style.id})`] : []),
       ...run.generations.map((record) =>
         [
-          `${record.guiLabel}: ${record.projectPath ?? record.filename}`,
-          record.guiParts !== undefined ? `  ${record.guiParts} parts in ${record.guiDir}/parts (manifest.json beside them)` : null,
+          `${record.guiLabel}${record.guiCharacter ? ` (${record.guiCharacter})` : ""}: ${record.projectPath ?? record.filename}`,
+          record.guiParts !== undefined ? `  ${record.guiParts} ${sub(record)} in ${record.guiDir}/${sub(record)} (manifest.json beside them)` : null,
           record.guiMissing?.length ? `  not found on the sheet: ${record.guiMissing.join(", ")}` : null,
         ]
           .filter(Boolean)
@@ -1771,6 +1885,7 @@ export default async function plugin(bb: BbPluginApi) {
         id: randomUUID().slice(0, 8),
         projectId: input.projectId ?? "unscoped",
         origin: input.origin ?? "",
+        section: input.section,
         ...fields,
         refs: [],
         createdAt: now,
@@ -1823,7 +1938,13 @@ export default async function plugin(bb: BbPluginApi) {
   };
   const gui_generate: RpcHandlers["gui_generate"] = async (input) => {
     const source = await projectSource(input.projectId);
-    const run = await runGui({ ...input, cwd: source.cwd, hostId: source.hostId, originLabel: source.name });
+    const run = await runGui({
+      ...input,
+      mode: input.mode as GuiMode | CharacterMode,
+      cwd: source.cwd,
+      hostId: source.hostId,
+      originLabel: source.name,
+    });
     return { generations: run.generations, errors: run.errors };
   };
   const gui_generations: RpcHandlers["gui_generations"] = async ({ styleId }) => readGuiGenerations(styleId);
@@ -1868,6 +1989,10 @@ export default async function plugin(bb: BbPluginApi) {
     "  bb image-studio gui generate --mode ideas|screen|elements|kit [--project <name>] [--states] [--image <path>]… --prompt <text> [--json]",
     "  bb image-studio gui delete --project <name>   (the list and references; saved files stay)",
     "  bb image-studio gui cut --sheet <path> [--elements \"a; b; c\"] [--states] [--json]   (re-cut a green-key sheet; free)",
+    "  bb image-studio character projects|project|ref|delete …   (the same options as gui; --tags stylized,blocky,chibi,…)",
+    "  bb image-studio character generate --mode ideas|model|turnaround|equipment [--project <name>] [--name soldier]",
+    "                                     [--equipment \"rifle; knife\"] [--image <design picture>]… --prompt <who the character is> [--json]",
+    "  bb image-studio character cut --sheet <path> [--grid 1x4 | --items \"rifle; knife\"] [--json]   (re-cut a white sheet; free)",
   ].join("\n");
 
   bb.cli.register({
@@ -1903,6 +2028,11 @@ export default async function plugin(bb: BbPluginApi) {
         name: "gui",
         summary: "GUI section: styles, 4 mockup ideas, screens, element sheets cut into PNGs, UI kits (Muse Image, English labels)",
         usage: "bb image-studio gui projects|project|ref|generate|cut|delete …",
+      },
+      {
+        name: "character",
+        summary: "Characters section: game characters for 3D — ideas, an A-pose front view with empty hands, a 4-view turnaround, held items on their own sheet",
+        usage: "bb image-studio character projects|project|ref|generate|cut|delete …",
       },
     ],
     async run(argv, ctx) {
@@ -2129,6 +2259,9 @@ export default async function plugin(bb: BbPluginApi) {
         }
         case "gui":
           return runGuiCommand(argv, ctx, reply);
+        case "character":
+        case "characters":
+          return runGuiCommand(argv, ctx, reply, "characters");
         case "generate": {
           const defaults = {
             model: flag(argv, "--model"),
@@ -2238,30 +2371,36 @@ export default async function plugin(bb: BbPluginApi) {
     argv: string[],
     ctx: CliCtx,
     reply: (value: unknown, text: string) => { exitCode: number; stdout: string },
+    section: Section = "gui",
   ) {
-    const sub = argv[argv.indexOf("gui") + 1];
+    const command = section === "gui" ? "gui" : argv.includes("character") ? "character" : "characters";
+    const sub = argv[argv.indexOf(command) + 1];
     const projectId = ctx.projectId ?? null;
     const origin = ctx.cwd ?? projectId ?? "unscoped";
     const projectFlag = flag(argv, "--project") ?? flag(argv, "--style");
+    const word = SECTION_WORD[section];
+    const presetIds: readonly string[] = section === "gui" ? GUI_PRESET_IDS : CHARACTER_PRESET_IDS;
+    // Only this section's projects: a folder has one GUI project and one Characters project.
+    const readStyles = async () => (await readGuiStyles()).filter((style) => style.section === section);
     switch (sub) {
       case "styles":
       case "projects": {
-        const styles = [...(await readGuiStyles())].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+        const styles = [...(await readStyles())].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
         const here = originProject(styles, origin);
         return reply(
           styles.map((style) => ({ ...style, current: style.id === here?.id })),
           styles.length === 0
-            ? "No GUI projects yet. The first GUI generation from this folder creates one named after it."
+            ? `No ${word} projects yet. The first ${word} generation from this folder creates one named after it.`
             : styles
                 .map((style) => `${style.id === here?.id ? "* " : "  "}${style.name} (${style.id}): ${style.theme || "no theme"}; presets: ${style.tags.join(", ") || "none"}; references: ${style.refs.length}${style.origin ? `; folder: ${style.origin}` : ""}`)
-                .join("\n") + (here ? "\n* = where GUI generations from this folder go" : ""),
+                .join("\n") + (here ? `\n* = where ${word} generations from this folder go` : ""),
         );
       }
       case "style":
       case "project": {
-        const name = flag(argv, "--name") ?? projectFlag ?? originProject(await readGuiStyles(), origin)?.name;
+        const name = flag(argv, "--name") ?? projectFlag ?? originProject(await readStyles(), origin)?.name;
         if (!name) return { exitCode: 1, stderr: usage };
-        const existing = findGuiStyle(await readGuiStyles(), name, origin);
+        const existing = findGuiStyle(await readStyles(), name, origin);
         const palette = { ...(existing?.palette ?? { background: "", button: "", outline: "", highlight: "", text: "" }) };
         for (const pair of (flag(argv, "--palette") ?? "").split(",").filter(Boolean)) {
           const [key, value] = pair.split("=").map((part) => part.trim());
@@ -2273,6 +2412,7 @@ export default async function plugin(bb: BbPluginApi) {
           id: existing?.id,
           projectId,
           origin,
+          section,
           name: existing && flag(argv, "--rename") ? flag(argv, "--rename")! : (existing?.name ?? name),
           theme: flag(argv, "--theme") ?? existing?.theme ?? "",
           tags: tags !== undefined ? tags.split(",").map((tag) => tag.trim()).filter(Boolean) : (existing?.tags ?? []),
@@ -2280,21 +2420,21 @@ export default async function plugin(bb: BbPluginApi) {
           notes: flag(argv, "--notes") ?? existing?.notes ?? "",
         });
         if (existing && !existing.origin) await withGuiStyle(existing.id, (style) => void (style.origin = origin));
-        return reply(saved, `${existing ? "Updated" : "Created"} GUI project ${saved.name} (${saved.id}). Presets for --tags: ${GUI_PRESET_IDS.join(", ")}.`);
+        return reply(saved, `${existing ? "Updated" : "Created"} ${word} project ${saved.name} (${saved.id}). Presets for --tags: ${presetIds.join(", ")}.`);
       }
       case "delete": {
-        if (!projectFlag) return { exitCode: 1, stderr: "Name the project: bb image-studio gui delete --project <name>" };
-        const style = findGuiStyle(await readGuiStyles(), projectFlag, origin);
-        if (!style) return { exitCode: 1, stderr: `No GUI project "${projectFlag}".` };
+        if (!projectFlag) return { exitCode: 1, stderr: `Name the project: bb image-studio ${command} delete --project <name>` };
+        const style = findGuiStyle(await readStyles(), projectFlag, origin);
+        if (!style) return { exitCode: 1, stderr: `No ${word} project "${projectFlag}".` };
         await delete_gui_style({ id: style.id });
-        return reply({ removed: style.id }, `Deleted GUI project ${style.name} (${style.id}): its list and references. Files saved in folders stay.`);
+        return reply({ removed: style.id }, `Deleted ${word} project ${style.name} (${style.id}): its list and references. Files saved in folders stay.`);
       }
       case "ref": {
         const image = flag(argv, "--image");
         if (!image) return { exitCode: 1, stderr: usage };
-        const styles = await readGuiStyles();
+        const styles = await readStyles();
         const style = projectFlag ? findGuiStyle(styles, projectFlag, origin) : originProject(styles, origin);
-        if (!style) return { exitCode: 1, stderr: projectFlag ? `No GUI project "${projectFlag}".` : "No GUI project for this folder yet: generate first or pass --project." };
+        if (!style) return { exitCode: 1, stderr: projectFlag ? `No ${word} project "${projectFlag}".` : `No ${word} project for this folder yet: generate first or pass --project.` };
         const role = flag(argv, "--role") === "art" ? "art" : "concept";
         const { cwd } = ctx;
         const [uri] = await sourceDataUris([image], projectId, cwd);
@@ -2303,16 +2443,19 @@ export default async function plugin(bb: BbPluginApi) {
         return reply(saved, `Added ${role === "art" ? "an art" : "a concept"} reference to ${saved.name}: ${saved.refs.length} of ${GUI_MAX_REFS}.`);
       }
       case "generate": {
-        const mode = guiModeSchema.safeParse(flag(argv, "--mode") ?? "ideas");
-        if (!mode.success) return { exitCode: 1, stderr: `--mode takes ${GUI_MODES.join(", ")}.` };
-        const prompt = flag(argv, "--prompt") || restAfter(argv, "generate").replace(/^gui\s*/, "");
+        const mode = (section === "gui" ? guiModeSchema : characterModeSchema).safeParse(flag(argv, "--mode") ?? "ideas");
+        if (!mode.success) return { exitCode: 1, stderr: `--mode takes ${(section === "gui" ? GUI_MODES : CHARACTER_MODES).join(", ")}.` };
+        const prompt = flag(argv, "--prompt") || restAfter(argv, "generate").replace(/^(?:gui|characters?)\s*/, "");
         const run = await runGui({
           projectId,
           styleId: projectFlag,
+          section,
           mode: mode.data,
           prompt,
           states: argv.includes("--states"),
           images: flags(argv, "--image"),
+          equipment: flag(argv, "--equipment"),
+          character: flag(argv, "--name"),
           cwd: ctx.cwd,
         });
         const out = reply({ generations: run.generations, errors: run.errors }, guiSummary(run));
@@ -2324,6 +2467,32 @@ export default async function plugin(bb: BbPluginApi) {
         const path = isAbsolute(sheet) || !ctx.cwd ? sheet : join(ctx.cwd, sheet);
         const file = await bb.sdk.files.read({ path });
         const bytes = Buffer.from(file.content, file.contentEncoding === "base64" ? "base64" : "utf8");
+        if (section === "characters") {
+          // A turnaround (--grid 1x4, the default) or an equipment sheet (--items, in the sheet's order).
+          const items = parseEquipment(flag(argv, "--items"));
+          const grid = flag(argv, "--grid") ?? "1x4";
+          const [rows, cols] = grid.split("x").map(Number);
+          if (items.length === 0 && !(rows! >= 1 && cols! >= 1)) return { exitCode: 1, stderr: "--grid takes ROWSxCOLS, e.g. 1x4." };
+          const turnaround = items.length === 0 && grid === "1x4";
+          const names = items.length > 0 ? [] : turnaround ? [...TURNAROUND_VIEWS] : Array.from({ length: rows! * cols! }, (_, index) => `part-${String(index + 1).padStart(2, "0")}`);
+          const layout: SheetLayout = items.length > 0
+            ? sheetLayout(items, false)
+            : { rows: rows!, cols: cols!, cells: names.map((name) => ({ name, element: name })) };
+          const cut = cutOnWhite(await decodeRgba(bytes), layout);
+          const dir = join(path, "..", turnaround ? "views" : "parts");
+          for (const part of cut.parts) {
+            await bb.sdk.files.write({
+              path: join(dir, `${part.name}.png`),
+              content: (await encodePng(part.image)).toString("base64"),
+              contentEncoding: "base64",
+              createParents: true,
+            });
+          }
+          return reply(
+            { dir, evenSplit: cut.even, missing: cut.missing, parts: cut.parts.map((part) => ({ name: part.name, ...part.box })) },
+            `${cut.parts.length} pictures in ${dir}${cut.even ? " (no clean white gaps: split evenly, check the edges)" : ""}${cut.missing.length > 0 ? `\nempty: ${cut.missing.join(", ")}` : ""}`,
+          );
+        }
         const elements = parseElementList(flag(argv, "--elements") ?? "");
         const layout = elements.length > 0 ? sheetLayout(elements, argv.includes("--states")) : undefined;
         const cut = cutSheet(keyGreen(await decodeRgba(bytes)), layout);
@@ -2378,6 +2547,49 @@ export default async function plugin(bb: BbPluginApi) {
       } catch (error) {
         if (isStaleHandleError(error) || error instanceof ReloadingError) {
           return { content: [{ type: "text", text: "Image Studio was reloaded while this ran and nothing was saved. Call image_studio_gui again." }], isError: true };
+        }
+        return { content: [{ type: "text", text: describe(error) }], isError: true };
+      }
+    },
+  });
+
+  bb.agents.registerTool({
+    name: "image_studio_character",
+    description:
+      "Game characters for 3D through Image Studio's Characters section, one Characters project per folder (Muse Image). Modes: ideas (4 full-body concepts, may hold their equipment), model (the front view for image-to-3D and rigging: symmetric A-pose, empty hands, plain white, orthographic), turnaround (front, right, back, left in one row, cut into views/*.png), equipment (the held items alone on one sheet, side view, cut into parts/*.png). Runs at once, no Send form.",
+    instructions:
+      "For a game character meant for a 3D model (Hunyuan3D / TRELLIS on gpu3d, Roblox Avatar Setup, UniRig) call image_studio_character, not image_studio_generate. Split the request: prompt = who the character is and what it wears (helmet, mask, vest, pouches, boots stay on the body); equipment = everything held in the hands or carried apart (rifle, axe, torch, shield, backpack if it should come off), \";\"-separated. The plugin keeps equipment out of model and turnaround and draws it with mode equipment, so a weapon never grows into the body mesh. name = a short file name (\"soldier\"). Flow: ideas → the user picks one → model with images=[that picture] → turnaround with images=[the model front.png] → equipment with images=[the idea picture]. Do not describe the pose, background, camera or art style in prompt: the plugin adds the A-pose, white background, orthographic camera and the project's theme, presets and approved characters. Set the look: bb image-studio character project --theme … --tags stylized|blocky|chibi|lowpoly|realistic|toon|painted; make an approved character a reference: bb image-studio character ref --image <path>. Report front.png, views/ and parts/ paths; the front.png (or views/front.png) is the image-to-3D input.",
+    presentation: {
+      label: { pending: "Drawing a character", completed: "Drew a character" },
+      icon: { glyph: "UserRound" },
+    },
+    parameters: z.object({
+      mode: characterModeSchema,
+      prompt: z.string().default(""),
+      equipment: z.string().optional(),
+      name: z.string().optional(),
+      project: z.string().optional(),
+      images: z.array(z.string().min(1)).max(4).optional(),
+    }),
+    async execute(input, ctx) {
+      try {
+        const run = await runGui({
+          projectId: ctx.projectId || null,
+          styleId: input.project,
+          section: "characters",
+          mode: input.mode,
+          prompt: input.prompt,
+          states: false,
+          images: input.images,
+          equipment: input.equipment,
+          character: input.name,
+          ...(await threadFolder(ctx.threadId, ctx.projectId || null)),
+        });
+        const text = guiSummary(run);
+        return run.generations.length === 0 ? { content: [{ type: "text", text: text || "Nothing was generated." }], isError: true } : text;
+      } catch (error) {
+        if (isStaleHandleError(error) || error instanceof ReloadingError) {
+          return { content: [{ type: "text", text: "Image Studio was reloaded while this ran and nothing was saved. Call image_studio_character again." }], isError: true };
         }
         return { content: [{ type: "text", text: describe(error) }], isError: true };
       }
@@ -2528,7 +2740,7 @@ export default async function plugin(bb: BbPluginApi) {
   });
 
   bb.agents.configure(() => ({
-    tools: ["image_studio_generate", "image_studio_gui"],
+    tools: ["image_studio_generate", "image_studio_gui", "image_studio_character"],
     skills: ["image-studio"],
   }));
 
