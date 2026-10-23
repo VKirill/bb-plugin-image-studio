@@ -41,7 +41,7 @@ bb image-studio character delete --project <name>
 
 | Mode | prompt | equipment | images | Result |
 |---|---|---|---|---|
-| `ideas` | who the character is, what it wears | optional: drawn **in the hands** here | optional extra references | 4 full-body concepts, `idea.png` each |
+| `ideas` | who the character is, what it wears | optional: drawn **in the hands** here | optional extra references | 4 concepts, each the full body from the front and from the back side by side (straight-on, no three-quarter), `idea.png` each |
 | `model` | the same description (may be empty with images) | named only to be left out | the picked idea (recommended) | `front.png`: the image-to-3D input |
 | `turnaround` | the same description (may be empty with images) | named only to be left out | the model's `front.png` (recommended) | `sheet.png` + `views/front.png`, `views/back.png` (white squares) + `manifest.json`. Two views only: Muse keeps one design across front and back, while four views drifted |
 | `equipment` | optional: whose items | **required**, up to 8, `;`-separated | the idea that shows them | `sheet.png` + `parts/<item>.png` (white squares, side view, tip to the right) + `manifest.json` |

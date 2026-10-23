@@ -110,6 +110,15 @@ test("ideas: four presets for a fresh project, four takes inside a fixed one; eq
   assert.match(fresh[0]!.label, /idea 1: stylized/);
   assert.ok(fresh.every((job) => job.prompt.includes("Game and mood: zombie frontier.")));
   assert.match(fresh[0]!.prompt, /holding its equipment \(rifle\)/);
+  // Front and back on one picture, straight-on, not three-quarter.
+  assert.match(fresh[0]!.prompt, /left half - the front view/);
+  assert.match(fresh[0]!.prompt, /right half - the back view/);
+  assert.match(fresh[0]!.prompt, /no three-quarter view/);
+  assert.doesNotMatch(fresh[0]!.prompt, /three-quarter front view/);
+  assert.equal(fresh[0]!.aspectRatio, "4:3");
+  const [winged] = characterJobs("ideas", request({ body: "winged" }), null);
+  assert.equal(winged!.aspectRatio, "3:4");
+  assert.match(winged!.prompt, /one view above the other/);
   assert.ok(fresh[1]!.prompt.includes(CHARACTER_PRESETS.blocky));
   const fixed = characterJobs("ideas", request(), style({ tags: ["toon"] }));
   assert.deepEqual(fixed.map((job) => job.label), ["idea 1", "idea 2", "idea 3", "idea 4"]);

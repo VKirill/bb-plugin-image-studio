@@ -176,31 +176,39 @@ function bodyLines(request: CharacterRequest): string[] {
 
 export function ideasJobs(request: CharacterRequest, style: GuiStyle | null): CharacterJob[] {
   const held =
-    (request.accessories.length > 0 ? ` wearing ${request.accessories.join("; ")}` : "") +
-    (request.equipment.length > 0 ? `${request.accessories.length > 0 ? " and" : ""} holding its equipment (${request.equipment.join("; ")})` : "");
+    (request.accessories.length > 0 ? `, wearing ${request.accessories.join("; ")}` : "") +
+    (request.equipment.length > 0 ? `${request.accessories.length > 0 ? " and" : ","} holding its equipment (${request.equipment.join("; ")})` : "");
   const design = designLine(request.refCount + 1, request.designCount, "extra references from the user: follow them as the description says.");
+  // Front and back of one concept on one picture, straight-on like a turnaround: the design is judged from both
+  // sides before it goes to 3D. Spread wings make wide views, so those stack.
+  const stacked = request.body === "winged";
   const base = [
-    `Deliverable: a character design concept for a 3D game: ${request.description.trim()}.`,
-    `Presentation: the whole character, nothing cut off, in a relaxed confident natural pose${held}, three-quarter front view, centred, filling about 85% of the frame.`,
+    `Deliverable: a character design concept for a 3D game: ${request.description.trim()}, shown from the front and from the back on one picture.`,
+    stacked
+      ? "Layout: the same character twice, full body, one view above the other: top - the front view, facing the camera; bottom - the back view, the back of the head toward the camera."
+      : "Layout: the same character twice, full body, side by side: left half - the front view, facing the camera; right half - the back view, the back of the head toward the camera.",
+    `Camera: exactly straight-on from the front and exactly straight-on from behind (turned 180 degrees), orthographic, camera at chest height; no three-quarter view, no turned head, shoulders or hips, no angle at all. Both views the same scale and height${stacked ? "" : ", the feet on one horizontal line"}, each centred in its own half, nothing cut off, with a wide empty white gap between them.`,
+    `Pose: standing upright and symmetric in a relaxed neutral stance, weight on both feet, arms down at the sides, the same pose in both views${held}. The back view shows what the back really looks like (the back of the clothes, armour, cape and hair).`,
     ...(request.body === "blocky"
       ? ["Body: a classic Roblox block avatar (a cube head, a box torso, box arms and legs), wearing its accessories (helmet, hair, pauldrons, wings, cape) as chunky 3D pieces."]
       : []),
-    ONE_RULE,
+    "Only this one character, shown in the two views: no other people, creatures, pets or objects in the picture.",
     BACKGROUND_RULE,
     ...(design ? [design] : []),
   ];
+  const aspectRatio = stacked ? "3:4" : request.body === "blocky" ? "3:2" : "4:3";
   if (characterStyleIsFixed(style)) {
     const look = lookLines(style, request.refCount);
     return VARIATIONS.map((variation, index) => ({
       prompt: [...base, ...look, variation, FINISH_RULE].join("\n"),
-      aspectRatio: request.body === "humanoid" ? "2:3" : MODEL_CAMERA[request.body].aspect,
+      aspectRatio,
       label: `idea ${index + 1}`,
     }));
   }
   const theme = style?.theme.trim() ? [`Game and mood: ${style.theme.trim()}.`] : [];
   return CHARACTER_PRESET_IDS.slice(0, CHARACTER_IDEAS).map((preset, index) => ({
     prompt: [...base, ...theme, `Character style: ${CHARACTER_PRESETS[preset]}.`, FINISH_RULE].join("\n"),
-    aspectRatio: request.body === "humanoid" ? "2:3" : MODEL_CAMERA[request.body].aspect,
+    aspectRatio,
     label: `idea ${index + 1}: ${preset}`,
   }));
 }
