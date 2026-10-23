@@ -189,6 +189,7 @@ export function ideasJobs(request: CharacterRequest, style: GuiStyle | null): Ch
       : "Layout: the same character twice, full body, side by side: left half - the front view, facing the camera; right half - the back view, the back of the head toward the camera.",
     `Camera: exactly straight-on from the front and exactly straight-on from behind (turned 180 degrees), orthographic, camera at chest height; no three-quarter view, no turned head, shoulders or hips, no angle at all. Both views the same scale and height${stacked ? "" : ", the feet on one horizontal line"}, each centred in its own half, nothing cut off, with a wide empty white gap between them.`,
     `Pose: standing upright and symmetric in a relaxed neutral stance, weight on both feet, arms down at the sides, the same pose in both views${held}. The back view shows what the back really looks like (the back of the clothes, armour, cape and hair).`,
+    "Identical character in both views: the same outfit, colours and worn pieces; nothing appears in only one view (no wings, backpack, cape or extra ornaments added on the back unless the description has them).",
     ...(request.body === "blocky"
       ? ["Body: a classic Roblox block avatar (a cube head, a box torso, box arms and legs), wearing its accessories (helmet, hair, pauldrons, wings, cape) as chunky 3D pieces."]
       : []),

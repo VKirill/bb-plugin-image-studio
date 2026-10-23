@@ -114,6 +114,7 @@ test("ideas: four presets for a fresh project, four takes inside a fixed one; eq
   assert.match(fresh[0]!.prompt, /left half - the front view/);
   assert.match(fresh[0]!.prompt, /right half - the back view/);
   assert.match(fresh[0]!.prompt, /no three-quarter view/);
+  assert.match(fresh[0]!.prompt, /nothing appears in only one view/);
   assert.doesNotMatch(fresh[0]!.prompt, /three-quarter front view/);
   assert.equal(fresh[0]!.aspectRatio, "4:3");
   const [winged] = characterJobs("ideas", request({ body: "winged" }), null);
