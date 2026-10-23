@@ -30,6 +30,7 @@ const style = (patch: Partial<GuiStyle> = {}): GuiStyle => ({
 
 const request = (patch: Partial<CharacterRequest> = {}): CharacterRequest => ({
   description: "colony soldier, olive uniform, steel helmet, gas mask",
+  body: "humanoid",
   equipment: [],
   name: "soldier",
   refCount: 0,
@@ -64,7 +65,8 @@ test("the 3D front: A-pose, empty hands, white, orthographic; held items named o
   assert.equal(job!.layout, undefined);
   const prompt = job!.prompt;
   assert.match(prompt, /A-pose/);
-  assert.match(prompt, /both hands hold nothing/);
+  assert.match(prompt, /Carries nothing/);
+  assert.match(prompt, /Nothing hangs between or in front of the legs/);
   assert.match(prompt, /pure white/);
   assert.match(prompt, /orthographic/);
   assert.match(prompt, /Leave out what the character holds \(assault rifle\)/);
@@ -87,7 +89,7 @@ test("turnaround: one row of front, right, back, left on a wide frame", () => {
   assert.deepEqual(job!.layout!.cells.map((cell) => cell.name), [...TURNAROUND_VIEWS]);
   assert.deepEqual([job!.layout!.rows, job!.layout!.cols], [1, 4]);
   assert.match(job!.prompt, /nose pointing to the right edge/);
-  assert.match(job!.prompt, /both hands hold nothing/);
+  assert.match(job!.prompt, /Carries nothing/);
 });
 
 test("equipment: the listed items alone in a grid, named after them", () => {
@@ -166,4 +168,27 @@ test("white cut: an empty cell is reported missing; a grid is cut row by row", (
   const cut = cutOnWhite(image, layout);
   assert.deepEqual(cut.parts.map((part) => part.name), ["rifle", "knife", "torch"]);
   assert.deepEqual(cut.missing, ["shield"]);
+});
+
+test("body types: their own pose, camera and frame; long and wide bodies get a 2x2 turnaround", () => {
+  const [horse] = characterJobs("model", request({ body: "quadruped", description: "war horse" }), null);
+  assert.equal(horse!.aspectRatio, "3:2");
+  assert.match(horse!.prompt, /three-quarter front view/);
+  assert.match(horse!.prompt, /all four legs/);
+  assert.doesNotMatch(horse!.prompt, /A-pose for 3D rigging/);
+  const [harpy] = characterJobs("model", request({ body: "winged", description: "harpy" }), null);
+  assert.equal(harpy!.aspectRatio, "4:3");
+  assert.match(harpy!.prompt, /wings fully spread out/);
+  const [turn] = characterJobs("turnaround", request({ body: "quadruped" }), null);
+  assert.deepEqual([turn!.layout!.rows, turn!.layout!.cols], [2, 2]);
+  assert.equal(turn!.aspectRatio, "4:3");
+  assert.match(turn!.prompt, /2×2 grid/);
+});
+
+test("equipment follows the project's style when one is set", () => {
+  const [plain] = characterJobs("equipment", request({ equipment: ["sword"] }), null);
+  assert.match(plain!.prompt, /clean game prop renders/);
+  const [painted] = characterJobs("equipment", request({ equipment: ["sword"] }), style({ tags: ["painted"] }));
+  assert.match(painted!.prompt, /exactly the same art style and finish as the character style above/);
+  assert.ok(painted!.prompt.includes(CHARACTER_PRESETS.painted));
 });

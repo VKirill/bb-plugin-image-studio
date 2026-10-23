@@ -9,6 +9,19 @@ An image-to-3D model builds the mesh from **one picture**: everything drawn on i
 - **3D front** (`model`): one figure, straight-on orthographic front view, camera at chest height, symmetric **A-pose** (arms about 45° down, a gap between arms and torso and between the legs), open empty hands, plain white background, even light, nothing sticking out of the silhouette.
 - **Held items are never drawn on the body.** Everything in the hands or carried apart (weapon, tool, torch, shield, detachable backpack) goes to `equipment` and is drawn on its own sheet, then made into a separate 3D model and attached to the hand in the game.
 - Worn gear stays on the body: helmet, hat, mask, goggles, armour, vest, pouches, belt, gloves, boots.
+- Nothing hangs between the legs (tabards, loincloths, robes end above the knees or are split), so auto-rigging does not glue the legs together.
+- Held items are drawn in the project's own style, so a painted hero gets a painted sword.
+
+## Body type
+
+`body` picks the neutral rigging pose, the camera and the frame. Pass it whenever the character is not a two-legged figure with arms.
+
+| body | For | 3D picture | Turnaround |
+|---|---|---|---|
+| `humanoid` (default) | people, zombies, orcs, robots, anything on two legs with arms | front, A-pose, 2:3 | 1×4 row |
+| `quadruped` | horse, wolf, beast on four legs (a centaur too) | **three-quarter** view, all four legs straight and apart, tail out, 3:2 | 2×2 grid |
+| `winged` | harpy, dragon, bat, angel | front, wings spread flat to the sides, 4:3 | 2×2 grid |
+| `legless` | serpent, slime, ghost, floating body | front, body in one loose curve, 1:1 | 1×4 row |
 
 ## Projects
 
@@ -32,9 +45,9 @@ bb image-studio character delete --project <name>
 | `turnaround` | the same description (may be empty with images) | named only to be left out | the model's `front.png` (recommended) | `sheet.png` + `views/front.png, right.png, back.png, left.png` (white squares) + `manifest.json` |
 | `equipment` | optional: whose items | **required**, up to 8, `;`-separated | the idea that shows them | `sheet.png` + `parts/<item>.png` (white squares, side view, tip to the right) + `manifest.json` |
 
-Tool: `image_studio_character` (`mode`, `prompt`, `equipment`, `name`, `project`, `images`). Runs at once, no Send form. CLI: `bb image-studio character generate --mode … [--name soldier] [--equipment "rifle; knife"] [--image <path or gallery id>]… --prompt "…" [--json]`. `name` is the short file name; without it the first words of the description are used.
+Tool: `image_studio_character` (`mode`, `prompt`, `equipment`, `name`, `body`, `project`, `images`). Runs at once, no Send form. CLI: `bb image-studio character generate --mode … [--name soldier] [--body humanoid|quadruped|winged|legless] [--equipment "rifle; knife"] [--image <path or gallery id>]… --prompt "…" [--json]`. `name` is the short file name; without it the first words of the description are used.
 
-Files: `image-studio/characters/<project>/<id>-<name>-<mode>/`. A turnaround or equipment sheet is cut by its white gaps; `missing` lists empty cells, `evenSplit: true` in the manifest means no clean gap was found and the sheet was split evenly (check the edges, or re-cut). Re-cut for free: `bb image-studio character cut --sheet <path> [--grid 1x4]` or `--items "rifle; knife"` in the sheet's order.
+Files: `image-studio/characters/<project>/<id>-<name>-<mode>/`. A turnaround or equipment sheet is cut by its white gaps; `missing` lists empty cells, `evenSplit: true` in the manifest means no clean gap was found and the sheet was split evenly (check the edges, or re-cut). Re-cut for free: `bb image-studio character cut --sheet <path> [--grid 1x4|2x2]` or `--items "rifle; knife"` in the sheet's order.
 
 ## Writing the request
 

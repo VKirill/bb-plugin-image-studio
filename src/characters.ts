@@ -39,17 +39,39 @@ const VARIATIONS = [
   "Take 4 of 4: an unexpected but fitting twist in clothing, materials or colour accents.",
 ];
 
-// The "system message" every 3D-ready picture carries: one figure, a riggable pose, nothing in the hands.
-const ONE_RULE = "Exactly one character, complete from the top of the head (and any hat or helmet) to the soles of the feet; no other people, creatures, pets or objects in the picture.";
-const POSE_RULE =
-  "Pose: a symmetric A-pose for 3D rigging. Standing straight, weight on both feet; arms straight and lowered about 45 degrees from the shoulders, clearly away from the body with a visible gap between each arm and the torso; hands open and relaxed, fingers together, palms facing the thighs; legs straight, feet shoulder-width apart and pointing forward, a visible gap between the legs. Head upright, looking straight ahead, neutral expression. No action, no lean, no twist, no tilt.";
-const HANDS_RULE =
-  "Empty hands: both hands hold nothing. No weapons, tools, shields, bags, torches or other props anywhere: not in the hands, not slung on the back or over a shoulder, not holstered, not lying at the feet. Gear worn on the body stays (helmet, hat, mask, goggles, armour, vest, pouches, belt, gloves, boots), kept close to the body so nothing sticks out of the silhouette. Long hair, capes and coat tails hang straight down and do not cover the arms or the gap between the legs.";
+/** Body plans: each has its own neutral rigging pose, camera and frame. */
+export const BODY_TYPES = ["humanoid", "quadruped", "winged", "legless"] as const;
+export type BodyType = (typeof BODY_TYPES)[number];
+
+// The "system message" every 3D-ready picture carries: one figure, a riggable pose, nothing held.
+const ONE_RULE = "Exactly one character, complete, nothing cut off by the frame; no other people, creatures, pets or objects in the picture.";
+const ARMS = "arms straight and lowered about 45 degrees from the shoulders, clearly away from the body with a visible gap between each arm and the torso; hands open and relaxed, fingers together, palms facing the thighs";
+const LEGS = "legs straight, feet shoulder-width apart and pointing forward, with open background visible between the legs from the crotch down to the feet";
+const CLOTH =
+  "Nothing hangs between or in front of the legs: tabards, loincloths, robes, skirts, coat tails and belts' flaps end above the knees or are split at the sides, so each leg is fully visible and separate. Long hair and capes fall behind the shoulders and never cover the arms.";
+const POSES: Record<BodyType, string> = {
+  humanoid: `Pose: a symmetric A-pose for 3D rigging. Standing straight, weight on both feet; ${ARMS}; ${LEGS}. Head upright, looking straight ahead, neutral expression. No action, no lean, no twist, no tilt. ${CLOTH}`,
+  winged: `Pose: a symmetric neutral pose for 3D rigging with the wings fully spread out to both sides, flat to the camera, each wing whole and clear of the body, the head and the other wing. If the character also has arms: ${ARMS}. If it stands on legs: ${LEGS}. Head upright, looking straight ahead; the tail, if any, hangs straight down behind. No flapping, no flight action. ${CLOTH}`,
+  quadruped:
+    "Pose: a neutral standing pose for 3D rigging. Standing square on all four legs, every leg straight and vertical, the front pair apart and the hind pair apart so all four legs are visible and separate; weight even; back level; head level, looking straight ahead, mouth closed; the tail stretched straight out behind, not curled over the body. Any arms of an upright upper body in an A-pose with open empty hands. No walking, running or crouching.",
+  legless:
+    `Pose: a neutral symmetric resting pose for 3D rigging in the body's natural shape: a serpent body laid in one loose curve that never crosses itself, a slime, ghost or floating body upright and level; tails and tentacles spread out to the sides so they do not overlap the body. If it has arms: ${ARMS}. Head upright, looking straight ahead. No action.`,
+};
+const CARRY_RULE =
+  "Carries nothing: no weapons, tools, shields, bags, torches or other props anywhere: not in the hands, paws or mouth, not slung on the back or over a shoulder, not holstered, not lying at the feet. Gear worn on the body stays (helmet, hat, mask, goggles, armour, vest, pouches, belt, gloves, boots, saddle), kept close to the body so nothing sticks out of the silhouette.";
 const BACKGROUND_RULE =
   "Background: plain flat pure white (#FFFFFF) everywhere, no floor, no ground shadow, no scenery, no frame, no gradient, no vignette. No text, labels, arrows, measurements, logos or watermark.";
 const LIGHT_RULE =
   "Lighting: soft even studio light from the front, no strong cast shadows, no rim light or glow, true colours: the picture is the texture source for a 3D model.";
-const FINISH_RULE = "Rendering: a clean 3D game character render, crisp edges, the same design and colours in every view.";
+const FINISH_RULE = "Rendering: a clean game character in the character style above, crisp edges, the same design and colours in every view.";
+
+/** The 3D front: humanoids from the front; a quadruped from three-quarters, where its length shows. */
+const MODEL_CAMERA: Record<BodyType, { camera: string; aspect: string }> = {
+  humanoid: { camera: "straight-on front view, orthographic, camera at chest height, no perspective distortion; the character centred and filling about 88% of the frame height", aspect: "2:3" },
+  winged: { camera: "straight-on front view, orthographic, camera at chest height, no perspective distortion; the character centred, the spread wings filling about 90% of the frame width", aspect: "4:3" },
+  quadruped: { camera: "three-quarter front view from about 45 degrees to the side and slightly above, showing the face, one whole side and the full length of the body, orthographic, no perspective distortion; the character centred and filling about 88% of the frame width", aspect: "3:2" },
+  legless: { camera: "straight-on front view, orthographic, camera at chest height, no perspective distortion; the whole body centred and filling about 88% of the frame", aspect: "1:1" },
+};
 
 const designLine = (first: number, count: number, what: string): string | null =>
   count > 0 ? `${count === 1 ? `Image ${first}` : `Images ${first}–${first + count - 1}`} ${count === 1 ? "is" : "are"} ${what}` : null;
@@ -57,6 +79,8 @@ const designLine = (first: number, count: number, what: string): string | null =
 export type CharacterRequest = {
   /** Who the character is ("colony soldier in an olive uniform, steel helmet, gas mask"). */
   description: string;
+  /** Body plan: picks the pose, camera and frame. */
+  body: BodyType;
   /** Things held in the hands or carried apart from the body: left out of model/turnaround, drawn by equipment. */
   equipment: string[];
   /** Short name for files ("soldier"); falls back to the description's first words. */
@@ -125,7 +149,7 @@ function bodyLines(request: CharacterRequest): string[] {
   const design = designLine(
     request.refCount + 1,
     request.designCount,
-    "the approved design of this character (it may hold things or stand in another pose): redraw exactly this character, the same face, body, clothes, colours, materials and worn gear, in the pose and framing below, without anything in its hands.",
+    "the approved design of this character (it may hold things or stand in another pose): redraw exactly this character, the same face, body, proportions, clothes, colours, materials and worn gear, in the pose and framing below, carrying nothing.",
   );
   const who = request.description.trim() ? [`Character: ${request.description.trim()}.`] : [];
   return [...who, ...held, ...(design ? [design] : [])];
@@ -136,7 +160,7 @@ export function ideasJobs(request: CharacterRequest, style: GuiStyle | null): Ch
   const design = designLine(request.refCount + 1, request.designCount, "extra references from the user: follow them as the description says.");
   const base = [
     `Deliverable: a character design concept for a 3D game: ${request.description.trim()}.`,
-    `Presentation: the whole character, full body from head to feet, in a relaxed confident standing pose${held}, three-quarter front view, centred, filling about 85% of the frame height.`,
+    `Presentation: the whole character, nothing cut off, in a relaxed confident natural pose${held}, three-quarter front view, centred, filling about 85% of the frame.`,
     ONE_RULE,
     BACKGROUND_RULE,
     ...(design ? [design] : []),
@@ -145,14 +169,14 @@ export function ideasJobs(request: CharacterRequest, style: GuiStyle | null): Ch
     const look = lookLines(style, request.refCount);
     return VARIATIONS.map((variation, index) => ({
       prompt: [...base, ...look, variation, FINISH_RULE].join("\n"),
-      aspectRatio: "2:3",
+      aspectRatio: request.body === "humanoid" ? "2:3" : MODEL_CAMERA[request.body].aspect,
       label: `idea ${index + 1}`,
     }));
   }
   const theme = style?.theme.trim() ? [`Game and mood: ${style.theme.trim()}.`] : [];
   return CHARACTER_PRESET_IDS.slice(0, CHARACTER_IDEAS).map((preset, index) => ({
     prompt: [...base, ...theme, `Character style: ${CHARACTER_PRESETS[preset]}.`, FINISH_RULE].join("\n"),
-    aspectRatio: "2:3",
+    aspectRatio: request.body === "humanoid" ? "2:3" : MODEL_CAMERA[request.body].aspect,
     label: `idea ${index + 1}: ${preset}`,
   }));
 }
@@ -161,40 +185,50 @@ export function ideasJobs(request: CharacterRequest, style: GuiStyle | null): Ch
 export function modelJob(request: CharacterRequest, style: GuiStyle | null): CharacterJob {
   return {
     prompt: [
-      "Deliverable: the front view of a game character, the single input picture for an image-to-3D generator and auto-rigging.",
+      `Deliverable: the ${request.body === "quadruped" ? "three-quarter" : "front"} view of a game character, the single input picture for an image-to-3D generator and auto-rigging.`,
       ...bodyLines(request),
-      "Camera: straight-on front view, orthographic, camera at chest height, no perspective distortion; the character centred and filling about 88% of the frame height.",
+      `Camera: ${MODEL_CAMERA[request.body].camera}.`,
       ONE_RULE,
-      POSE_RULE,
-      HANDS_RULE,
+      POSES[request.body],
+      CARRY_RULE,
       BACKGROUND_RULE,
       LIGHT_RULE,
       ...lookLines(style, request.refCount),
       FINISH_RULE,
     ].join("\n"),
-    aspectRatio: "2:3",
+    aspectRatio: MODEL_CAMERA[request.body].aspect,
     label: "model",
   };
 }
 
 /** Four views in one row: the same design from every side, cut into views/front|right|back|left.png. */
 export function turnaroundJob(request: CharacterRequest, style: GuiStyle | null): CharacterJob {
-  const layout: SheetLayout = { rows: 1, cols: TURNAROUND_VIEWS.length, cells: TURNAROUND_VIEWS.map((view) => ({ name: view, element: view })) };
+  // Tall bodies fit four in a row; long or wide ones (spread wings, a horse) need a 2×2 grid to stay large.
+  const row = request.body === "humanoid" || request.body === "legless";
+  const layout: SheetLayout = {
+    rows: row ? 1 : 2,
+    cols: row ? 4 : 2,
+    cells: TURNAROUND_VIEWS.map((view) => ({ name: view, element: view })),
+  };
+  const order =
+    "1. front view, facing the camera; 2. right side view, a strict profile with the nose pointing to the right edge of the image; 3. back view, the back of the head toward the camera; 4. left side view, a strict profile with the nose pointing to the left edge of the image";
   return {
     prompt: [
       "Deliverable: a character turnaround sheet for 3D modelling: the same character seen from four sides.",
       ...bodyLines(request),
-      "Layout: four full-body views in one row, left to right, STRICTLY in this order: 1. front view, facing the camera; 2. right side view, a strict profile with the nose pointing to the right edge of the image; 3. back view, the back of the head toward the camera; 4. left side view, a strict profile with the nose pointing to the left edge of the image.",
-      "All four views the same scale and height, the feet on one horizontal line, equally spaced, with a wide empty white gap between neighbours: nothing crosses from one view into the next. Orthographic camera at chest height in every view, no perspective.",
-      "Identical character in every view: the same face, body, proportions, clothes, colours and worn gear; in the side views the arms stay in the A-pose and do not hide the torso.",
-      POSE_RULE,
-      HANDS_RULE,
+      row
+        ? `Layout: four full-body views in one row, left to right, STRICTLY in this order: ${order}.`
+        : `Layout: a 2×2 grid of four full-body views, STRICTLY: top left, top right, bottom left, bottom right = ${order}.`,
+      `All four views the same scale, the feet on one horizontal line${row ? "" : " within each row"}, with a wide empty white gap between neighbours: nothing crosses from one view into the next. Orthographic camera at chest height in every view, no perspective.`,
+      "Identical character in every view: the same face, body, proportions, clothes, colours and worn gear, in the same pose; in the side views the limbs stay where the pose puts them and do not hide the torso.",
+      POSES[request.body],
+      CARRY_RULE,
       BACKGROUND_RULE,
       LIGHT_RULE,
       ...lookLines(style, request.refCount),
       FINISH_RULE,
     ].join("\n"),
-    aspectRatio: "16:9",
+    aspectRatio: row ? "16:9" : "4:3",
     label: "turnaround",
     layout,
   };
@@ -208,6 +242,7 @@ export function equipmentJob(request: CharacterRequest, style: GuiStyle | null):
     const cells = layout.cells.slice(row * layout.cols, (row + 1) * layout.cols);
     return `Row ${row + 1}, left to right: ${cells.map((cell, col) => `${row * layout.cols + col + 1}. ${cell.element}`).join("; ")}`;
   });
+  const look = lookLines(style, request.refCount);
   const design = designLine(
     request.refCount + 1,
     request.designCount,
@@ -222,8 +257,10 @@ export function equipmentJob(request: CharacterRequest, style: GuiStyle | null):
       ...(design ? [design] : []),
       BACKGROUND_RULE,
       LIGHT_RULE,
-      ...lookLines(style, request.refCount),
-      "Rendering: clean 3D game prop renders, crisp edges, real-world proportions between the items.",
+      ...look,
+      look.length > 0
+        ? "Rendering: exactly the same art style and finish as the character style above (painting, shading, materials, outline), as if made for the same game; crisp edges; real-world proportions between the items."
+        : "Rendering: clean game prop renders, crisp edges, real-world proportions between the items.",
     ].join("\n"),
     aspectRatio: sheetAspect(layout, 1.8),
     label: "equipment",

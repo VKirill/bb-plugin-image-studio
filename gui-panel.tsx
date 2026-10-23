@@ -9,7 +9,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { t } from "./i18n";
 import type { I18nKey, Locale } from "./i18n";
 import { GUI_MAX_REFS, GUI_PRESET_IDS, PALETTE_KEYS, type GuiMode, type GuiStyle, type PaletteKey } from "./src/gui";
-import { CHARACTER_PRESET_IDS, type CharacterMode } from "./src/characters";
+import { BODY_TYPES, CHARACTER_PRESET_IDS, type BodyType, type CharacterMode } from "./src/characters";
 import type { RpcApi } from "./src/rpc-api";
 import { fileToBase64 } from "./lib/files";
 import { mapParallel } from "./src/queue";
@@ -53,6 +53,12 @@ const MODES: Record<Section, readonly ModeInfo[]> = {
     { id: "turnaround", label: "charModeTurnaround", hint: "charHintTurnaround", placeholder: "charPlaceholder" },
     { id: "equipment", label: "charModeEquipment", hint: "charHintEquipment", placeholder: "charPlaceholderOwner" },
   ],
+};
+const BODY_LABEL: Record<BodyType, I18nKey> = {
+  humanoid: "charBodyHumanoid",
+  quadruped: "charBodyQuadruped",
+  winged: "charBodyWinged",
+  legless: "charBodyLegless",
 };
 const PALETTE_LABEL: Record<PaletteKey, I18nKey> = {
   background: "guiPaletteBackground",
@@ -123,6 +129,7 @@ export function GuiPanel({
   const [prompt, setPrompt] = useState("");
   const [equipment, setEquipment] = useState("");
   const [character, setCharacter] = useState("");
+  const [body, setBody] = useState<BodyType>("humanoid");
   const characters = section === "characters";
   const [states, setStates] = useState(false);
   const [running, setRunning] = useState(0);
@@ -243,6 +250,7 @@ export function GuiPanel({
           ? {
               equipment: equipment.trim(),
               character: character.trim() || override?.item.guiCharacter || "",
+              body,
               images: override ? [override.item.id] : [],
             }
           : {}),
@@ -535,6 +543,19 @@ export function GuiPanel({
         />
         {characters ? (
           <div className="flex flex-wrap gap-2">
+            <select
+              className="h-9 rounded-md border border-input bg-background px-2 text-sm"
+              value={body}
+              aria-label={t("charBody", {}, locale)}
+              title={t("charBody", {}, locale)}
+              onChange={(event) => setBody(event.target.value as BodyType)}
+            >
+              {BODY_TYPES.map((type) => (
+                <option key={type} value={type}>
+                  {t(BODY_LABEL[type], {}, locale)}
+                </option>
+              ))}
+            </select>
             <Input
               className="w-40"
               value={character}

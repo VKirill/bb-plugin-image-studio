@@ -230,6 +230,11 @@ const en = {
   charToModel: "Make the 3D front from this",
   charToEquipment: "Draw its held items apart",
   charToTurnaround: "Make the turnaround from this",
+  charBody: "Body type: picks the rigging pose",
+  charBodyHumanoid: "Humanoid",
+  charBodyQuadruped: "Four legs",
+  charBodyWinged: "Winged",
+  charBodyLegless: "No legs",
 };
 
 export type I18nKey = keyof typeof en;
@@ -466,6 +471,11 @@ const ru: Record<I18nKey, string> = {
   charToModel: "Сделать фас для 3D",
   charToEquipment: "Нарисовать снаряжение отдельно",
   charToTurnaround: "Сделать ракурсы",
+  charBody: "Тип тела: от него зависит поза для скелета",
+  charBodyHumanoid: "Гуманоид",
+  charBodyQuadruped: "Четвероногий",
+  charBodyWinged: "Крылатый",
+  charBodyLegless: "Без ног",
 };
 
 export type Locale = "en" | "ru";
