@@ -143,7 +143,7 @@ test("white cut: views found by their white gaps even off-centre, each on a whit
   ]);
   const layout = { rows: 1, cols: 4, cells: TURNAROUND_VIEWS.map((name) => ({ name, element: name })) };
   const cut = cutOnWhite(image, layout);
-  assert.equal(cut.even, false);
+  assert.equal(cut.clean, true);
   assert.deepEqual(cut.missing, []);
   assert.deepEqual(cut.parts.map((part) => part.name), ["front", "right", "back", "left"]);
   assert.deepEqual(cut.parts[1]!.box, { x0: 130, y0: 20, x1: 160, y1: 190 });
@@ -191,4 +191,27 @@ test("equipment follows the project's style when one is set", () => {
   const [painted] = characterJobs("equipment", request({ equipment: ["sword"] }), style({ tags: ["painted"] }));
   assert.match(painted!.prompt, /exactly the same art style and finish as the character style above/);
   assert.ok(painted!.prompt.includes(CHARACTER_PRESETS.painted));
+});
+
+test("white cut: touching figures are parted at their narrowest point and a neighbour's tip is dropped", () => {
+  // Two wide bodies joined by a thin bridge at x 95-105 (touching pauldrons), off the half-way line.
+  const image = sheet(240, 120, [
+    [10, 10, 95, 110],
+    [95, 30, 105, 50],
+    [105, 10, 230, 110],
+  ]);
+  const layout = { rows: 1, cols: 2, cells: ["front", "right"].map((name) => ({ name, element: name })) };
+  const cut = cutOnWhite(image, layout);
+  assert.equal(cut.clean, false);
+  const [front, right] = cut.parts;
+  assert.ok(front!.box.x1 <= 106 && front!.box.x0 === 10, `front ${JSON.stringify(front!.box)}`);
+  assert.ok(right!.box.x0 >= 95 && right!.box.x1 === 230, `right ${JSON.stringify(right!.box)}`);
+  // A spike of the next figure poking into the cell from the edge, separated by white, is not part of this view.
+  const spiky = sheet(300, 120, [
+    [10, 10, 120, 110],
+    [140, 50, 152, 56],
+    [152, 10, 290, 110],
+  ]);
+  const second = cutOnWhite(spiky, layout);
+  assert.deepEqual(second.parts[0]!.box.x1 <= 152, true);
 });

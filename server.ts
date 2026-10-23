@@ -1276,7 +1276,7 @@ export default async function plugin(bb: BbPluginApi) {
           request: input.recordPrompt ?? null,
           sheet: `sheet.${ext}`,
           grid: { rows: gui.layout.rows, cols: gui.layout.cols },
-          evenSplit: cut.even,
+          cleanGaps: cut.clean,
           missing: cut.missing,
           [sub]: cut.parts.map((part) => ({
             name: part.name,
@@ -2499,8 +2499,8 @@ export default async function plugin(bb: BbPluginApi) {
             });
           }
           return reply(
-            { dir, evenSplit: cut.even, missing: cut.missing, parts: cut.parts.map((part) => ({ name: part.name, ...part.box })) },
-            `${cut.parts.length} pictures in ${dir}${cut.even ? " (no clean white gaps: split evenly, check the edges)" : ""}${cut.missing.length > 0 ? `\nempty: ${cut.missing.join(", ")}` : ""}`,
+            { dir, cleanGaps: cut.clean, missing: cut.missing, parts: cut.parts.map((part) => ({ name: part.name, ...part.box })) },
+            `${cut.parts.length} pictures in ${dir}${cut.clean ? "" : " (figures touched: cut at their narrowest point, check the edges)"}${cut.missing.length > 0 ? `\nempty: ${cut.missing.join(", ")}` : ""}`,
           );
         }
         const elements = parseElementList(flag(argv, "--elements") ?? "");

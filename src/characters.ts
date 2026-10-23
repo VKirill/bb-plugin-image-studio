@@ -219,7 +219,7 @@ export function turnaroundJob(request: CharacterRequest, style: GuiStyle | null)
       row
         ? `Layout: four full-body views in one row, left to right, STRICTLY in this order: ${order}.`
         : `Layout: a 2×2 grid of four full-body views, STRICTLY: top left, top right, bottom left, bottom right = ${order}.`,
-      `All four views the same scale, the feet on one horizontal line${row ? "" : " within each row"}, with a wide empty white gap between neighbours: nothing crosses from one view into the next. Orthographic camera at chest height in every view, no perspective.`,
+      `All four views the same scale, the feet on one horizontal line${row ? "" : " within each row"}. Each view sits in its own ${row ? "quarter of the image width" : "quarter of the image"}, centred in it and taking at most three quarters of its width and height, so a wide empty white gap separates every pair of neighbours: no spike, wing, hoof, hair or cloth reaches into the next view. Orthographic camera at chest height in every view, no perspective.`,
       "Identical character in every view: the same face, body, proportions, clothes, colours and worn gear, in the same pose; in the side views the limbs stay where the pose puts them and do not hide the torso.",
       POSES[request.body],
       CARRY_RULE,
@@ -290,18 +290,25 @@ export function characterJobs(mode: CharacterMode, request: CharacterRequest, st
 // ---- cutting on white -----------------------------------------------------------------
 
 export type WhiteCut = { name: string; image: Rgba; box: { x0: number; y0: number; x1: number; y1: number } };
-export type WhiteCutResult = { parts: WhiteCut[]; missing: string[]; even: boolean };
+/** `clean`: every cut went through empty white; false: some figures touched and were cut at their narrowest point. */
+export type WhiteCutResult = { parts: WhiteCut[]; missing: string[]; clean: boolean };
 
 const INK = 232;
 const inked = (data: Uint8Array, p: number): boolean => Math.min(data[p]!, data[p + 1]!, data[p + 2]!) < INK && data[p + 3]! > 128;
+/** A line with this few inked samples counts as empty (noise, a stray antialiased pixel). */
+const EMPTY = 2;
 
-/** Cut positions: the `parts - 1` widest runs of empty lines away from the edges; even splits when there are none. */
-function gutters(profile: readonly boolean[], parts: number, minGap: number): { cuts: number[]; even: boolean } {
-  const n = profile.length;
+/**
+ * Cut positions for `parts` pieces along a line of ink counts. The `parts - 1` widest empty runs away from the edges
+ * when there are enough; otherwise each cut goes to the least inked spot near where an even split would put it, so
+ * figures that touch (a pauldron, a hoof) are parted at their narrowest point instead of halfway through a body.
+ */
+function gutters(ink: readonly number[], parts: number, minGap: number): { cuts: number[]; clean: boolean } {
+  const n = ink.length;
   const runs: Array<[number, number]> = [];
   let start = -1;
   for (let i = 0; i <= n; i++) {
-    const empty = i < n && !profile[i];
+    const empty = i < n && ink[i]! <= EMPTY;
     if (empty && start < 0) start = i;
     else if (!empty && start >= 0) {
       if (start > 0 && i < n && i - start >= minGap) runs.push([i - start, Math.floor((start + i) / 2)]);
@@ -309,63 +316,91 @@ function gutters(profile: readonly boolean[], parts: number, minGap: number): { 
     }
   }
   runs.sort((a, b) => b[0] - a[0]);
-  const picked = runs.slice(0, parts - 1).map((run) => run[1]).sort((a, b) => a - b);
-  if (picked.length < parts - 1) return { cuts: [0, ...Array.from({ length: parts - 1 }, (_, k) => Math.round((n * (k + 1)) / parts)), n], even: true };
-  return { cuts: [0, ...picked, n], even: false };
+  if (runs.length >= parts - 1) return { cuts: [0, ...runs.slice(0, parts - 1).map((run) => run[1]).sort((a, b) => a - b), n], clean: true };
+  const smooth = ink.map((_, i) => {
+    let sum = 0;
+    for (let j = Math.max(0, i - 3); j <= Math.min(n - 1, i + 3); j++) sum += ink[j]!;
+    return sum;
+  });
+  const reach = Math.round((n * 0.4) / parts);
+  const cuts = [0];
+  for (let k = 1; k < parts; k++) {
+    const expected = Math.round((n * k) / parts);
+    let best = expected;
+    for (let i = Math.max(cuts[cuts.length - 1]! + 1, expected - reach); i <= Math.min(n - 1, expected + reach); i++) {
+      if (smooth[i]! < smooth[best]! || (smooth[i] === smooth[best] && Math.abs(i - expected) < Math.abs(best - expected))) best = i;
+    }
+    cuts.push(best);
+  }
+  cuts.push(n);
+  return { cuts, clean: false };
 }
 
 /**
- * Cuts a white-background sheet by its white gaps (generators rarely centre the cells): columns over the whole sheet,
- * then rows inside each column. Every cell is cropped to its drawing and padded onto a white square, so a view or a
- * prop goes straight into an image-to-3D model. An empty cell is reported in `missing`.
+ * The span of a cell's own drawing along one axis: ink segments split by empty lines; the heaviest is the figure.
+ * A segment touching the cell edge that is not the figure is a neighbour's tip (a spike, a hoof) and is dropped.
+ */
+function ownSpan(ink: readonly number[]): [number, number] | null {
+  const segments: Array<{ lo: number; hi: number; sum: number }> = [];
+  for (let i = 0; i < ink.length; i++) {
+    if (ink[i]! <= EMPTY) continue;
+    const last = segments[segments.length - 1];
+    if (last && last.hi === i) {
+      last.hi = i + 1;
+      last.sum += ink[i]!;
+    } else segments.push({ lo: i, hi: i + 1, sum: ink[i]! });
+  }
+  if (segments.length === 0) return null;
+  const main = segments.reduce((a, b) => (b.sum > a.sum ? b : a));
+  const kept = segments.filter((seg) => seg === main || (seg.lo > 0 && seg.hi < ink.length));
+  return [Math.min(...kept.map((seg) => seg.lo)), Math.max(...kept.map((seg) => seg.hi))];
+}
+
+/**
+ * Cuts a white-background sheet into its views or items (generators rarely centre the cells): columns over the whole
+ * sheet, then rows inside each column. Every cell is cropped to its own drawing and padded onto a white square, so a
+ * view or a prop goes straight into an image-to-3D model. An empty cell is reported in `missing`.
  */
 export function cutOnWhite(image: Rgba, layout: SheetLayout): WhiteCutResult {
   const { data, width, height } = image;
-  const colInk = Array.from({ length: width }, (_, x) => {
+  const columnInk = (x: number, y0: number, y1: number) => {
     let count = 0;
-    for (let y = 0; y < height; y += 2) if (inked(data, (y * width + x) * 4)) count++;
-    return count > 2;
-  });
-  const cols = gutters(colInk, layout.cols, Math.max(4, Math.round(width / 100)));
-  let even = cols.even;
+    for (let y = y0; y < y1; y += 2) if (inked(data, (y * width + x) * 4)) count++;
+    return count;
+  };
+  const rowInk = (y: number, x0: number, x1: number) => {
+    let count = 0;
+    for (let x = x0; x < x1; x += 2) if (inked(data, (y * width + x) * 4)) count++;
+    return count;
+  };
+  const cols = gutters(Array.from({ length: width }, (_, x) => columnInk(x, 0, height)), layout.cols, Math.max(4, Math.round(width / 100)));
+  let clean = cols.clean;
   const parts: WhiteCut[] = [];
   const missing: string[] = [];
   const cells: Array<{ index: number; x0: number; x1: number; y0: number; y1: number }> = [];
   for (let c = 0; c < layout.cols; c++) {
     const x0 = cols.cuts[c]!;
     const x1 = cols.cuts[c + 1]!;
-    const rowInk = Array.from({ length: height }, (_, y) => {
-      let count = 0;
-      for (let x = x0; x < x1; x += 2) if (inked(data, (y * width + x) * 4)) count++;
-      return count > 2;
-    });
-    const rows = gutters(rowInk, layout.rows, Math.max(4, Math.round(height / 100)));
-    even ||= rows.even && layout.rows > 1;
+    const rows = gutters(Array.from({ length: height }, (_, y) => rowInk(y, x0, x1)), layout.rows, Math.max(4, Math.round(height / 100)));
+    if (layout.rows > 1) clean &&= rows.clean;
     for (let r = 0; r < layout.rows; r++) cells.push({ index: r * layout.cols + c, x0, x1, y0: rows.cuts[r]!, y1: rows.cuts[r + 1]! });
   }
   cells.sort((a, b) => a.index - b.index);
   for (const cell of cells) {
     const named = layout.cells[cell.index];
     if (!named) continue;
-    let bx0 = cell.x1;
-    let by0 = cell.y1;
-    let bx1 = cell.x0;
-    let by1 = cell.y0;
-    for (let y = cell.y0; y < cell.y1; y++) {
-      for (let x = cell.x0; x < cell.x1; x++) {
-        if (!inked(data, (y * width + x) * 4)) continue;
-        if (x < bx0) bx0 = x;
-        if (x >= bx1) bx1 = x + 1;
-        if (y < by0) by0 = y;
-        if (y >= by1) by1 = y + 1;
-      }
-    }
-    const w = bx1 - bx0;
-    const h = by1 - by0;
-    if (w < 8 || h < 8) {
+    const xs = ownSpan(Array.from({ length: cell.x1 - cell.x0 }, (_, i) => columnInk(cell.x0 + i, cell.y0, cell.y1)));
+    const ys = xs && ownSpan(Array.from({ length: cell.y1 - cell.y0 }, (_, i) => rowInk(cell.y0 + i, cell.x0 + xs[0], cell.x0 + xs[1])));
+    if (!xs || !ys || xs[1] - xs[0] < 8 || ys[1] - ys[0] < 8) {
       missing.push(named.name);
       continue;
     }
+    const bx0 = cell.x0 + xs[0];
+    const bx1 = cell.x0 + xs[1];
+    const by0 = cell.y0 + ys[0];
+    const by1 = cell.y0 + ys[1];
+    const w = bx1 - bx0;
+    const h = by1 - by0;
     // White square with an 8% margin: what image-to-3D crops to anyway, and the figure is never cut at the edge.
     const side = Math.round(Math.max(w, h) * 1.16);
     const out = new Uint8Array(side * side * 4).fill(255);
@@ -382,5 +417,5 @@ export function cutOnWhite(image: Rgba, layout: SheetLayout): WhiteCutResult {
     }
     parts.push({ name: named.name, image: { data: out, width: side, height: side }, box: { x0: bx0, y0: by0, x1: bx1, y1: by1 } });
   }
-  return { parts, missing, even };
+  return { parts, missing, clean };
 }
