@@ -2495,6 +2495,9 @@ export default async function plugin(bb: BbPluginApi) {
             ? sheetLayout(items, false)
             : { rows: rows!, cols: cols!, cells: names.map((name) => ({ name, element: name })) };
           const cut = cutOnWhite(await decodeRgba(bytes), layout);
+          const right = cut.parts.find((part) => part.name === "right")?.image;
+          const left = cut.parts.find((part) => part.name === "left")?.image;
+          const leftFlipped = turnaround && right && left ? fixLeftFacing(right, left) : false;
           const dir = join(path, "..", turnaround ? "views" : "parts");
           for (const part of cut.parts) {
             await bb.sdk.files.write({
@@ -2505,8 +2508,8 @@ export default async function plugin(bb: BbPluginApi) {
             });
           }
           return reply(
-            { dir, cleanGaps: cut.clean, missing: cut.missing, parts: cut.parts.map((part) => ({ name: part.name, ...part.box })) },
-            `${cut.parts.length} pictures in ${dir}${cut.clean ? "" : " (figures touched: cut at their narrowest point, check the edges)"}${cut.missing.length > 0 ? `\nempty: ${cut.missing.join(", ")}` : ""}`,
+            { dir, cleanGaps: cut.clean, leftFlipped, missing: cut.missing, parts: cut.parts.map((part) => ({ name: part.name, ...part.box })) },
+            `${cut.parts.length} pictures in ${dir}${cut.clean ? "" : " (figures touched: cut at their narrowest point, check the edges)"}${leftFlipped ? "\nleft view mirrored: it faced the same way as the right one" : ""}${cut.missing.length > 0 ? `\nempty: ${cut.missing.join(", ")}` : ""}`,
           );
         }
         const elements = parseElementList(flag(argv, "--elements") ?? "");
