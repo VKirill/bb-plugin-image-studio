@@ -192,10 +192,10 @@ const TAKES = [
 ];
 /** Roblox tests 2–5 thumbnails per game against each other: the takes are a set of different shots, not retries. */
 const THUMBNAIL_TAKES = [
-  "Shot 1 of the set: a close-up hero shot, like a widened game icon: the main character or creature big, with its strongest emotion.",
-  "Shot 2 of the set: a gameplay scene: players in the middle of the core activity, the game's mechanic obvious at a glance.",
-  "Shot 3 of the set: the reward or feature shot: the rarest prize, the biggest boss or the best upgrade, players reacting to it.",
-  "Shot 4 of the set: a social or event moment: a group of players together, a dramatic moment of the world, a different colour mood from the others.",
+  "Shot 1 of the set: a close-up hero shot, like a widened game icon: the main character or creature big and near the camera, with its strongest emotion, on a simple bright background.",
+  "Shot 2 of the set: a wide gameplay scene from a high three-quarter angle: several players in the middle of the core activity, the game's mechanic obvious at a glance, daylight colours.",
+  "Shot 3 of the set: the reward shot: the rarest prize or the biggest boss huge in the frame with a dramatic glow, a player small beside it reacting, on a darker contrasting background.",
+  "Shot 4 of the set: a social or event moment from a low angle: a group of players together at the world's most striking place, a different colour mood from the others (sunset or night).",
 ];
 
 function single(base: string[], lines: string[], request: RobloxRequest, aspect: string, label: string, output: RobloxOutput, takes = TAKES): RobloxJob[] {

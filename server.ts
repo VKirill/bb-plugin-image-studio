@@ -109,7 +109,7 @@ import {
   type RobloxMode,
   type RobloxOutput,
 } from "./src/roblox.js";
-import { SKYBOX_FACES, cover, fitSquare, flattenRound, glowToAlpha, limit, normalMap, opaque, resize, seamless, skyboxFaces, trimAlpha } from "./src/raster.js";
+import { SKYBOX_FACES, cover, fadeEdges, fitSquare, flattenRound, glowToAlpha, limit, normalMap, opaque, resize, seamless, skyboxFaces, trimAlpha } from "./src/raster.js";
 import { enabledFromSettings, mergeSettings, settingsSchema, type StudioSettings } from "./src/settings.js";
 import {
   GENERATE_PICKER_ID,
@@ -1435,7 +1435,12 @@ export default async function plugin(bb: BbPluginApi) {
         const cut = cutSheet(keyed, gui.layout);
         missing = cut.missing;
         for (const part of cut.parts) {
-          const square = output.round ? flattenRound(fitSquare(part.image, output.size, 0.01)) : fitSquare(part.image, output.size);
+          // Round icons go on an opaque square; glows fade out before the edge of theirs.
+          const square = output.round
+            ? flattenRound(fitSquare(part.image, output.size, 0.01))
+            : output.key === "black"
+              ? fadeEdges(fitSquare(part.image, output.size))
+              : fitSquare(part.image, output.size);
           await put(part.name, `parts/${part.name}.png`, square, part.cell ? { element: part.cell.element } : {});
         }
         use =

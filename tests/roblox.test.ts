@@ -3,7 +3,7 @@ import { test } from "node:test";
 import type { GuiStyle } from "../src/gui.ts";
 import type { Rgba } from "../src/image-io.ts";
 import { MODE_CATEGORY, ROBLOX_MODES, mergeGameStyle, planGameMigration, robloxJobs, type RobloxRequest } from "../src/roblox.ts";
-import { cover, fitSquare, flattenRound, glowToAlpha, normalMap, resize, seamless, skyboxFaces, trimAlpha } from "../src/raster.ts";
+import { cover, fadeEdges, fitSquare, flattenRound, glowToAlpha, normalMap, resize, seamless, skyboxFaces, trimAlpha } from "../src/raster.ts";
 
 const style = (patch: Partial<GuiStyle> = {}): GuiStyle => ({
   id: "s1",
@@ -69,7 +69,7 @@ test("Roblox rules: moderation-safe everywhere, thumbnails as a set, no baked su
   }
   const set = robloxJobs(request({ mode: "thumbnail", variants: 3 }), null);
   assert.match(set[0]!.prompt, /Shot 1 of the set: a close-up hero/);
-  assert.match(set[1]!.prompt, /Shot 2 of the set: a gameplay scene/);
+  assert.match(set[1]!.prompt, /Shot 2 of the set: a wide gameplay scene/);
   assert.match(set[0]!.prompt, /bottom 15% holds nothing important/);
   assert.match(robloxJobs(request({ mode: "skybox" }), null)[0]!.prompt, /No sun disc and no moon/);
   const [loading] = robloxJobs(request({ mode: "loading", prompt: "" }), null);
@@ -208,6 +208,13 @@ test("round icons become opaque squares filled with their rim colour", () => {
   assert.deepEqual(px(flat, 0, 0), [200, 160, 20, 255]);
   assert.deepEqual(px(flat, 50, 50), [30, 60, 200, 255]);
   assert.ok([...Array(100 * 100).keys()].every((i) => flat.data[i * 4 + 3] === 255));
+});
+
+test("glows fade to nothing at the square's edges, the middle stays", () => {
+  const faded = fadeEdges(solid(100, 100, [255, 255, 255, 255]));
+  assert.ok(px(faded, 0, 50)[3]! <= 2);
+  assert.ok(px(faded, 7, 50)[3]! > 0 && px(faded, 7, 50)[3]! < 255);
+  assert.equal(px(faded, 50, 50)[3], 255);
 });
 
 test("glow on black becomes colour with alpha", () => {

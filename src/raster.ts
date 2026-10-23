@@ -318,6 +318,23 @@ export function flattenRound(image: Rgba): Rgba {
   return { data: out, width, height };
 }
 
+/**
+ * Alpha faded to nothing toward the square's edges (a smooth band of `band` of the side): a soft glow cut out of its
+ * cell keeps no hard square border when Roblox draws it as a particle.
+ */
+export function fadeEdges(image: Rgba, band = 0.15): Rgba {
+  const { data, width, height } = image;
+  const out = new Uint8Array(data);
+  const edge = Math.max(1, Math.min(width, height) * band);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const t = Math.min(1, Math.min(x + 0.5, y + 0.5, width - x - 0.5, height - y - 0.5) / edge);
+      out[(y * width + x) * 4 + 3] = Math.round(data[(y * width + x) * 4 + 3]! * t * t * (3 - 2 * t));
+    }
+  }
+  return { data: out, width, height };
+}
+
 /** Opaque copy (alpha 255 everywhere): decals and textures that must not show through. */
 export function opaque(image: Rgba): Rgba {
   const data = new Uint8Array(image.data);
