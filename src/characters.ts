@@ -221,6 +221,9 @@ export function turnaroundJob(request: CharacterRequest, style: GuiStyle | null)
         : `Layout: a 2×2 grid of four full-body views, STRICTLY: top left, top right, bottom left, bottom right = ${order}.`,
       `All four views the same scale, the feet on one horizontal line${row ? "" : " within each row"}. Each view sits in its own ${row ? "quarter of the image width" : "quarter of the image"}, centred in it and taking at most three quarters of its width and height, so a wide empty white gap separates every pair of neighbours: no spike, wing, hoof, hair or cloth reaches into the next view. Orthographic camera at chest height in every view, no perspective.`,
       "Identical character in every view: the same face, body, proportions, clothes, colours and worn gear, in the same pose; in the side views the limbs stay where the pose puts them and do not hide the torso.",
+      ...(request.body === "winged"
+        ? ["The wings are in every view, spread exactly as in the front view: in the side views they are seen edge-on and foreshortened, the near wing reaching toward the camera and the far wing showing behind the body; in the back view both wings are spread wide. Never fold or drop the wings in any view."]
+        : []),
       POSES[request.body],
       CARRY_RULE,
       BACKGROUND_RULE,
