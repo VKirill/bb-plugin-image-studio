@@ -210,9 +210,10 @@ test("round icons become opaque squares filled with their rim colour", () => {
   assert.ok([...Array(100 * 100).keys()].every((i) => flat.data[i * 4 + 3] === 255));
 });
 
-test("glows fade to nothing at the square's edges, the middle stays", () => {
+test("glows fade to nothing toward a circle, corners clear, the middle stays", () => {
   const faded = fadeEdges(solid(100, 100, [255, 255, 255, 255]));
   assert.ok(px(faded, 0, 50)[3]! <= 2);
+  assert.equal(px(faded, 10, 10)[3], 0);
   assert.ok(px(faded, 7, 50)[3]! > 0 && px(faded, 7, 50)[3]! < 255);
   assert.equal(px(faded, 50, 50)[3], 255);
 });
