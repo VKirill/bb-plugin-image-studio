@@ -25,6 +25,8 @@ const style = (patch: Partial<GuiStyle> = {}): GuiStyle => ({
   id: "s1",
   projectId: "p1",
   origin: "",
+  section: "gui",
+  gameId: "",
   name: "Vampire night",
   theme: "",
   tags: [],
@@ -34,6 +36,12 @@ const style = (patch: Partial<GuiStyle> = {}): GuiStyle => ({
   createdAt: "2026-10-23T00:00:00.000Z",
   updatedAt: "2026-10-23T00:00:00.000Z",
   ...patch,
+});
+
+test("parseGuiStyles keeps the model section", () => {
+  const parsed = parseGuiStyles([style({ section: "model", name: "fire-mop" })]);
+  assert.equal(parsed.length, 1);
+  assert.equal(parsed[0]?.section, "model");
 });
 
 test("element lists split on lines and semicolons; commas stay inside a description", () => {

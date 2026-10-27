@@ -36,8 +36,8 @@ export const guiStyleSchema = z.object({
   projectId: z.string(),
   /** The folder (or BB project) whose generations go here when no project is named. */
   origin: z.string().default(""),
-  /** Which section the project belongs to: game/site interface, game characters for 3D, or a Roblox game. */
-  section: z.enum(["gui", "characters", "roblox"]).default("gui"),
+  /** Which section the project belongs to: interface, characters for 3D, Roblox game assets, or texture-by-model. */
+  section: z.enum(["gui", "characters", "roblox", "model"]).default("gui"),
   /** GUI and Characters projects of a Roblox game: the game's id (they inherit its theme and art). */
   gameId: z.string().default(""),
   name: z.string(),

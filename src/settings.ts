@@ -31,6 +31,8 @@ export const settingsSchema = z.object({
   jevKeyCatalog: z.string(),
   /** Env Catalog variable for TypeSafe direct (api.typesafe.ai), used only if the primary fails. Empty: no fallback. */
   jevFallbackKeyCatalog: z.string(),
+  /** Background Blender for texture-by-model (prepare/apply on the project host). */
+  blenderPath: z.string(),
 });
 
 export type StudioSettings = z.infer<typeof settingsSchema>;
@@ -57,6 +59,7 @@ export const DEFAULT_SETTINGS: StudioSettings = {
   jevModel: JEV_MODEL,
   jevKeyCatalog: "OPENLUX_API_KEY",
   jevFallbackKeyCatalog: "TYPESAFE_API_KEY",
+  blenderPath: "/Applications/Blender.app/Contents/MacOS/Blender",
 };
 
 function readBool(source: Record<string, unknown>, key: string, fallback: boolean): boolean {
@@ -101,6 +104,7 @@ export function mergeSettings(raw: unknown): StudioSettings {
     jevKeyCatalog: typeof source.jevKeyCatalog === "string" ? source.jevKeyCatalog : DEFAULT_SETTINGS.jevKeyCatalog,
     jevFallbackKeyCatalog:
       typeof source.jevFallbackKeyCatalog === "string" ? source.jevFallbackKeyCatalog : DEFAULT_SETTINGS.jevFallbackKeyCatalog,
+    blenderPath: readText(source, "blenderPath", DEFAULT_SETTINGS.blenderPath),
   };
 }
 
