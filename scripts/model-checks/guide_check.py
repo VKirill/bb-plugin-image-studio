@@ -54,6 +54,7 @@ elif mode == "preview":
         c = (y0 * w + x0) * 4
         bg = p[c:c + 3]
         rows = set()
+        edge = 0
         lum = 0.0
         n = 0
         for y in range(y0, y0 + th, 2):
@@ -61,13 +62,17 @@ elif mode == "preview":
                 i = (y * w + x) * 4
                 if abs(p[i] - bg[0]) + abs(p[i + 1] - bg[1]) + abs(p[i + 2] - bg[2]) > 0.08:
                     rows.add(y)
+                    if x - x0 < tw * 0.02 or x0 + tw - x < tw * 0.02 or y - y0 < th * 0.02 or y0 + th - y < th * 0.02:
+                        edge += 1
                     lum += 0.2126 * p[i] + 0.7152 * p[i + 1] + 0.0722 * p[i + 2]
                     n += 1
         span = (max(rows) - min(rows)) / th if rows else 0
         mean = lum / max(n, 1)
-        print("PREVIEW", name, "height_fraction", round(span, 3), "mean_lum", round(mean, 3))
+        print("PREVIEW", name, "height_fraction", round(span, 3), "edge_pixels", edge, "mean_lum", round(mean, 3))
         if span < 0.6:
             fail(f"{name}: the model fills less than 60% of the tile height")
+        if span > 0.92 or edge > 0:
+            fail(f"{name}: the model is cropped or touches the tile edge (height fraction {round(span, 3)}, {edge} edge pixels)")
         if mean < 0.25:
             fail(f"{name}: the model is too dark (mean luminance < 0.25)")
 else:
