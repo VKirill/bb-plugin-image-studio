@@ -138,6 +138,21 @@ import {
   type ModelPartsParam,
   type ModelTextureSize,
 } from "./src/model.ts";
+import {
+  blueprintAspect,
+  buildBlueprintPrompt,
+  buildSideOnlyPrompt,
+  cutBlueprint,
+  defaultBlueprintViews,
+  findSoftAnchors,
+  normalizeBlueprintStyle,
+  replaceSideView,
+  SIDE_COPY_THRESHOLD,
+  silhouetteSimilarity,
+  viewsJsonFromCut,
+  type BlueprintStyle,
+  type BlueprintViewName,
+} from "./src/blueprint.ts";
 
 const ENV_CATALOG_PLUGIN_ID = "env-catalog";
 const DEFAULT_BLENDER_PATH = "/Applications/Blender.app/Contents/MacOS/Blender";
@@ -173,6 +188,36 @@ const modelPartsSchema = z.union([
   z.array(z.object({ material: z.string().min(1), part: z.string().min(1) }).strict()),
 ]);
 const modelConceptViewSchema = z.enum(MODEL_CONCEPT_VIEWS);
+const blueprintViewSchema = z.enum(["front", "side", "back", "top"]);
+const blueprintStyleSchema = z.enum(["clay+wire", "clean line", "clean-line"]);
+const imageStudioModelParamsSchema = z
+  .object({
+    mode: modelModeSchema,
+    model: z.string().optional(),
+    object: z.string().optional(),
+    prompt: z.string().default(""),
+    parts: modelPartsSchema.optional(),
+    images: z.array(z.string().min(1)).max(2).optional(),
+    size: modelTextureSizeSchema.optional(),
+    variants: z.number().int().min(1).max(MAX_VARIANTS).optional(),
+    subject: z.string().max(120).optional(),
+    conceptNote: z.string().max(500).optional(),
+    projectConcept: z.boolean().optional(),
+    conceptView: modelConceptViewSchema.optional(),
+    views: z.array(blueprintViewSchema).optional(),
+    style: blueprintStyleSchema.optional(),
+    soft: z.array(z.string().min(1)).optional(),
+    rigid: z.array(z.string().min(1)).optional(),
+    project: z.string().optional(),
+  })
+  .superRefine((input, ctx) => {
+    if (input.mode === "texture-uv" && !input.model?.trim()) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "model is required for texture-uv", path: ["model"] });
+    }
+    if (input.mode === "blueprint" && !input.images?.[0]) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "images[0] concept is required for blueprint", path: ["images"] });
+    }
+  });
 /** One-time move of the GUI and Characters projects into Roblox games. */
 const GAMES_MIGRATED_KEY = "roblox-games-migrated";
 const guiResultSchema = z.object({
@@ -1866,9 +1911,6 @@ export default async function plugin(bb: BbPluginApi) {
     originLabel?: string;
     gameId?: string;
   }): Promise<{ takes: ModelTakeManifest[]; errors: string[]; style: GuiStyle }> {
-    if (input.mode === "blueprint") {
-      throw new Error("Mode blueprint is not implemented yet.");
-    }
     if (!input.cwd || !input.hostId) {
       throw new Error("Texture-by-model needs a project folder on a host with Blender installed.");
     }
@@ -2002,6 +2044,131 @@ export default async function plugin(bb: BbPluginApi) {
     return { takes, errors, style };
   }
 
+  type ModelBlueprintManifest = {
+    mode: "blueprint";
+    subject: string;
+    style: BlueprintStyle;
+    views: BlueprintViewName[];
+    dir: string;
+    files: {
+      sheet: string;
+      views: string;
+      front?: string;
+      side?: string;
+      back?: string;
+      top?: string;
+    };
+  };
+
+  async function runModelBlueprint(input: {
+    projectId: string | null;
+    styleId?: string;
+    images: string[];
+    views?: BlueprintViewName[];
+    style?: string;
+    subject?: string;
+    soft?: string[];
+    rigid?: string[];
+    cwd?: string;
+    hostId?: string;
+    originLabel?: string;
+    gameId?: string;
+  }): Promise<{ blueprint: ModelBlueprintManifest | null; errors: string[]; style: GuiStyle }> {
+    if (!input.cwd || !input.hostId) {
+      throw new Error("Model blueprint needs a project folder on a host.");
+    }
+    if (!input.images[0]) throw new Error("Blueprint mode requires images[0] as the concept reference.");
+    const origin = input.cwd ?? input.projectId ?? "unscoped";
+    const style = await resolveGuiProject({
+      styleId: input.styleId,
+      origin,
+      projectId: input.projectId,
+      name: input.originLabel,
+      section: "model",
+      gameId: input.gameId,
+    });
+    const viewNames = defaultBlueprintViews(input.views);
+    const clayStyle = normalizeBlueprintStyle(input.style ?? "clay+wire");
+    const softParts = (input.soft ?? []).map((s) => s.trim()).filter(Boolean);
+    const rigidParts = (input.rigid ?? []).map((s) => s.trim()).filter(Boolean);
+    const [conceptUri] = await sourceDataUris([input.images[0]], input.projectId, input.cwd, input.hostId);
+    if (!conceptUri) throw new Error("Could not read the concept image.");
+    const subject = input.subject?.trim() || "this object";
+    const run = randomUUID().slice(0, 8);
+    const blueprintRel = join("image-studio", "model", slugify(style.name, "model"), run, "blueprint");
+    const errors: string[] = [];
+    try {
+      const prompt = buildBlueprintPrompt({ subject, viewNames, style: clayStyle, softParts });
+      const rendered = await renderImage({
+        projectId: input.projectId,
+        prompt,
+        rawPrompt: true,
+        recordPrompt: prompt,
+        model: MODEL_MUSE,
+        gateway: "fal",
+        aspectRatio: blueprintAspect(viewNames.length),
+        leadUris: [conceptUri],
+        cwd: input.cwd,
+        hostId: input.hostId,
+      });
+      const sheetRgba = await decodeRgba(rendered.original);
+      await writeHostBytes(join(blueprintRel, "sheet.png"), input.cwd, input.hostId, rendered.original);
+      let cut = cutBlueprint(sheetRgba, viewNames);
+      let sideRegenerated = false;
+      const frontView = cut.views.find((v) => v.name === "front");
+      const sideView = cut.views.find((v) => v.name === "side");
+      if (frontView && sideView && silhouetteSimilarity(frontView.image, sideView.image) > SIDE_COPY_THRESHOLD) {
+        const sidePrompt = buildSideOnlyPrompt({ subject, style: clayStyle, softParts });
+        const sideRendered = await renderImage({
+          projectId: input.projectId,
+          prompt: sidePrompt,
+          rawPrompt: true,
+          recordPrompt: sidePrompt,
+          model: MODEL_MUSE,
+          gateway: "fal",
+          aspectRatio: "16:9",
+          leadUris: [conceptUri],
+          cwd: input.cwd,
+          hostId: input.hostId,
+        });
+        const sideSheet = await decodeRgba(sideRendered.original);
+        const sideCut = cutBlueprint(sideSheet, ["side"]);
+        const sideRaw = sideCut.rawViews[0]?.image;
+        if (sideRaw) {
+          cut = replaceSideView(cut, sideRaw);
+          sideRegenerated = true;
+        } else {
+          errors.push("side regeneration: could not cut the new side sheet");
+        }
+      }
+      const { parts, warnings: softWarnings } = findSoftAnchors(cut.views, softParts, rigidParts);
+      const viewsJson = viewsJsonFromCut(cut, parts, sideRegenerated, softWarnings);
+      for (const v of cut.views) {
+        const bytes = await encodePng(v.image);
+        await writeHostBytes(join(blueprintRel, `${v.name}.png`), input.cwd, input.hostId, bytes);
+      }
+      await writeHostBytes(
+        join(blueprintRel, "views.json"),
+        input.cwd,
+        input.hostId,
+        Buffer.from(JSON.stringify(viewsJson, null, 2)),
+      );
+      const files: ModelBlueprintManifest["files"] = {
+        sheet: join(blueprintRel, "sheet.png"),
+        views: join(blueprintRel, "views.json"),
+      };
+      for (const name of viewNames) files[name] = join(blueprintRel, `${name}.png`);
+      return {
+        blueprint: { mode: "blueprint", subject, style: clayStyle, views: viewNames, dir: blueprintRel, files },
+        errors,
+        style,
+      };
+    } catch (error) {
+      errors.push(describe(error));
+      return { blueprint: null, errors, style };
+    }
+  }
+
   function modelSummary(run: { takes: ModelTakeManifest[]; errors: string[]; style: GuiStyle }): string {
     return [
       `Model project: ${run.style.name} (${run.style.id})`,
@@ -2011,6 +2178,21 @@ export default async function plugin(bb: BbPluginApi) {
       ),
       ...run.errors.map((error) => `failed: ${error}`),
     ].join("\n");
+  }
+
+  function blueprintSummary(run: { blueprint: ModelBlueprintManifest | null; errors: string[]; style: GuiStyle }): string {
+    const lines = [`Model project: ${run.style.name} (${run.style.id})`];
+    if (run.blueprint) {
+      const b = run.blueprint;
+      lines.push(
+        `blueprint (${b.views.join(", ")}): ${b.dir}/`,
+        `  sheet: ${b.files.sheet}`,
+        `  views: ${b.files.views}`,
+        ...b.views.map((v) => `  ${v}: ${b.files[v]}`),
+      );
+    }
+    lines.push(...run.errors.map((error) => `failed: ${error}`));
+    return lines.join("\n");
   }
 
   // ---- reference sheet -------------------------------------------------------------
@@ -2513,7 +2695,8 @@ export default async function plugin(bb: BbPluginApi) {
     "  bb image-studio character cut --sheet <path> [--grid 1x2 | --items \"rifle; knife\"] [--json]   (re-cut a white sheet; free)",
     "  bb image-studio roblox projects|project|ref|delete …   (games; the same options as gui; --tags simulator,stylized,lowpoly,…)",
     "  bb image-studio model projects|project|ref|delete …   (texture-by-UV projects; same theme options as gui)",
-    "  bb image-studio model generate --mode texture-uv|blueprint --file <model.fbx|glb|blend> [--object NAME] [--size 1024|2048] [--variants 1-4] [--image <concept|style>]… --prompt <style> [--json]",
+    "  bb image-studio model generate --mode texture-uv --file <model.fbx|glb|blend> [--object NAME] [--size 1024|2048] [--variants 1-4] [--image <concept|style>]… --prompt <style> [--json]",
+    "  bb image-studio model generate --mode blueprint --image <concept> [--views front,side,back] [--style clay+wire|clean-line] [--soft \"rags; rope\"] [--subject \"fire mop\"] [--json]",
     "  bb image-studio roblox generate --mode icon|thumbnail|logo|loading|badges|passes|products|items|props|texture|skybox|decal|vfx|flipbook",
     "                                  [--project <game>] [--variants 1-4] [--frames 4|16] [--aspect 1:1|16:9|…] [--image <path>]… --prompt <what> [--json]",
     "                                  (list modes take the list in --prompt or --items: \"VIP; 2x Coins\")",
@@ -3136,6 +3319,37 @@ export default async function plugin(bb: BbPluginApi) {
       case "generate": {
         const mode = modelModeSchema.safeParse(flag(argv, "--mode") ?? "texture-uv");
         if (!mode.success) return { exitCode: 1, stderr: `--mode takes ${MODEL_MODES.join(", ")}.` };
+        const source = await projectSource(projectId);
+        const cwd = ctx.cwd ?? source.cwd;
+        const hostId = source.hostId;
+        const images = flags(argv, "--image");
+        if (mode.data === "blueprint") {
+          const concept = images[0] ?? flag(argv, "--image");
+          if (!concept) return { exitCode: 1, stderr: usage };
+          const viewsFlag = flag(argv, "--views");
+          const views = viewsFlag
+            ? defaultBlueprintViews(viewsFlag.split(",").map((part) => part.trim()))
+            : undefined;
+          const styleFlag = flag(argv, "--style");
+          const softFlag = flag(argv, "--soft");
+          const soft = softFlag
+            ? softFlag.split(/[;,]/).map((part) => part.trim()).filter(Boolean)
+            : undefined;
+          const run = await runModelBlueprint({
+            projectId,
+            styleId: projectFlag,
+            images: [concept],
+            views,
+            style: styleFlag,
+            subject: flag(argv, "--subject"),
+            soft,
+            cwd,
+            hostId,
+            originLabel: source.name,
+          });
+          const text = blueprintSummary(run);
+          return !run.blueprint ? { exitCode: 1, stderr: text || "Nothing was generated." } : reply(run, text);
+        }
         const modelFile = flag(argv, "--file") ?? flag(argv, "--model");
         const prompt = flag(argv, "--prompt") ?? restAfter(argv, "generate").replace(/^model\s*/, "");
         if (!modelFile || !prompt) return { exitCode: 1, stderr: usage };
@@ -3144,7 +3358,6 @@ export default async function plugin(bb: BbPluginApi) {
         if (!sizeParsed.success) return { exitCode: 1, stderr: "--size takes 1024 or 2048." };
         const variantsFlag = flag(argv, "--variants");
         const variants = variantsFlag ? Number(variantsFlag) : 1;
-        const source = await projectSource(projectId);
         const run = await runModelTextureUv({
           projectId,
           styleId: projectFlag,
@@ -3152,11 +3365,11 @@ export default async function plugin(bb: BbPluginApi) {
           model: modelFile,
           object: flag(argv, "--object"),
           prompt,
-          images: flags(argv, "--image"),
+          images,
           size: sizeParsed.data,
           variants,
-          cwd: ctx.cwd ?? source.cwd,
-          hostId: source.hostId,
+          cwd,
+          hostId,
           originLabel: source.name,
         });
         const text = modelSummary(run);
@@ -3255,35 +3468,37 @@ export default async function plugin(bb: BbPluginApi) {
   bb.agents.registerTool({
     name: "image_studio_model",
     description:
-      "Paint a game model's UV texture in place (Muse Image): Blender bakes a colour guide on the project host, Muse repaints each UV island, the result is applied back with a before/after preview. Mode texture-uv is fully supported; blueprint is reserved for modeling sheets. Runs at once, no Send form.",
+      "Game model textures and modeling blueprints (Muse Image). Mode texture-uv: Blender bakes a colour guide on the project host, Muse repaints each UV island, the result is applied back with a before/after preview. Mode blueprint: orthographic clay wireframe views cut from one sheet for a 3D artist (decorative reference, not a mesh). Runs at once, no Send form.",
     instructions:
-      "For a 3D model file (FBX, GLB, or .blend) call image_studio_model with mode texture-uv, the model path, and a style prompt. Optional images (up to 2): concept art, then style reference. Generations land in image-studio/model/<project>/<take>/ with color.png, guide.png, mask.png, preview.png, parts.json, model.blend and manifest.json. In a Roblox game folder the project inherits the game's look like GUI and Characters. blueprint returns not implemented yet.",
+      "texture-uv: pass mode texture-uv, the model path, and a style prompt. Optional images (up to 2): concept art, then style reference. Output: image-studio/model/<project>/<take>/ with color.png, guide.png, mask.png, preview.png, parts.json, model.blend and manifest.json. blueprint: pass mode blueprint and images[0] as concept; optional views (front, side, back, top), style clay+wire or clean line, soft (dangling parts), rigid, subject. Output: image-studio/model/<project>/<run>/blueprint/ with sheet.png, one PNG per view, and views.json (anchors for soft parts). The side view is redrawn alone when it copies the front. In a Roblox game folder the project inherits the game's look like GUI and Characters.",
     presentation: {
-      label: { pending: "Texturing model UV", completed: "Textured model UV" },
+      label: { pending: "Working on model image", completed: "Finished model image" },
       icon: { glyph: "Palette" },
     },
-    parameters: z.object({
-      mode: modelModeSchema,
-      model: z.string().min(1),
-      object: z.string().optional(),
-      prompt: z.string().default(""),
-      parts: modelPartsSchema.optional(),
-      images: z.array(z.string().min(1)).max(2).optional(),
-      size: modelTextureSizeSchema.optional(),
-      variants: z.number().int().min(1).max(MAX_VARIANTS).optional(),
-      subject: z.string().max(120).optional(),
-      conceptNote: z.string().max(500).optional(),
-      projectConcept: z.boolean().optional(),
-      conceptView: modelConceptViewSchema.optional(),
-      project: z.string().optional(),
-    }),
+    parameters: imageStudioModelParamsSchema,
     async execute(input, ctx) {
       try {
+        const folder = await threadFolder(ctx.threadId, ctx.projectId || null);
+        if (input.mode === "blueprint") {
+          const run = await runModelBlueprint({
+            projectId: ctx.projectId || null,
+            styleId: input.project,
+            images: input.images ?? [],
+            views: input.views,
+            style: input.style,
+            subject: input.subject,
+            soft: input.soft,
+            rigid: input.rigid,
+            ...folder,
+          });
+          const text = blueprintSummary(run);
+          return !run.blueprint ? { content: [{ type: "text", text: text || "Nothing was generated." }], isError: true } : text;
+        }
         const run = await runModelTextureUv({
           projectId: ctx.projectId || null,
           styleId: input.project,
           mode: input.mode,
-          model: input.model,
+          model: input.model!,
           object: input.object,
           prompt: input.prompt,
           parts: input.parts,
@@ -3294,7 +3509,7 @@ export default async function plugin(bb: BbPluginApi) {
           conceptNote: input.conceptNote,
           projectConcept: input.projectConcept,
           conceptView: input.conceptView,
-          ...(await threadFolder(ctx.threadId, ctx.projectId || null)),
+          ...folder,
         });
         const text = modelSummary(run);
         return run.takes.length === 0 ? { content: [{ type: "text", text: text || "Nothing was generated." }], isError: true } : text;
