@@ -16,6 +16,6 @@ test("buildTextureUvPrompt keeps user task separate from game look line", () => 
   });
   assert.match(prompt, new RegExp(`Task: repaint image 1 as a final hand-painted game texture: ${userPrompt}\\.`));
   assert.doesNotMatch(prompt, /Task:[^\n]*warm volcanic/);
-  assert.match(prompt, /Game look \(materials and palette only/);
+  assert.match(prompt, /Game look \(lower priority than the Task and the reference images/);
   assert.match(prompt, /no coloured light, no cast shadows and no outlines\): warm volcanic sunset light; toon: bold outlines/);
 });

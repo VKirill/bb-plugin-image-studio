@@ -24,6 +24,12 @@ export type BlueprintPart = {
   anchor: { view: BlueprintViewName; x: number; y: number } | null;
 };
 
+export type BlueprintViewClassification = {
+  pairs: Array<{ a: BlueprintViewName; b: BlueprintViewName; sim: number }>;
+  relabeled: boolean;
+  drawn: "side" | "back" | null;
+};
+
 export type BlueprintViewsJson = {
   views: Array<{
     name: BlueprintViewName;
@@ -36,6 +42,7 @@ export type BlueprintViewsJson = {
   parts: BlueprintPart[];
   sideRegenerated: boolean;
   sheetSideSimilarity?: number;
+  classification?: BlueprintViewClassification;
   warnings: string[];
 };
 
@@ -142,6 +149,30 @@ export function buildSideOnlyPrompt(input: {
     `Task: draw only the exact 90° side profile of this object, seen edge-on, on a plain light grey background; ${clayStylePhrase(input.style)}.${soft}`,
     "Must not change: the proportions, part count and silhouette of the object in image 1.",
     "No perspective, no shadows, no fire or effects, no text except the label SIDE.",
+  );
+  return lines.join("\n");
+}
+
+export function buildBackOnlyPrompt(input: {
+  subject: string;
+  style: BlueprintStyle;
+  softParts: string[];
+  withFrontReference?: boolean;
+}): string {
+  const soft =
+    input.softParts.length > 0
+      ? ` Soft dangling parts (${input.softParts.join(", ")}) in light BLUE clay.`
+      : "";
+  const lines = [`Image 1 is the DESIGN REFERENCE: ${input.subject}.`];
+  if (input.withFrontReference ?? true) {
+    lines.push(
+      "Image 2 is the FRONT VIEW of this blueprint: draw only the BACK view, the same object seen from behind, with the same height, parts and clay style.",
+    );
+  }
+  lines.push(
+    `Task: draw only the back view of this object on a plain light grey background; ${clayStylePhrase(input.style)}.${soft}`,
+    "Must not change: the proportions, part count and silhouette of the object in image 1.",
+    "No perspective, no shadows, no fire or effects, no text except the label BACK.",
   );
   return lines.join("\n");
 }
@@ -496,6 +527,95 @@ export function silhouetteSimilarity(a: Rgba, b: Rgba): number {
   return union === 0 ? 0 : inter / union;
 }
 
+function flipRgbaHorizontal(image: Rgba): Rgba {
+  const { width, height, data } = image;
+  const out = new Uint8Array(data.length);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const src = (y * width + x) * 4;
+      const dst = (y * width + (width - 1 - x)) * 4;
+      out.set(data.subarray(src, src + 4), dst);
+    }
+  }
+  return { data: out, width, height };
+}
+
+const VIEW_CLASSIFY_SIM = 0.72;
+
+function viewPairSimilarity(a: Rgba, b: Rgba, mirrored: boolean): number {
+  const base = silhouetteSimilarity(a, b);
+  if (!mirrored) return base;
+  return Math.max(base, silhouetteSimilarity(a, flipRgbaHorizontal(b)));
+}
+
+function averageSimilarityToOthers(
+  name: BlueprintViewName,
+  byName: Map<BlueprintViewName, Rgba>,
+): number {
+  const self = byName.get(name);
+  if (!self) return 1;
+  const others = [...byName.entries()].filter(([n]) => n !== name);
+  if (others.length === 0) return 1;
+  let sum = 0;
+  for (const [other, img] of others) {
+    const mirrored = (name === "front" && other === "back") || (name === "back" && other === "front");
+    sum += viewPairSimilarity(self, img, mirrored);
+  }
+  return sum / others.length;
+}
+
+export function classifyViews(views: readonly BlueprintCutView[]): BlueprintViewClassification {
+  const byName = new Map<BlueprintViewName, Rgba>();
+  for (const v of views) byName.set(v.name, v.image);
+  const front = byName.get("front");
+  const side = byName.get("side");
+  const back = byName.get("back");
+  const pairs: BlueprintViewClassification["pairs"] = [];
+  if (front && side) pairs.push({ a: "front", b: "side", sim: viewPairSimilarity(front, side, false) });
+  if (front && back) pairs.push({ a: "front", b: "back", sim: viewPairSimilarity(front, back, true) });
+  if (side && back) pairs.push({ a: "side", b: "back", sim: viewPairSimilarity(side, back, false) });
+  pairs.sort((a, b) => b.sim - a.sim);
+  const relabeled = false;
+  let drawn: BlueprintViewClassification["drawn"] = null;
+  if (!front || !side || !back) {
+    return { pairs, relabeled, drawn };
+  }
+  const odd = (["front", "side", "back"] as const).reduce((best, name) =>
+    averageSimilarityToOthers(name, byName) < averageSimilarityToOthers(best, byName) ? name : best,
+  );
+  const best = pairs[0];
+  const fs = pairs.find((p) => (p.a === "front" && p.b === "side") || (p.a === "side" && p.b === "front"))?.sim ?? 0;
+  const fb = pairs.find((p) => (p.a === "front" && p.b === "back") || (p.a === "back" && p.b === "front"))?.sim ?? 0;
+  const sb = pairs.find((p) => (p.a === "side" && p.b === "back") || (p.a === "back" && p.b === "side"))?.sim ?? 0;
+  if (fs >= VIEW_CLASSIFY_SIM && fb >= VIEW_CLASSIFY_SIM && sb >= VIEW_CLASSIFY_SIM) {
+    drawn = "side";
+  } else if (best && best.sim >= VIEW_CLASSIFY_SIM) {
+    const isFrontSide =
+      (best.a === "front" && best.b === "side") || (best.a === "side" && best.b === "front");
+    const isFrontBack =
+      (best.a === "front" && best.b === "back") || (best.a === "back" && best.b === "front");
+    if (isFrontSide && odd === "back") {
+      return { pairs, relabeled: true, drawn: "back" };
+    }
+    if (isFrontBack && odd === "side") {
+      return { pairs, relabeled: false, drawn: null };
+    }
+  }
+  return { pairs, relabeled, drawn: "side" };
+}
+
+export function swapBlueprintBackSide(cut: CutBlueprintResult): CutBlueprintResult {
+  const swapName = (name: BlueprintViewName): BlueprintViewName => {
+    if (name === "back") return "side";
+    if (name === "side") return "back";
+    return name;
+  };
+  const mapViews = (list: BlueprintCutView[]) => list.map((v) => ({ ...v, name: swapName(v.name) }));
+  const rawViews = mapViews(cut.rawViews);
+  const { views, canvas } = alignViewsOnCanvas(rawViews);
+  return { ...cut, rawViews, views, canvas };
+}
+
 function rgbHsl(r: number, g: number, b: number): { h: number; s: number; l: number } {
   const rn = r / 255;
   const gn = g / 255;
@@ -649,6 +769,7 @@ export function viewsJsonFromCut(
   sideRegenerated: boolean,
   extraWarnings: string[] = [],
   sheetSideSimilarity?: number,
+  classification?: BlueprintViewClassification,
 ): BlueprintViewsJson {
   return {
     views: cut.views.map((v) => ({
@@ -662,6 +783,7 @@ export function viewsJsonFromCut(
     parts,
     sideRegenerated,
     sheetSideSimilarity,
+    classification,
     warnings: [...cut.warnings, ...extraWarnings],
   };
 }
@@ -694,6 +816,33 @@ export function assembleBlueprint(
     warnings.push("side may still copy the front");
   }
   return { cut, sideRegenerated: true, sheetSideSimilarity, warnings };
+}
+
+export function replaceBackView(cut: CutBlueprintResult, backRaw: Rgba): CutBlueprintResult {
+  const front = cut.rawViews.find((v) => v.name === "front");
+  const targetH = front?.image.height ?? backRaw.height;
+  const scaled =
+    backRaw.height === targetH
+      ? backRaw
+      : resize(backRaw, Math.max(1, Math.round((backRaw.width * targetH) / Math.max(backRaw.height, 1))), targetH);
+  let baseline = scaled.height - 1;
+  const { data, width, height } = scaled;
+  for (let y = height - 1; y >= 0; y--) {
+    for (let x = 0; x < width; x++) {
+      if (data[(y * width + x) * 4 + 3]! > 128) {
+        baseline = y;
+        break;
+      }
+    }
+    if (baseline < height - 1) break;
+  }
+  const nextRaw = cut.rawViews.map((v) =>
+    v.name === "back"
+      ? { ...v, image: scaled, baseline, heightPx: scaled.height, box: { ...v.box, w: scaled.width, h: scaled.height } }
+      : v,
+  );
+  const { views, canvas } = alignViewsOnCanvas(nextRaw);
+  return { ...cut, views, rawViews: nextRaw, canvas };
 }
 
 export function replaceSideView(cut: CutBlueprintResult, sideRaw: Rgba): CutBlueprintResult {

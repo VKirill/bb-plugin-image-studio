@@ -26,7 +26,7 @@ Concept art for items still starts in `image_studio_roblox` (`items`, `props`) o
 | `model` | Path to `.fbx`, `.glb`, or `.blend` |
 | `object` | Mesh name when the file has several |
 | `prompt` | Effects and per-part paint notes (scorch, wear, fibres) — place effects by location (`only at the BOTTOM end of the rags`) |
-| `parts` | Optional map from baked material name → part label (`{"Material.003":"oak handle"}` or `[{"material":"…","part":"…"}]`) |
+| `parts` | Material → label (`mat=handle`) **or** guide palette keys: `#c9c9cd=grey metal clamp`, `light grey=clamp metal` (see `parts.json` `palette[]` after prepare) |
 | `images` | Up to 2: `[0]` concept (design reference), `[1]` optional style sheet |
 | `projectConcept` | Default **off**. Set **true** only when `images[0]` shows the object straight-on from `conceptView` in the model's pose (faces, eyes, lettering, patterns): cut concept, fill background, **planar project** onto the mesh, bake into `guide.png` before Muse. The concept still goes to Muse as image 2 when projection is off. |
 | `conceptView` | `front` \| `back` \| `left` \| `right` (default `front`) |
@@ -36,7 +36,7 @@ Concept art for items still starts in `image_studio_roblox` (`items`, `props`) o
 | `variants` | `1`–`4` Muse takes |
 | `project` | Another model project name (default: this folder's project) |
 
-**Prepare (run folder):** `guide.png`, `mask.png`, `parts.json`, `prepare.json`, `model.blend` under `image-studio/model/<project>/<run>/`.
+**Prepare (run folder):** `guide.png`, `mask.png`, `parts.json` (includes `palette: [{color,name,share}]` from guide colours), `prepare.json`, `model.blend` under `image-studio/model/<project>/<run>/`.
 
 **Each take:** `take-<n>/color.png`, `preview.png` (before/after, two sides), `model.blend`, `manifest.json` (lists `uvLayer`, usually `ImageStudioUV`, and file paths). Shared prepare files stay in the parent `<run>/`.
 
@@ -56,7 +56,7 @@ Concept art for items still starts in `image_studio_roblox` (`items`, `props`) o
 
 **Output:** `image-studio/model/<project>/<run>/blueprint/` — `sheet.png`, `side-sheet.png` (raw side-only Muse sheet when `sideSeparate`), `front.png`, `side.png`, …, `views.json` with `canvas`, per-view `box`, `baseline`, `heightPx`, `parts` (`kind`: `rigid` \| `soft`, `anchor` for soft), `sideRegenerated` (true when the side came from the separate call), `sheetSideSimilarity` (IoU of front vs side on the main sheet, for diagnostics), `warnings`.
 
-By default the plugin always makes **two** Muse calls for blueprints that include side: one multi-view sheet, then a side-only profile aligned to the front height.
+By default the plugin classifies silhouettes on the sheet (`views.json` → `classification`) and may relabel mis-tagged views (e.g. edge-on panel was labeled BACK) before a second Muse call draws the missing **side** or **back** profile at the front height.
 
 ## Rules (texture-uv)
 
@@ -69,7 +69,7 @@ Proven in production tests; the plugin enforces most of this in Blender prepare:
 - **Concept as `images[0]`** always feeds Muse. Turn **`projectConcept` on** only for straight-on concepts (same pose as the mesh) so faces, eyes, lettering and placed patterns are projected before Muse; diagonal concept art will smear if projected.
 - **Never** repaint model render views and project them back onto the UV — silhouette and scale drift.
 - **Model prep (you, in Blender):** after deleting solid details (eye spheres, bolts, etc.), select the **boundary edges** of the hole and **`bmesh.ops.holes_fill`** (or equivalent) before you call `texture-uv`. Unfilled pits bake as dark holes on the guide. **Prepare does not fill holes** — it keeps intentional open mesh (cloth planes, rag edges) as-is and does not repair topology.
-- **Muse:** image roles → `Task:` → `Game look` (materials/palette only, flat albedo — no coloured light, shadows or outlines) → `Must not change:` → short bans. No negative prompt, seed, or strength — text only. Describe subject, `conceptNote`, `parts`, and effects in `prompt`; the plugin adds the game's theme and art style on the `Game look` line, not inside `Task`.
+- **Muse:** image roles → `Task:` (your paint notes only) → `Game look` (lower priority than Task and reference images; materials/palette only, flat albedo) → `Must not change:` → short bans. Textured materials list **palette** swatches as `colour (#hex) = part` when you name them in `parts`. Tool output prints the palette after prepare.
 
 ## Rules (blueprint)
 

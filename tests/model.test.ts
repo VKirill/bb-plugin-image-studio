@@ -87,7 +87,7 @@ test("buildTextureUvPrompt follows the TZ layout with concept and projection", (
   assert.match(prompt, /Image 2 is the STYLE AND DESIGN REFERENCE: a burning mop/);
   assert.match(prompt, /Image 3 is the STYLE SHEET/);
   assert.match(prompt, /Task: repaint image 1 as a final hand-painted game texture in the look of image 2: scorch only at the bottom ends of the rags\./);
-  assert.match(prompt, /Game look \(materials and palette only/);
+  assert.match(prompt, /Game look \(lower priority than the Task and the reference images/);
   assert.match(prompt, /lava arena; stylized props/);
   assert.match(prompt, /Must not change:/);
   assert.match(prompt, /the base colors/);

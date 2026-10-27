@@ -130,7 +130,11 @@ import {
   cutAndDilate,
   cutConcept,
   DEFAULT_DILATE_PX,
+  extractGuidePalette,
   mergeModelParts,
+  modelCliProjectOrigin,
+  resolveTextureUvParts,
+  textureUvPaletteHint,
   MODEL_CONCEPT_VIEWS,
   MODEL_CLI_REST_SKIP_FLAGS,
   hostPath,
@@ -151,13 +155,18 @@ import {
 import {
   assembleBlueprint,
   blueprintAspect,
+  buildBackOnlyPrompt,
   buildBlueprintPrompt,
   buildSideOnlyPrompt,
+  classifyViews,
   cutBlueprint,
   defaultBlueprintViews,
   findSoftAnchors,
   frontReferencePlate,
   normalizeBlueprintStyle,
+  replaceBackView,
+  silhouetteSimilarity,
+  swapBlueprintBackSide,
   viewsJsonFromCut,
   type BlueprintStyle,
   type BlueprintViewName,
@@ -2006,7 +2015,7 @@ export default async function plugin(bb: BbPluginApi) {
     hostId?: string;
     originLabel?: string;
     gameId?: string;
-  }): Promise<{ takes: ModelTakeManifest[]; records: ModelTakeRecord[]; errors: string[]; style: GuiStyle }> {
+  }): Promise<{ takes: ModelTakeManifest[]; records: ModelTakeRecord[]; errors: string[]; style: GuiStyle; paletteHint: string }> {
     if (!input.cwd || !input.hostId) {
       throw new Error("Texture-by-model needs a project folder on a host with Blender installed.");
     }
@@ -2016,7 +2025,7 @@ export default async function plugin(bb: BbPluginApi) {
       styleId: input.styleId,
       origin,
       projectId: input.projectId,
-      name: input.originLabel,
+      name: input.originLabel ?? (origin !== "unscoped" ? originName(origin) : undefined),
       section: "model",
       gameId: input.gameId,
     });
@@ -2034,6 +2043,7 @@ export default async function plugin(bb: BbPluginApi) {
     const errors: string[] = [];
     const takes: ModelTakeManifest[] = [];
     const records: ModelTakeRecord[] = [];
+    let paletteHint = "";
     const run = randomUUID().slice(0, 8);
     const runRel = join("image-studio", "model", slugify(style.name, "model"), run);
     const runAbs = join(input.cwd, runRel);
@@ -2057,20 +2067,30 @@ export default async function plugin(bb: BbPluginApi) {
       const partsJson = JSON.parse((await readHostBytes(join(runRel, "parts.json"), input.cwd, input.hostId)).toString("utf8")) as {
         parts: Array<{ material: string; part: string; color: string; marker?: boolean }>;
       };
-      const partList = mergeModelParts(partsJson.parts, input.parts);
+      const guideBytes = await readHostBytes(join(runRel, "guide.png"), input.cwd, input.hostId);
+      const maskBytes = await readHostBytes(join(runRel, "mask.png"), input.cwd, input.hostId);
+      const guideRgbaForPalette = await decodeRgba(guideBytes);
+      const maskRgbaForPalette = await decodeRgba(maskBytes);
+      const palette = extractGuidePalette(guideRgbaForPalette, maskRgbaForPalette);
+      paletteHint = textureUvPaletteHint(palette);
+      const materialParts = mergeModelParts(partsJson.parts, input.parts);
+      const partList = resolveTextureUvParts(partsJson.parts, palette, input.parts);
       const mergedPartsFile = partsJson.parts.map((row, index) => ({
         material: row.material,
-        part: partList[index]?.part ?? row.part,
+        part: materialParts[index]?.part ?? row.part,
         color: row.color,
         marker: row.marker,
       }));
-      await writeHostBytes(join(runRel, "parts.json"), input.cwd, input.hostId, Buffer.from(JSON.stringify({ parts: mergedPartsFile }, null, 2)));
+      await writeHostBytes(
+        join(runRel, "parts.json"),
+        input.cwd,
+        input.hostId,
+        Buffer.from(JSON.stringify({ parts: mergedPartsFile, palette }, null, 2)),
+      );
       const prepareMeta = JSON.parse((await readHostBytes(join(runRel, "prepare.json"), input.cwd, input.hostId)).toString("utf8")) as {
         object: string;
         uvLayer: string;
       };
-      const guideBytes = await readHostBytes(join(runRel, "guide.png"), input.cwd, input.hostId);
-      const maskBytes = await readHostBytes(join(runRel, "mask.png"), input.cwd, input.hostId);
       const guideUri = `data:image/png;base64,${guideBytes.toString("base64")}`;
       const composed = buildTextureUvPrompt({
         subject: input.subject?.trim() || subjectFromFile(modelPath),
@@ -2158,7 +2178,7 @@ export default async function plugin(bb: BbPluginApi) {
     } catch (error) {
       errors.push(`prepare: ${describe(error)}`);
     }
-    return { takes, records, errors, style };
+    return { takes, records, errors, style, paletteHint };
   }
 
   type ModelBlueprintManifest = {
@@ -2202,7 +2222,7 @@ export default async function plugin(bb: BbPluginApi) {
       styleId: input.styleId,
       origin,
       projectId: input.projectId,
-      name: input.originLabel,
+      name: input.originLabel ?? (origin !== "unscoped" ? originName(origin) : undefined),
       section: "model",
       gameId: input.gameId,
     });
@@ -2232,19 +2252,51 @@ export default async function plugin(bb: BbPluginApi) {
       });
       const sheetRgba = await decodeRgba(rendered.original);
       await writeHostBytes(join(blueprintRel, "sheet.png"), input.cwd, input.hostId, rendered.original);
-      const sheetCut = cutBlueprint(sheetRgba, viewNames);
+      let sheetCut = cutBlueprint(sheetRgba, viewNames);
+      const classification = classifyViews(sheetCut.views);
+      if (classification.relabeled) sheetCut = swapBlueprintBackSide(sheetCut);
       const wantsSide = viewNames.includes("side");
       const sideSeparate = input.sideSeparate ?? true;
+      const frontRaw = sheetCut.rawViews.find((v) => v.name === "front")?.image;
       let sideCut: ReturnType<typeof cutBlueprint> | null = null;
-      let sideSheetBytes: Buffer | null = null;
-      if (wantsSide && sideSeparate) {
-        const frontRaw = sheetCut.rawViews.find((v) => v.name === "front")?.image;
-        if (!frontRaw) {
-          errors.push("side regeneration: no front view on the sheet to reference");
-        } else {
-          const frontPlate = frontReferencePlate(sheetRgba, frontRaw);
-          const frontPlateBytes = await encodePng(frontPlate);
-          const frontPlateUri = `data:image/png;base64,${frontPlateBytes.toString("base64")}`;
+      let extraSheetBytes: Buffer | null = null;
+      let extraSheetFile: "side-sheet" | "back-sheet" | null = null;
+      let cut = sheetCut;
+      let sideRegenerated = false;
+      const assembledWarnings: string[] = [];
+      let sheetSideSimilarity: number | undefined;
+      const frontView = sheetCut.views.find((v) => v.name === "front");
+      const sideView = sheetCut.views.find((v) => v.name === "side");
+      if (frontView && sideView) sheetSideSimilarity = silhouetteSimilarity(frontView.image, sideView.image);
+
+      const drawExtra = wantsSide && sideSeparate ? classification.drawn : null;
+      if (drawExtra && frontRaw) {
+        const frontPlate = frontReferencePlate(sheetRgba, frontRaw);
+        const frontPlateUri = `data:image/png;base64,${(await encodePng(frontPlate)).toString("base64")}`;
+        if (drawExtra === "back") {
+          const backPrompt = buildBackOnlyPrompt({ subject, style: clayStyle, softParts });
+          const backRendered = await renderImage({
+            projectId: input.projectId,
+            prompt: backPrompt,
+            rawPrompt: true,
+            recordPrompt: backPrompt,
+            model: MODEL_MUSE,
+            gateway: "fal",
+            aspectRatio: "16:9",
+            leadUris: [conceptUri, frontPlateUri],
+            cwd: input.cwd,
+            hostId: input.hostId,
+          });
+          extraSheetBytes = backRendered.original;
+          extraSheetFile = "back-sheet";
+          const backSheet = await decodeRgba(backRendered.original);
+          const backCut = cutBlueprint(backSheet, ["back"]);
+          const backRaw = backCut.rawViews.find((v) => v.name === "back")?.image ?? backCut.rawViews[0]?.image;
+          if (backRaw) {
+            cut = replaceBackView(sheetCut, backRaw);
+            sideRegenerated = true;
+          } else errors.push("back regeneration: could not cut the new back sheet");
+        } else if (drawExtra === "side") {
           const sidePrompt = buildSideOnlyPrompt({ subject, style: clayStyle, softParts });
           const sideRendered = await renderImage({
             projectId: input.projectId,
@@ -2258,23 +2310,28 @@ export default async function plugin(bb: BbPluginApi) {
             cwd: input.cwd,
             hostId: input.hostId,
           });
-          sideSheetBytes = sideRendered.original;
+          extraSheetBytes = sideRendered.original;
+          extraSheetFile = "side-sheet";
           const sideSheet = await decodeRgba(sideRendered.original);
           sideCut = cutBlueprint(sideSheet, ["side"]);
+          const assembled = assembleBlueprint(sheetCut, sideCut, { sideSeparate: true });
+          cut = assembled.cut;
+          sideRegenerated = assembled.sideRegenerated;
+          assembledWarnings.push(...assembled.warnings);
+          sheetSideSimilarity = assembled.sheetSideSimilarity ?? sheetSideSimilarity;
         }
       }
-      const assembled = assembleBlueprint(sheetCut, sideCut, { sideSeparate: wantsSide && sideSeparate });
-      const cut = assembled.cut;
       const { parts, warnings: softWarnings } = findSoftAnchors(cut.views, softParts, rigidParts);
       const viewsJson = viewsJsonFromCut(
         cut,
         parts,
-        assembled.sideRegenerated,
-        [...assembled.warnings, ...softWarnings],
-        assembled.sheetSideSimilarity,
+        sideRegenerated,
+        [...assembledWarnings, ...softWarnings],
+        sheetSideSimilarity,
+        classification,
       );
-      if (sideSheetBytes) {
-        await writeHostBytes(join(blueprintRel, "side-sheet.png"), input.cwd, input.hostId, sideSheetBytes);
+      if (extraSheetBytes && extraSheetFile) {
+        await writeHostBytes(join(blueprintRel, `${extraSheetFile}.png`), input.cwd, input.hostId, extraSheetBytes);
       }
       for (const v of cut.views) {
         const bytes = await encodePng(v.image);
@@ -2289,7 +2346,7 @@ export default async function plugin(bb: BbPluginApi) {
       const files: ModelBlueprintManifest["files"] = {
         sheet: join(blueprintRel, "sheet.png"),
         views: join(blueprintRel, "views.json"),
-        ...(sideSheetBytes ? { "side-sheet": join(blueprintRel, "side-sheet.png") } : {}),
+        ...(extraSheetFile ? { [extraSheetFile]: join(blueprintRel, `${extraSheetFile}.png`) } : {}),
       };
       for (const name of viewNames) files[name] = join(blueprintRel, `${name}.png`);
       const blueprint = { mode: "blueprint" as const, subject, style: clayStyle, views: viewNames, dir: blueprintRel, files };
@@ -2313,15 +2370,18 @@ export default async function plugin(bb: BbPluginApi) {
     }
   }
 
-  function modelSummary(run: { takes: ModelTakeManifest[]; errors: string[]; style: GuiStyle }): string {
+  function modelSummary(run: { takes: ModelTakeManifest[]; errors: string[]; style: GuiStyle; paletteHint?: string }): string {
     return [
       `Model project: ${run.style.name} (${run.style.id})`,
       ...run.takes.map(
         (take) =>
           `texture-uv: ${take.files.color}\n  guide: ${take.files.guide}\n  mask: ${take.files.mask}\n  preview: ${take.files.preview}\n  manifest: ${join(dirname(take.files.color), "manifest.json")}`,
       ),
+      run.paletteHint ?? "",
       ...run.errors.map((error) => `failed: ${error}`),
-    ].join("\n");
+    ]
+      .filter(Boolean)
+      .join("\n");
   }
 
   function blueprintSummary(run: { blueprint: ModelBlueprintManifest | null; errors: string[]; style: GuiStyle }): string {
@@ -2827,6 +2887,7 @@ export default async function plugin(bb: BbPluginApi) {
     const source = await projectSource(input.projectId);
     const cwd = source.cwd;
     const hostId = source.hostId;
+    const folderProject = modelCliProjectOrigin(cwd, input.projectId);
     if (input.mode === "blueprint") {
       const images = input.images ?? [];
       const run = await runModelBlueprint({
@@ -2841,7 +2902,7 @@ export default async function plugin(bb: BbPluginApi) {
         sideSeparate: input.sideSeparate,
         cwd,
         hostId,
-        originLabel: source.name,
+        originLabel: folderProject.projectName,
       });
       return { takes: run.record ? [run.record] : [], errors: run.errors };
     }
@@ -2862,7 +2923,7 @@ export default async function plugin(bb: BbPluginApi) {
       conceptView: input.conceptView,
       cwd,
       hostId,
-      originLabel: source.name,
+      originLabel: folderProject.projectName,
     });
     return { takes: run.records, errors: run.errors };
   };
@@ -3549,6 +3610,7 @@ export default async function plugin(bb: BbPluginApi) {
           return { exitCode: 1, stderr: describe(error) };
         }
         const styleId = parsed.projectStyleId ?? projectFlag;
+        const folderProject = modelCliProjectOrigin(cwd, projectId);
         if (parsed.mode === "blueprint") {
           const views = parsed.views ? defaultBlueprintViews(parsed.views) : undefined;
           const run = await runModelBlueprint({
@@ -3563,7 +3625,7 @@ export default async function plugin(bb: BbPluginApi) {
             sideSeparate: parsed.sideSeparate,
             cwd,
             hostId,
-            originLabel: source.name,
+            originLabel: folderProject.projectName,
           });
           const text = blueprintSummary(run);
           return !run.blueprint ? { exitCode: 1, stderr: text || "Nothing was generated." } : reply(run, text);
@@ -3586,7 +3648,7 @@ export default async function plugin(bb: BbPluginApi) {
           conceptView: parsed.conceptView,
           cwd,
           hostId,
-          originLabel: source.name,
+          originLabel: folderProject.projectName,
         });
         const text = modelSummary(run);
         return run.takes.length === 0 ? { exitCode: 1, stderr: text || "Nothing was generated." } : reply(run, text);
