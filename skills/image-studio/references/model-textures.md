@@ -34,6 +34,7 @@ Concept art for items still starts in `image_studio_roblox` (`items`, `props`) o
 | `subject` | Short object name in the Muse layout line (defaults from the file name) |
 | `size` | `1024` or `2048` |
 | `variants` | `1`–`4` Muse takes |
+| `guideFix` | Default **`on`** (`on` \| `off`, CLI `--guide-fix on|off`). Fixes Muse's dark gaps on small pieces (`guide * 1.25`) and hue swaps on saturated pieces (`guide * lum(Muse)`); runs before mask dilation. Reports `darkFilled`, `hueFixed`, and `maskPixels` in `manifest.json`. |
 | `project` | Another model project name (default: this folder's project) |
 
 **Prepare (run folder):** `guide.png`, `mask.png`, `parts.json` (includes `palette: [{color,name,share}]` from guide colours), `prepare.json`, `model.blend` under `image-studio/model/<project>/<run>/`.
