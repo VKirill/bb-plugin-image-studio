@@ -1,0 +1,15 @@
+{
+  "schema_version": 2,
+  "task_id": "model-core-fix",
+  "task_sha256": "d73bcfc6ab29e47f4ab773df765287752ced375b53615566ae8d4138f37bae16",
+  "attempt": 1,
+  "provider_exit": 0,
+  "report": "complete",
+  "report_sha256": "bb03a131a48fe7327bce11f8aab7c34ecb7c1b6373bd2442b68773128341595a",
+  "owns_check": "passed",
+  "verification": "passed",
+  "review": "not_required",
+  "accepted": true,
+  "accepted_at": "2026-10-27T18:35:46.028Z",
+  "model": "composer-2.5"
+}
