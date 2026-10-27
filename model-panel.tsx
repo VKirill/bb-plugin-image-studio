@@ -83,7 +83,7 @@ export function ModelPanel({
   const [conceptPath, setConceptPath] = useState("");
   const [stylePath, setStylePath] = useState("");
   const [conceptNote, setConceptNote] = useState("");
-  const [projectConcept, setProjectConcept] = useState(true);
+  const [projectConcept, setProjectConcept] = useState(false);
   const [conceptView, setConceptView] = useState<ModelConceptView>("front");
   const [taskPrompt, setTaskPrompt] = useState("");
   const [size, setSize] = useState<ModelTextureSize>(1024);

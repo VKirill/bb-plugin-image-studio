@@ -1,4 +1,3 @@
-import { basename } from "node:path";
 import { z } from "zod";
 import type { GuiStyle } from "./gui.ts";
 import type { Rgba } from "./image-io.ts";
@@ -101,9 +100,15 @@ export function mergeModelParts(
 export const MODEL_CONCEPT_VIEWS = ["front", "back", "left", "right"] as const;
 export type ModelConceptView = (typeof MODEL_CONCEPT_VIEWS)[number];
 
+function fileBaseName(path: string): string {
+  const normalized = path.trim().replace(/\\/g, "/");
+  const slash = normalized.lastIndexOf("/");
+  return slash >= 0 ? normalized.slice(slash + 1) : normalized;
+}
+
 /** `fire-mop.fbx` → `fire mop`. */
 export function subjectFromFile(path: string): string {
-  const base = basename(path.trim());
+  const base = fileBaseName(path);
   const stem = base.includes(".") ? base.slice(0, base.lastIndexOf(".")) : base;
   return stem.replace(/[-_]+/g, " ").trim() || "model";
 }

@@ -32,6 +32,16 @@ test("server.ts does not reference a server-side Blender script path", () => {
   assert.doesNotMatch(server, /pluginDir/);
 });
 
+test("texture-uv projectConcept defaults to false unless explicitly true", () => {
+  const server = readFileSync(new URL("../server.ts", import.meta.url), "utf8");
+  assert.match(server, /projectConcept \?\? false/);
+});
+
+test("model.ts is browser-safe (no node:path import)", () => {
+  const model = readFileSync(new URL("../src/model.ts", import.meta.url), "utf8");
+  assert.doesNotMatch(model, /node:path/);
+});
+
 test("TEXTURE_UV_SCRIPT matches blender/texture_uv.py byte for byte", () => {
   const disk = readFileSync(new URL("../blender/texture_uv.py", import.meta.url));
   assert.equal(TEXTURE_UV_SCRIPT, disk.toString("utf8"));

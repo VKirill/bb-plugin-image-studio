@@ -76,8 +76,18 @@ export function defaultBlueprintViews(views?: readonly string[]): BlueprintViewN
   return out.length ? out : ["front", "side", "back"];
 }
 
+const SIDE_TASK_LABEL = "SIDE (exact 90° profile, not a copy of the front)";
+
+function viewLabelForTask(name: BlueprintViewName): string {
+  return name === "side" ? SIDE_TASK_LABEL : VIEW_LABELS[name];
+}
+
 function viewLabelsLine(names: readonly BlueprintViewName[]): string {
   return names.map((n) => VIEW_LABELS[n]).join(", ");
+}
+
+function viewLabelsTaskLine(names: readonly BlueprintViewName[]): string {
+  return names.map((n) => viewLabelForTask(n)).join(", ");
 }
 
 function clayStylePhrase(style: BlueprintStyle): string {
@@ -94,13 +104,14 @@ export function buildBlueprintPrompt(input: {
 }): string {
   const n = input.viewNames.length;
   const labels = viewLabelsLine(input.viewNames);
+  const taskLabels = viewLabelsTaskLine(input.viewNames);
   const soft =
     input.softParts.length > 0
       ? ` Soft dangling parts (${input.softParts.join(", ")}) in light BLUE clay.`
       : "";
   return [
     `Image 1 is the DESIGN REFERENCE: ${input.subject}.`,
-    `Task: draw a technical modeling blueprint of exactly this object for a 3D artist — ${n} orthographic views side by side on a plain light grey background: ${labels}; same scale and height, aligned on one baseline; ${clayStylePhrase(input.style)}.${soft}`,
+    `Task: draw a technical modeling blueprint of exactly this object for a 3D artist — ${n} orthographic views side by side on a plain light grey background: ${taskLabels}; same scale and height, aligned on one baseline; ${clayStylePhrase(input.style)}.${soft}`,
     "Must not change: the proportions, part count and silhouette of the object in image 1.",
     "No perspective, no shadows, no fire or effects, no text except the labels " + labels + ".",
   ].join("\n");
