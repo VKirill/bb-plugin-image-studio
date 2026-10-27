@@ -11,6 +11,7 @@ import sys
 
 import bmesh
 import bpy
+from bpy_extras.object_utils import world_to_camera_view
 from mathutils import Vector
 
 argv = sys.argv[sys.argv.index("--") + 1 :]
@@ -701,11 +702,78 @@ def _preview_lights(sc, cam_obj, ctr, view_dir):
     fill_obj.rotation_euler = fill_dir.to_track_quat("Z", "Y").to_euler()
 
 
+def _bbox_world_corners(ob):
+    return [ob.matrix_world @ Vector(c) for c in ob.bound_box]
+
+
+def _project_bounds(sc, cam_obj, points):
+    xs, ys = [], []
+    for p in points:
+        co = world_to_camera_view(sc, cam_obj, p)
+        xs.append(co.x)
+        ys.append(co.y)
+    return min(xs), max(xs), min(ys), max(ys)
+
+
+def _preview_fit_points(ob):
+    corners = _bbox_world_corners(ob)
+    verts = [ob.matrix_world @ v.co for v in ob.data.vertices]
+    return corners + verts
+
+
+def _center_preview_camera(cam_obj, sc, points):
+    cam = cam_obj.data
+    cam.shift_x = 0.0
+    cam.shift_y = 0.0
+    xmin, xmax, ymin, ymax = _project_bounds(sc, cam_obj, points)
+    cx = (xmin + xmax) * 0.5
+    cy = (ymin + ymax) * 0.5
+    rot = cam_obj.matrix_world.to_3x3()
+    right = rot @ Vector((1.0, 0.0, 0.0))
+    up = rot @ Vector((0.0, 1.0, 0.0))
+    cam_obj.location += (-(cx - 0.5) * cam.ortho_scale) * right
+    cam_obj.location += (-(cy - 0.5) * cam.ortho_scale) * up
+
+
+def fit_preview_camera(cam_obj, sc, points, base_location, target_fill=0.80):
+    """Frame all fit points at ~target_fill of the tile with margin from edges."""
+    cam = cam_obj.data
+    cam.type = "ORTHO"
+    cam.shift_x = 0.0
+    cam.shift_y = 0.0
+    xs = [p.x for p in points]
+    ys = [p.y for p in points]
+    zs = [p.z for p in points]
+    diag = math.sqrt((max(xs) - min(xs)) ** 2 + (max(ys) - min(ys)) ** 2 + (max(zs) - min(zs)) ** 2)
+    cam.ortho_scale = max(diag, 1e-3)
+    target_extent = target_fill * 0.94
+    edge_margin = 0.035
+    for _ in range(28):
+        cam_obj.location = base_location.copy()
+        _center_preview_camera(cam_obj, sc, points)
+        xmin, xmax, ymin, ymax = _project_bounds(sc, cam_obj, points)
+        extent = max(xmax - xmin, ymax - ymin, 1e-9)
+        margin_ok = (
+            xmin >= edge_margin
+            and xmax <= 1.0 - edge_margin
+            and ymin >= edge_margin
+            and ymax <= 1.0 - edge_margin
+        )
+        if margin_ok and extent <= target_extent:
+            break
+        if extent > target_extent or not margin_ok:
+            cam.ortho_scale *= max(extent / target_extent, 1.03)
+    cam_obj.location = base_location.copy()
+    _center_preview_camera(cam_obj, sc, points)
+    cam.ortho_scale *= 1.04
+
+
 def render_views(ob, tile_w=512):
     sc = bpy.context.scene
-    bb = [ob.matrix_world @ Vector(c) for c in ob.bound_box]
-    ctr = sum(bb, Vector()) / 8
-    radius = max((b - ctr).length for b in bb)
+    fit_points = _preview_fit_points(ob)
+    corners = _bbox_world_corners(ob)
+    ctr = sum(corners, Vector()) / 8
+    radius = max((b - ctr).length for b in corners)
     sc.render.resolution_x = tile_w
     sc.render.resolution_y = tile_w
     sc.render.film_transparent = False
@@ -725,15 +793,10 @@ def render_views(ob, tile_w=512):
                 math.sin(math.radians(el)),
             )
         ).normalized()
-        cam_obj.location = ctr + d * (radius * 4.0 + 1.0)
+        base_loc = ctr + d * (radius * 4.0 + 1.0)
+        cam_obj.location = base_loc
         cam_obj.rotation_euler = (ctr - cam_obj.location).to_track_quat("-Z", "Y").to_euler()
-        inv = cam_obj.matrix_world.inverted()
-        local = [inv @ p for p in bb]
-        xs = [p.x for p in local]
-        ys = [p.y for p in local]
-        height = max(ys) - min(ys)
-        width = max(xs) - min(xs)
-        cam.ortho_scale = max(height, width) / 0.8
+        fit_preview_camera(cam_obj, sc, fit_points, base_loc, target_fill=0.76)
         if sun:
             sun.data.energy = 0.35
         _preview_lights(sc, cam_obj, ctr, d)

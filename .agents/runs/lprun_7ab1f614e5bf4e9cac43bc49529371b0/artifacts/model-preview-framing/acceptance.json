@@ -1,0 +1,15 @@
+{
+  "schema_version": 2,
+  "task_id": "model-preview-framing",
+  "task_sha256": "28c5e85adf790d78d423aea34362f4b39fbed3382835973e738039089fbb385f",
+  "attempt": 1,
+  "provider_exit": 0,
+  "report": "complete",
+  "report_sha256": "4553ee11878d56fe5cf09312bee6f2a31fd1ec9bdd2d77b8c19f7e9df19f3686",
+  "owns_check": "passed",
+  "verification": "passed",
+  "review": "not_required",
+  "accepted": true,
+  "accepted_at": "2026-10-27T19:13:04.705Z",
+  "model": "composer-2.5"
+}
