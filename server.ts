@@ -133,9 +133,16 @@ import {
   mergeModelParts,
   MODEL_CONCEPT_VIEWS,
   subjectFromFile,
+  MODEL_TAKE_MAX,
+  modelTakeKvKey,
+  modelTakeRecordSchema,
+  modelTakeWithThumbsSchema,
+  parseModelTakeRecords,
+  snapshotGuiStyles,
   type ModelConceptView,
   type ModelMode,
   type ModelPartsParam,
+  type ModelTakeRecord,
   type ModelTextureSize,
 } from "./src/model.ts";
 import {
@@ -301,6 +308,45 @@ export const rpcContract = defineRpcContract({
   gui_ref_preview: {
     input: z.object({ styleId: z.string(), refId: z.string() }),
     output: z.object({ mimeType: z.string(), base64: z.string() }),
+  },
+  model_takes: {
+    input: z.object({ styleId: z.string() }),
+    output: z.array(modelTakeWithThumbsSchema),
+  },
+  model_generate: {
+    input: z
+      .object({
+        projectId: z.string().nullable(),
+        styleId: z.string().optional(),
+        mode: modelModeSchema,
+        model: z.string().optional(),
+        object: z.string().optional(),
+        prompt: z.string().trim().max(8000).default(""),
+        parts: modelPartsSchema.optional(),
+        images: z.array(z.string().min(1)).max(2).optional(),
+        size: modelTextureSizeSchema.optional(),
+        variants: z.number().int().min(1).max(MAX_VARIANTS).optional(),
+        subject: z.string().max(120).optional(),
+        conceptNote: z.string().max(500).optional(),
+        projectConcept: z.boolean().optional(),
+        conceptView: modelConceptViewSchema.optional(),
+        views: z.array(blueprintViewSchema).optional(),
+        style: blueprintStyleSchema.optional(),
+        soft: z.array(z.string().min(1)).optional(),
+        rigid: z.array(z.string().min(1)).optional(),
+      })
+      .superRefine((input, ctx) => {
+        if (input.mode === "texture-uv" && !input.model?.trim()) {
+          ctx.addIssue({ code: z.ZodIssueCode.custom, message: "model is required for texture-uv", path: ["model"] });
+        }
+        if (input.mode === "blueprint" && !input.images?.[0]) {
+          ctx.addIssue({ code: z.ZodIssueCode.custom, message: "images[0] concept is required for blueprint", path: ["images"] });
+        }
+      }),
+    output: z.object({
+      takes: z.array(modelTakeRecordSchema),
+      errors: z.array(z.string()),
+    }),
   },
   gui_generate: {
     input: z.object({
@@ -1320,6 +1366,18 @@ export default async function plugin(bb: BbPluginApi) {
     });
   }
 
+  const modelTakeLock = new Mutex();
+  async function readModelTakes(styleId: string): Promise<ModelTakeRecord[]> {
+    const raw = await bb.storage.kv.get<unknown>(modelTakeKvKey(styleId));
+    return parseModelTakeRecords(raw);
+  }
+  function addModelTake(styleId: string, record: ModelTakeRecord): Promise<void> {
+    return modelTakeLock.run(async () => {
+      const list = (await readModelTakes(styleId)).filter((item) => item.id !== record.id);
+      await bb.storage.kv.set(modelTakeKvKey(styleId), [record, ...list].slice(0, MODEL_TAKE_MAX));
+    });
+  }
+
   async function addGuiRefFile(styleId: string, role: "concept" | "art", bytes: Buffer, name: string): Promise<GuiStyle> {
     return withGuiStyle(styleId, async (style) => {
       if (style.refs.length >= GUI_MAX_REFS) {
@@ -1910,7 +1968,7 @@ export default async function plugin(bb: BbPluginApi) {
     hostId?: string;
     originLabel?: string;
     gameId?: string;
-  }): Promise<{ takes: ModelTakeManifest[]; errors: string[]; style: GuiStyle }> {
+  }): Promise<{ takes: ModelTakeManifest[]; records: ModelTakeRecord[]; errors: string[]; style: GuiStyle }> {
     if (!input.cwd || !input.hostId) {
       throw new Error("Texture-by-model needs a project folder on a host with Blender installed.");
     }
@@ -1936,6 +1994,7 @@ export default async function plugin(bb: BbPluginApi) {
     const projectConcept = hasConcept ? (input.projectConcept ?? true) : false;
     const errors: string[] = [];
     const takes: ModelTakeManifest[] = [];
+    const records: ModelTakeRecord[] = [];
     const run = randomUUID().slice(0, 8);
     const runRel = join("image-studio", "model", slugify(style.name, "model"), run);
     const runAbs = join(input.cwd, runRel);
@@ -2034,6 +2093,23 @@ export default async function plugin(bb: BbPluginApi) {
           };
           await writeHostBytes(join(takeRel, "manifest.json"), input.cwd, input.hostId, Buffer.from(JSON.stringify(manifest, null, 2)));
           takes.push(manifest);
+          const record: ModelTakeRecord = {
+            id: `${run}-take-${v + 1}`,
+            mode: "texture-uv",
+            createdAt: new Date().toISOString(),
+            prompt: input.prompt.trim(),
+            folder: takeRel,
+            files: {
+              manifest: join(takeRel, "manifest.json"),
+              guide: manifest.files.guide,
+              color: manifest.files.color,
+              preview: manifest.files.preview,
+              mask: manifest.files.mask,
+            },
+            warnings: [],
+          };
+          await addModelTake(style.id, record);
+          records.push(record);
         } catch (error) {
           errors.push(`take-${v + 1}: ${describe(error)}`);
         }
@@ -2041,7 +2117,7 @@ export default async function plugin(bb: BbPluginApi) {
     } catch (error) {
       errors.push(`prepare: ${describe(error)}`);
     }
-    return { takes, errors, style };
+    return { takes, records, errors, style };
   }
 
   type ModelBlueprintManifest = {
@@ -2073,7 +2149,7 @@ export default async function plugin(bb: BbPluginApi) {
     hostId?: string;
     originLabel?: string;
     gameId?: string;
-  }): Promise<{ blueprint: ModelBlueprintManifest | null; errors: string[]; style: GuiStyle }> {
+  }): Promise<{ blueprint: ModelBlueprintManifest | null; record: ModelTakeRecord | null; errors: string[]; style: GuiStyle }> {
     if (!input.cwd || !input.hostId) {
       throw new Error("Model blueprint needs a project folder on a host.");
     }
@@ -2158,14 +2234,24 @@ export default async function plugin(bb: BbPluginApi) {
         views: join(blueprintRel, "views.json"),
       };
       for (const name of viewNames) files[name] = join(blueprintRel, `${name}.png`);
-      return {
-        blueprint: { mode: "blueprint", subject, style: clayStyle, views: viewNames, dir: blueprintRel, files },
-        errors,
-        style,
+      const blueprint = { mode: "blueprint" as const, subject, style: clayStyle, views: viewNames, dir: blueprintRel, files };
+      const record: ModelTakeRecord = {
+        id: run,
+        mode: "blueprint",
+        createdAt: new Date().toISOString(),
+        prompt: subject,
+        folder: blueprintRel,
+        files: Object.fromEntries(
+          Object.entries(files).map(([key, value]) => [key, value]),
+        ),
+        warnings: viewsJson.warnings,
+        sideRegenerated: viewsJson.sideRegenerated,
       };
+      await addModelTake(style.id, record);
+      return { blueprint, record, errors, style };
     } catch (error) {
       errors.push(describe(error));
-      return { blueprint: null, errors, style };
+      return { blueprint: null, record: null, errors, style };
     }
   }
 
@@ -2362,9 +2448,7 @@ export default async function plugin(bb: BbPluginApi) {
       profiles,
       generations,
       lastGenerate,
-      guiStyles: guiStyles.filter((style) => style.section !== "model").sort((a, b) =>
-        b.updatedAt.localeCompare(a.updatedAt),
-      ),
+      guiStyles: snapshotGuiStyles(guiStyles),
     };
   };
   const update_settings: RpcHandlers["update_settings"] = (patch) =>
@@ -2648,6 +2732,82 @@ export default async function plugin(bb: BbPluginApi) {
     return lists.flat().sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   };
 
+  async function hostImageThumb(path: string, cwd: string, hostId?: string): Promise<{ mimeType: string; base64: string } | null> {
+    try {
+      const bytes = await readHostBytes(path, cwd, hostId);
+      const webp = await encodeWebp(bytes, WEBP_THUMB);
+      return { mimeType: sniffImageMime(webp), base64: webp.toString("base64") };
+    } catch {
+      return null;
+    }
+  }
+
+  const model_takes: RpcHandlers["model_takes"] = async ({ styleId }) => {
+    const style = (await readGuiStyles()).find((item) => item.id === styleId);
+    const cwd = style?.origin?.trim() || (style?.projectId ? (await projectSource(style.projectId)).cwd : undefined);
+    const hostId = style?.projectId ? (await projectSource(style.projectId)).hostId : undefined;
+    const records = await readModelTakes(styleId);
+    const thumbKeysFor = (record: ModelTakeRecord): string[] =>
+      record.mode === "texture-uv" ? ["guide", "color", "preview"] : ["sheet", "front", "side", "back", "top"];
+    const out: z.infer<typeof modelTakeWithThumbsSchema>[] = [];
+    for (const record of records) {
+      const thumbs: Record<string, { mimeType: string; base64: string }> = {};
+      if (cwd) {
+        for (const key of thumbKeysFor(record)) {
+          const rel = record.files[key];
+          if (!rel) continue;
+          const thumb = await hostImageThumb(rel, cwd, hostId);
+          if (thumb) thumbs[key] = thumb;
+        }
+      }
+      out.push({ ...record, thumbs });
+    }
+    return out;
+  };
+
+  const model_generate: RpcHandlers["model_generate"] = async (input) => {
+    const source = await projectSource(input.projectId);
+    const cwd = source.cwd;
+    const hostId = source.hostId;
+    if (input.mode === "blueprint") {
+      const images = input.images ?? [];
+      const run = await runModelBlueprint({
+        projectId: input.projectId,
+        styleId: input.styleId,
+        images,
+        views: input.views,
+        style: input.style,
+        subject: input.subject,
+        soft: input.soft,
+        rigid: input.rigid,
+        cwd,
+        hostId,
+        originLabel: source.name,
+      });
+      return { takes: run.record ? [run.record] : [], errors: run.errors };
+    }
+    const run = await runModelTextureUv({
+      projectId: input.projectId,
+      styleId: input.styleId,
+      mode: input.mode,
+      model: input.model!,
+      object: input.object,
+      prompt: input.prompt,
+      parts: input.parts,
+      images: input.images,
+      size: input.size,
+      variants: input.variants,
+      subject: input.subject,
+      conceptNote: input.conceptNote,
+      projectConcept: input.projectConcept,
+      conceptView: input.conceptView,
+      cwd,
+      hostId,
+      originLabel: source.name,
+    });
+    return { takes: run.records, errors: run.errors };
+  };
+
   // Shorthand on purpose: GitNexus links the panel's api.<method>() calls to these named handlers.
   bb.rpc.register(rpcContract, {
     snapshot,
@@ -2672,6 +2832,8 @@ export default async function plugin(bb: BbPluginApi) {
     gui_generate,
     gui_generations,
     game_generations,
+    model_takes,
+    model_generate,
   });
 
   const usage = [
