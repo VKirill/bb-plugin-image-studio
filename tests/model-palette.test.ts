@@ -63,8 +63,8 @@ test("Game look line is lower priority than Task and reference images", () => {
     hasConcept: true,
     hasStyle: false,
     task: "basalt stone with warm cracks",
-    theme: "warm volcanic sunset light",
-    artStyle: "toon: bold outlines",
+    theme: "glossy toy-like plastic and rubber look",
+    artStyle: "hand-painted game materials",
   });
   assert.match(prompt, /lower priority than the Task and the reference images/);
 });

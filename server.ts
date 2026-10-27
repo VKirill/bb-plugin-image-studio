@@ -151,6 +151,7 @@ import {
   type ModelPartsParam,
   type ModelTakeRecord,
   type ModelTextureSize,
+  type TextureUvPartKind,
 } from "./src/model.ts";
 import {
   assembleBlueprint,
@@ -2065,7 +2066,7 @@ export default async function plugin(bb: BbPluginApi) {
       }
       await runBlenderOnHost(input.hostId, prepArgs, input.cwd);
       const partsJson = JSON.parse((await readHostBytes(join(runRel, "parts.json"), input.cwd, input.hostId)).toString("utf8")) as {
-        parts: Array<{ material: string; part: string; color: string; marker?: boolean }>;
+        parts: Array<{ material: string; part: string; color: string; marker?: boolean; kind?: TextureUvPartKind }>;
       };
       const guideBytes = await readHostBytes(join(runRel, "guide.png"), input.cwd, input.hostId);
       const maskBytes = await readHostBytes(join(runRel, "mask.png"), input.cwd, input.hostId);
@@ -2080,6 +2081,7 @@ export default async function plugin(bb: BbPluginApi) {
         part: materialParts[index]?.part ?? row.part,
         color: row.color,
         marker: row.marker,
+        kind: row.kind,
       }));
       await writeHostBytes(
         join(runRel, "parts.json"),

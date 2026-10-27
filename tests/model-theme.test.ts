@@ -11,11 +11,14 @@ test("buildTextureUvPrompt keeps user task separate from game look line", () => 
     hasConcept: false,
     hasStyle: false,
     task: userPrompt,
-    theme: "warm volcanic sunset light",
-    artStyle: "toon: bold outlines",
+    theme: "glossy toy-like plastic and rubber look",
+    artStyle: "hand-painted game materials",
   });
   assert.match(prompt, new RegExp(`Task: repaint image 1 as a final hand-painted game texture: ${userPrompt}\\.`));
-  assert.doesNotMatch(prompt, /Task:[^\n]*warm volcanic/);
+  assert.doesNotMatch(prompt, /Task:[^\n]*glossy toy-like/);
   assert.match(prompt, /Game look \(lower priority than the Task and the reference images/);
-  assert.match(prompt, /no coloured light, no cast shadows and no outlines\): warm volcanic sunset light; toon: bold outlines/);
+  assert.match(
+    prompt,
+    /no coloured light, no cast shadows and no outlines\): glossy toy-like plastic and rubber look; hand-painted game materials/,
+  );
 });

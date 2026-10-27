@@ -65,11 +65,11 @@ Proven in production tests; the plugin enforces most of this in Blender prepare:
 - **No outlines** on the guide — Muse turns island edges into coloured seam frames. Ban frames in text; guide bake has no island outlines.
 - **Large UV islands:** Smart UV angle ~66–72°, island margin **0.03–0.04**; bake margin 16–24 px.
 - **Top of each island = top of the model:** `uv.align_rotation` (geometry, Z) then `pack_islands(rotate=False)` so Muse places effects by picture bottom (`only at the BOTTOM end of …`).
-- **Flat part colours** on the guide = materials/parts; describe what to paint on each colour in `prompt` / `parts`, not in the game's global style.
+- **Flat part colours** on the guide = materials/parts; describe what to paint on each colour in `prompt` / `parts`, not in the game's global style. Materials that already have a **real Principled Base Color** in the FBX keep it (`parts.json` → `kind: "base"`); only default-grey slots get a **marker** hue chosen far from named hues (gold, gem, wood, …). Markers read `#hex marks part "…" (paint it as …)` in the Muse layout; base colours read `#hex = … (its real colour)`.
 - **Concept as `images[0]`** always feeds Muse. Turn **`projectConcept` on** only for straight-on concepts (same pose as the mesh) so faces, eyes, lettering and placed patterns are projected before Muse; diagonal concept art will smear if projected.
 - **Never** repaint model render views and project them back onto the UV — silhouette and scale drift.
 - **Model prep (you, in Blender):** after deleting solid details (eye spheres, bolts, etc.), select the **boundary edges** of the hole and **`bmesh.ops.holes_fill`** (or equivalent) before you call `texture-uv`. Unfilled pits bake as dark holes on the guide. **Prepare does not fill holes** — it keeps intentional open mesh (cloth planes, rag edges) as-is and does not repair topology.
-- **Muse:** image roles → `Task:` (your paint notes only) → `Game look` (lower priority than Task and reference images; materials/palette only, flat albedo) → `Must not change:` → short bans. Textured materials list **palette** swatches as `colour (#hex) = part` when you name them in `parts`. Tool output prints the palette after prepare.
+- **Muse:** image roles → `Task:` (your paint notes only) → `Game look` (lower priority than Task and reference images; materials/palette only, flat albedo; outline/lighting clauses stripped from theme) → `Must not change:` → short bans. Textured materials list **palette** swatches as `colour (#hex) = part` when you name them in `parts`. Tool output prints the palette after prepare. `preview.png` tiles follow each view's aspect so tall props fill the tile.
 
 ## Rules (blueprint)
 

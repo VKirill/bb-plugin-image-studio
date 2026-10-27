@@ -73,7 +73,65 @@ export type ModelTextureSize = (typeof MODEL_TEXTURE_SIZES)[number];
 
 export const DEFAULT_DILATE_PX = 12;
 
-export type TextureUvPart = { color: string; part: string; marker?: boolean; colorName?: string };
+export type TextureUvPartKind = "base" | "marker" | "textured";
+
+export type TextureUvPart = {
+  color: string;
+  part: string;
+  marker?: boolean;
+  kind?: TextureUvPartKind;
+  colorName?: string;
+};
+
+const GAME_LOOK_DROP =
+  /\b(outlines?|line\s*art|lineart|ink|contour|shading|shadows?|lighting|light|sunset|glow|rim|cel)\b/i;
+
+/** Drop outline / lighting clauses from game theme and art-style text for texture-uv prompts. */
+export function sanitizeGameLook(text: string): string {
+  const raw = text.trim();
+  if (!raw) return "";
+  const clauses = raw
+    .split(/[;,.]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const kept = clauses.filter((c) => !GAME_LOOK_DROP.test(c));
+  return kept.join("; ");
+}
+
+/** Mirrored from blender/texture_uv.py for unit tests (marker hue distance). */
+export const TEXTURE_UV_HUE_KEYWORDS: ReadonlyArray<readonly [readonly string[], number]> = [
+  [["gold", "brass", "yellow"], 45],
+  [["wood", "brown", "leather"], 30],
+  [["red", "rubber", "fire", "lava"], 0],
+  [["orange"], 25],
+  [["green", "moss", "leaf"], 120],
+  [["blue", "water", "ice"], 215],
+  [["purple", "violet", "gem", "amethyst"], 280],
+  [["pink"], 330],
+];
+
+export function textureUvHueFromText(text: string): number | null {
+  const t = text.toLowerCase();
+  for (const [words, hue] of TEXTURE_UV_HUE_KEYWORDS) {
+    for (const word of words) {
+      if (t.includes(word)) return hue;
+    }
+  }
+  return null;
+}
+
+export function textureUvHueDistance(a: number, b: number): number {
+  const d = Math.abs(a - b) % 360;
+  return Math.min(d, 360 - d);
+}
+
+export function textureUvPickMarkerHueDegrees(markerIndex: number, reservedHues: readonly number[]): number {
+  for (let step = 0; step < 72; step++) {
+    const h = (markerIndex * 47 + step * 17) % 360;
+    if (reservedHues.every((rh) => textureUvHueDistance(h, rh) >= 60)) return h;
+  }
+  return (markerIndex * 47) % 360;
+}
 
 export type GuidePaletteEntry = { color: string; name: string; share: number };
 
@@ -91,7 +149,7 @@ export type ModelPartsParam = Record<string, string> | ModelPartRow[];
 
 /** Apply user material→description overrides onto baked parts.json rows. */
 export function mergeModelParts(
-  baked: Array<{ material: string; part: string; color: string; marker?: boolean }>,
+  baked: Array<{ material: string; part: string; color: string; marker?: boolean; kind?: TextureUvPartKind }>,
   user?: ModelPartsParam,
 ): TextureUvPart[] {
   const byMaterial = new Map<string, string>();
@@ -106,6 +164,7 @@ export function mergeModelParts(
     color: row.color,
     part: byMaterial.get(row.material) ?? row.part,
     marker: row.marker,
+    kind: row.kind,
   }));
 }
 
@@ -219,7 +278,7 @@ export function extractGuidePalette(guide: Rgba, mask: Rgba, maxColors = 6): Gui
 }
 
 export function resolveTextureUvParts(
-  baked: Array<{ material: string; part: string; color: string; marker?: boolean }>,
+  baked: Array<{ material: string; part: string; color: string; marker?: boolean; kind?: TextureUvPartKind }>,
   palette: GuidePaletteEntry[],
   user?: ModelPartsParam,
 ): TextureUvPart[] {
@@ -240,15 +299,16 @@ export function resolveTextureUvParts(
       continue;
     }
     const part = byMaterial.get(row.material) ?? byMaterial.get(row.color.toLowerCase()) ?? row.part;
-    out.push({ color: row.color, part, marker: row.marker });
+    out.push({ color: row.color, part, marker: row.marker, kind: row.kind });
   }
   return out;
 }
 
 export function layoutColorPhrase(part: TextureUvPart): string {
-  if (part.marker) return `${part.color} marks part "${part.part}"`;
+  if (part.marker) return `${part.color} marks part "${part.part}" (paint it as ${part.part})`;
   if (part.colorName) return `${part.colorName} (${part.color}) = ${part.part}`;
   if (part.color === "textured") return `textured = ${part.part}`;
+  if (part.kind === "base" || part.marker === false) return `${part.color} = ${part.part} (its real colour)`;
   return `${part.color} = ${part.part}`;
 }
 
@@ -561,7 +621,7 @@ export function buildTextureUvPrompt(input: {
   artStyle?: string;
 }): string {
   const hasMarker = input.parts.some((p) => p.marker);
-  const locksBaseColors = input.parts.some((p) => p.color === "textured" || !p.marker);
+  const locksBaseColors = input.parts.length > 0 && input.parts.every((p) => !p.marker);
   const colorList = input.parts.map((p) => layoutColorPhrase(p)).join(", ");
   const projectedClause = input.projected
     ? "; colors and shading were projected from the design, so faces, eyes and patterns are already where they belong"
@@ -587,7 +647,7 @@ export function buildTextureUvPrompt(input: {
     ? `Task: repaint image 1 as a final hand-painted game texture in the look of image 2: ${taskBody}.${markerTask}`
     : `Task: repaint image 1 as a final hand-painted game texture: ${taskBody}.${markerTask}`;
   lines.push(taskLine);
-  const gameLookParts = [input.theme?.trim(), input.artStyle?.trim()].filter(Boolean);
+  const gameLookParts = [sanitizeGameLook(input.theme ?? ""), sanitizeGameLook(input.artStyle ?? "")].filter(Boolean);
   if (gameLookParts.length > 0) {
     lines.push(
       `Game look (lower priority than the Task and the reference images: where they disagree follow them; materials and palette only; paint flat, evenly lit albedo with no coloured light, no cast shadows and no outlines): ${gameLookParts.join("; ")}.`,
