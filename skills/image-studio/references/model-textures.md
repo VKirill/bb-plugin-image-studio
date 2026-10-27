@@ -67,7 +67,7 @@ Proven in production tests; the plugin enforces most of this in Blender prepare:
 - **Flat part colours** on the guide = materials/parts; describe what to paint on each colour in `prompt` / `parts`, not in the game's global style.
 - **Concept as `images[0]`** always feeds Muse. Turn **`projectConcept` on** only for straight-on concepts (same pose as the mesh) so faces, eyes, lettering and placed patterns are projected before Muse; diagonal concept art will smear if projected.
 - **Never** repaint model render views and project them back onto the UV — silhouette and scale drift.
-- **Model prep:** after deleting mesh details (eye spheres, etc.) **close holes** (`bmesh.ops.holes_fill`) before texturing; prepare runs hole fill on open boundaries.
+- **Model prep (you, in Blender):** after deleting solid details (eye spheres, bolts, etc.), select the **boundary edges** of the hole and **`bmesh.ops.holes_fill`** (or equivalent) before you call `texture-uv`. Unfilled pits bake as dark holes on the guide. **Prepare does not fill holes** — it keeps intentional open mesh (cloth planes, rag edges) as-is and does not repair topology.
 - **Muse:** image roles → `Task:` → `Must not change:` → short bans. No negative prompt, seed, or strength — text only. Describe subject, `conceptNote`, `parts`, and effects in `prompt`; the plugin adds theme/style.
 
 ## Rules (blueprint)
