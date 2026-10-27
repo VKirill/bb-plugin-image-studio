@@ -2,7 +2,7 @@
 title: Image Studio — «предмет» (item) в разделе «Текстура по модели»
 date: 2026-10-28
 source: запрос Кирилла через тред LAVA BONK (thr_vgdyg342s5)
-status: draft — ждёт одобрения
+status: approved 2026-10-28
 depends_on: 0.8.16 (model-guide-fix2, model-blueprint-nb21)
 ---
 
@@ -71,7 +71,7 @@ items/plunger-scepter/item.json
 3. В панели карточка показывает ленту шагов, выбранный дубль отмечен, значок в галерее ведёт в карточку.
 4. Повторный texture-uv с `--item plunger-scepter` без `--file` берёт модель и концепт из предмета.
 
-## Открытые вопросы
+## Решения (одобрено 2026-10-28)
 
-- Export в FBX с текстурой или только `.blend` плюс файлы карт? Предлагаю FBX: его берёт Roblox Studio.
-- Нужен ли шаг `concept` с генерацией внутри предмета (через roblox items/props) или достаточно прикрепления? Предлагаю пока прикрепление.
+- **Export:** FBX без вшитых текстур плюс отдельные PNG-карты (`color`, `normal`; `roughness`/`metal`, если есть), а также `.blend` как исходник. Масштаб FBX — настройка проекта `fbxScale`, по умолчанию `0.01` для Roblox (`global_scale 0.01`: Roblox читает сантиметры FBX как studs). `export.json`: пути файлов, масштаб, куда что в Roblox (MeshPart + SurfaceAppearance.ColorMap/NormalMap/RoughnessMap/MetalnessMap).
+- **Concept:** только прикрепление — файлом или id из галереи разделов roblox/character.
