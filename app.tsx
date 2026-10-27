@@ -27,8 +27,10 @@ import { MAX_CONCURRENCY, mapParallel } from "./src/queue";
 import { rpcApi } from "./src/rpc-api";
 import { fileToBase64 } from "./lib/files";
 import { GuiPanel, type GuiItem } from "./gui-panel";
+import { ModelPanel } from "./model-panel";
+import { stylesForAppTab } from "./src/model";
 
-type Tab = "settings" | "people" | "gallery" | "roblox" | "gui" | "characters";
+type Tab = "settings" | "people" | "gallery" | "roblox" | "gui" | "characters" | "model";
 type UiLocale = "auto" | "en" | "ru";
 type PhotoSlotId = SlotId;
 /** The three face slots one multi-file pick fills, in order. */
@@ -1105,11 +1107,12 @@ function StudioPage({ initialView = "gallery" }: { initialView?: Tab }) {
   const falOnlySelected = modelFalOnly(selectedModel);
   const kieOnlySelected = modelKieOnly(selectedModel);
 
-  const navItems: Array<{ id: Tab; icon: "GridView" | "Square" | "Layers" | "Puzzle" | "UserRound" | "Settings"; label: string }> = [
+  const navItems: Array<{ id: Tab; icon: "GridView" | "Square" | "Layers" | "Puzzle" | "Palette" | "UserRound" | "Settings"; label: string }> = [
     { id: "gallery", icon: "GridView", label: t("tabGallery", {}, locale) },
     { id: "roblox", icon: "Square", label: t("tabRoblox", {}, locale) },
     { id: "gui", icon: "Layers", label: t("tabGui", {}, locale) },
     { id: "characters", icon: "Puzzle", label: t("tabCharacters", {}, locale) },
+    { id: "model", icon: "Palette", label: t("tabModel", {}, locale) },
     { id: "people", icon: "UserRound", label: t("tabProfiles", {}, locale) },
     { id: "settings", icon: "Settings", label: t("tabSettings", {}, locale) },
   ];
@@ -1310,6 +1313,23 @@ function StudioPage({ initialView = "gallery" }: { initialView?: Tab }) {
               />
             ) : null}
           </>
+        ) : tab === "model" ? (
+          <>
+            {error ? (
+              <p role="alert" className="border-b border-border px-4 py-2 text-sm text-destructive">
+                {t("error", {}, locale)}: {error}
+              </p>
+            ) : null}
+            <ModelPanel
+              api={api}
+              projectId={projectId ?? null}
+              styles={stylesForAppTab(guiStyles, "model")}
+              version={guiVersion}
+              locale={locale}
+              onError={report}
+              onChanged={load}
+            />
+          </>
         ) : tab === "roblox" || tab === "gui" || tab === "characters" ? (
           <>
             {error ? (
@@ -1323,7 +1343,7 @@ function StudioPage({ initialView = "gallery" }: { initialView?: Tab }) {
               api={api}
               projectId={projectId ?? null}
               // GUI and Characters projects of a Roblox game live inside the game.
-              styles={guiStyles.filter((style) => style.section === tab && !style.gameId)}
+              styles={stylesForAppTab(guiStyles, tab)}
               allStyles={guiStyles}
               version={guiVersion}
               locale={locale}

@@ -1,0 +1,15 @@
+{
+  "schema_version": 2,
+  "task_id": "model-panel-v2",
+  "task_sha256": "eb616e11b4e58c90ab2f7cf2ce019a0dfa9d3d656460d27413b72d33a080704f",
+  "attempt": 1,
+  "provider_exit": 0,
+  "report": "complete",
+  "report_sha256": "22e147157a8b09533e3ef3867cb7b83a00880cdc0093b92a9f16fc24458a4e6a",
+  "owns_check": "passed",
+  "verification": "passed",
+  "review": "not_required",
+  "accepted": true,
+  "accepted_at": "2026-10-27T18:57:18.991Z",
+  "model": "composer-2.5"
+}

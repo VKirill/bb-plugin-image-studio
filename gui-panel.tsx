@@ -798,7 +798,7 @@ function CharacterActions({
 }
 
 /** The project switcher: a searchable list, so twenty or fifty projects stay one click away. */
-function ProjectPicker({
+export function ProjectPicker({
   styles,
   value,
   creating,

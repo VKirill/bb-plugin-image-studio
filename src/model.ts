@@ -1,8 +1,71 @@
 import { basename } from "node:path";
+import { z } from "zod";
+import type { GuiStyle } from "./gui.ts";
 import type { Rgba } from "./image-io.ts";
 
 export const MODEL_MODES = ["texture-uv", "blueprint"] as const;
 export type ModelMode = (typeof MODEL_MODES)[number];
+
+export const MODEL_TAKE_PREFIX = "model-take:" as const;
+export const MODEL_TAKE_MAX = 200;
+
+export const modelTakeRecordSchema = z.object({
+  id: z.string().min(1),
+  mode: z.enum(MODEL_MODES),
+  createdAt: z.string(),
+  prompt: z.string(),
+  folder: z.string(),
+  files: z.record(z.string(), z.string()),
+  warnings: z.array(z.string()).default([]),
+  sideRegenerated: z.boolean().optional(),
+});
+export type ModelTakeRecord = z.infer<typeof modelTakeRecordSchema>;
+
+export const modelTakeThumbSchema = z.object({ mimeType: z.string(), base64: z.string() });
+export const modelTakeWithThumbsSchema = modelTakeRecordSchema.extend({
+  thumbs: z.record(z.string(), modelTakeThumbSchema),
+});
+export type ModelTakeWithThumbs = z.infer<typeof modelTakeWithThumbsSchema>;
+
+export function modelTakeKvKey(styleId: string): string {
+  return `${MODEL_TAKE_PREFIX}${styleId}`;
+}
+
+export function parseModelTakeRecords(raw: unknown): ModelTakeRecord[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.flatMap((item) => {
+    const parsed = modelTakeRecordSchema.safeParse(item);
+    return parsed.success ? [parsed.data] : [];
+  });
+}
+
+/** Snapshot lists every section; each app tab filters to its own. */
+export function snapshotGuiStyles(styles: readonly GuiStyle[]): GuiStyle[] {
+  return [...styles].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+}
+
+export function stylesForAppTab(
+  styles: readonly GuiStyle[],
+  tab: "gui" | "characters" | "roblox" | "model",
+): GuiStyle[] {
+  return styles.filter((style) => style.section === tab && !style.gameId);
+}
+
+export function parseModelPartsText(text: string): ModelPartRow[] {
+  const rows: ModelPartRow[] = [];
+  for (const line of text.split(/\n+/)) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const eq = trimmed.indexOf("=");
+    const colon = trimmed.indexOf(":");
+    const splitAt = eq > 0 ? eq : colon > 0 ? colon : -1;
+    if (splitAt < 0) continue;
+    const material = trimmed.slice(0, splitAt).trim();
+    const part = trimmed.slice(splitAt + 1).trim();
+    if (material && part) rows.push({ material, part });
+  }
+  return rows;
+}
 
 export const MODEL_MUSE = "muse-image" as const;
 
