@@ -146,6 +146,8 @@ import {
   modelTakeWithThumbsSchema,
   parseModelTakeRecords,
   snapshotGuiStyles,
+  guideFix,
+  type GuideFixStats,
   type ModelConceptView,
   type ModelMode,
   type ModelPartsParam,
@@ -228,6 +230,7 @@ const imageStudioModelParamsSchema = z
     soft: z.array(z.string().min(1)).optional(),
     rigid: z.array(z.string().min(1)).optional(),
     sideSeparate: z.boolean().optional(),
+    guideFix: z.enum(["on", "off"]).optional(),
     project: z.string().optional(),
   })
   .superRefine((input, ctx) => {
@@ -348,6 +351,7 @@ export const rpcContract = defineRpcContract({
         soft: z.array(z.string().min(1)).optional(),
         rigid: z.array(z.string().min(1)).optional(),
         sideSeparate: z.boolean().optional(),
+        guideFix: z.enum(["on", "off"]).optional(),
       })
       .superRefine((input, ctx) => {
         if (input.mode === "texture-uv" && !input.model?.trim()) {
@@ -1986,6 +1990,7 @@ export default async function plugin(bb: BbPluginApi) {
     uvLayer: string;
     size: ModelTextureSize;
     prompt: string;
+    guideFix?: GuideFixStats;
     files: {
       color: string;
       mask: string;
@@ -2012,6 +2017,7 @@ export default async function plugin(bb: BbPluginApi) {
     conceptNote?: string;
     projectConcept?: boolean;
     conceptView?: ModelConceptView;
+    guideFix?: "on" | "off";
     cwd?: string;
     hostId?: string;
     originLabel?: string;
@@ -2133,7 +2139,18 @@ export default async function plugin(bb: BbPluginApi) {
           const painted = await decodeRgba(rendered.original);
           const guideRgba = await decodeRgba(guideBytes);
           const maskRgba = await decodeRgba(maskBytes);
-          const fitted = resize(painted, guideRgba.width, guideRgba.height);
+          let fitted = resize(painted, guideRgba.width, guideRgba.height);
+          let guideFixStats: GuideFixStats | undefined;
+          if (input.guideFix !== "off") {
+            const hasMarkerPart = partList.some((p) => p.marker);
+            const fixed = guideFix(fitted, guideRgba, { hue: !hasMarkerPart });
+            fitted = fixed.image;
+            guideFixStats = {
+              darkFilled: fixed.darkFilled,
+              hueFixed: fixed.hueFixed,
+              maskPixels: fixed.maskPixels,
+            };
+          }
           const color = cutAndDilate(fitted, maskRgba, DEFAULT_DILATE_PX);
           const colorBytes = await encodePng(color);
           await writeHostBytes(join(takeRel, "color.png"), input.cwd, input.hostId, colorBytes);
@@ -2145,6 +2162,7 @@ export default async function plugin(bb: BbPluginApi) {
             uvLayer: prepareMeta.uvLayer,
             size,
             prompt: composed,
+            ...(guideFixStats ? { guideFix: guideFixStats } : {}),
             files: {
               color: join(takeRel, "color.png"),
               mask: join(runRel, "mask.png"),
@@ -2162,6 +2180,7 @@ export default async function plugin(bb: BbPluginApi) {
             createdAt: new Date().toISOString(),
             prompt: input.prompt.trim(),
             folder: takeRel,
+            ...(guideFixStats ? { guideFix: guideFixStats } : {}),
             files: {
               manifest: join(takeRel, "manifest.json"),
               guide: manifest.files.guide,
@@ -2376,8 +2395,12 @@ export default async function plugin(bb: BbPluginApi) {
     return [
       `Model project: ${run.style.name} (${run.style.id})`,
       ...run.takes.map(
-        (take) =>
-          `texture-uv: ${take.files.color}\n  guide: ${take.files.guide}\n  mask: ${take.files.mask}\n  preview: ${take.files.preview}\n  manifest: ${join(dirname(take.files.color), "manifest.json")}`,
+        (take) => {
+          const stats = take.guideFix
+            ? `\n  guideFix: dark ${take.guideFix.darkFilled}, hue ${take.guideFix.hueFixed}, mask ${take.guideFix.maskPixels}`
+            : "";
+          return `texture-uv: ${take.files.color}\n  guide: ${take.files.guide}\n  mask: ${take.files.mask}\n  preview: ${take.files.preview}\n  manifest: ${join(dirname(take.files.color), "manifest.json")}${stats}`;
+        },
       ),
       run.paletteHint ?? "",
       ...run.errors.map((error) => `failed: ${error}`),
@@ -2923,6 +2946,7 @@ export default async function plugin(bb: BbPluginApi) {
       conceptNote: input.conceptNote,
       projectConcept: input.projectConcept,
       conceptView: input.conceptView,
+      guideFix: input.guideFix,
       cwd,
       hostId,
       originLabel: folderProject.projectName,
@@ -3648,6 +3672,7 @@ export default async function plugin(bb: BbPluginApi) {
           conceptNote: parsed.conceptNote,
           projectConcept: parsed.projectConcept,
           conceptView: parsed.conceptView,
+          guideFix: parsed.guideFix,
           cwd,
           hostId,
           originLabel: folderProject.projectName,
@@ -3790,6 +3815,7 @@ export default async function plugin(bb: BbPluginApi) {
           conceptNote: input.conceptNote,
           projectConcept: input.projectConcept,
           conceptView: input.conceptView,
+          guideFix: input.guideFix,
           ...folder,
         });
         const text = modelSummary(run);

@@ -1,12 +1,20 @@
 import { z } from "zod";
 import { originName, type GuiStyle } from "./gui.ts";
 import type { Rgba } from "./image-io.ts";
+import { resize } from "./raster.ts";
 
 export const MODEL_MODES = ["texture-uv", "blueprint"] as const;
 export type ModelMode = (typeof MODEL_MODES)[number];
 
 export const MODEL_TAKE_PREFIX = "model-take:" as const;
 export const MODEL_TAKE_MAX = 200;
+
+export const guideFixStatsSchema = z.object({
+  darkFilled: z.number().int().nonnegative(),
+  hueFixed: z.number().int().nonnegative(),
+  maskPixels: z.number().int().nonnegative(),
+});
+export type GuideFixStats = z.infer<typeof guideFixStatsSchema>;
 
 export const modelTakeRecordSchema = z.object({
   id: z.string().min(1),
@@ -17,6 +25,7 @@ export const modelTakeRecordSchema = z.object({
   files: z.record(z.string(), z.string()),
   warnings: z.array(z.string()).default([]),
   sideRegenerated: z.boolean().optional(),
+  guideFix: guideFixStatsSchema.optional(),
 });
 export type ModelTakeRecord = z.infer<typeof modelTakeRecordSchema>;
 
@@ -188,7 +197,17 @@ function userPartLookup(user?: ModelPartsParam): Map<string, string> {
   return map;
 }
 
-function englishColorName(r: number, g: number, b: number): string {
+function hexToRgb(hex: string): { r: number; g: number; b: number } | null {
+  const h = hex.trim().replace(/^#/, "");
+  if (!/^[0-9a-f]{6}$/i.test(h)) return null;
+  return {
+    r: parseInt(h.slice(0, 2), 16),
+    g: parseInt(h.slice(2, 4), 16),
+    b: parseInt(h.slice(4, 6), 16),
+  };
+}
+
+export function englishColorName(r: number, g: number, b: number): string {
   const rn = r / 255;
   const gn = g / 255;
   const bn = b / 255;
@@ -205,9 +224,15 @@ function englishColorName(r: number, g: number, b: number): string {
   const hue = h * 360;
   if (l > 0.9 && s < 0.12) return "white";
   if (l > 0.72 && s < 0.18) return "light grey";
-  if (hue >= 180 && hue <= 250 && s > 0.12) return l > 0.55 ? "light blue" : "blue";
-  if (hue >= 15 && hue <= 55 && s > 0.15) return l > 0.45 ? "brown" : "dark brown";
   if (s < 0.15) return l > 0.6 ? "light grey" : "grey";
+  if (hue >= 180 && hue <= 250) return l > 0.55 ? "light blue" : "blue";
+  if (hue >= 35 && hue <= 60 && l > 0.4) return "gold";
+  if (hue >= 15 && hue <= 55) return l > 0.45 ? "brown" : "dark brown";
+  if (hue >= 345 || hue <= 15) return "red";
+  if (hue > 15 && hue < 35) return "orange";
+  if (hue > 60 && hue <= 165) return "green";
+  if (hue >= 260 && hue <= 310) return "purple";
+  if (hue > 310 && hue < 345) return "pink";
   return "muted colour";
 }
 
@@ -361,6 +386,7 @@ export const MODEL_CLI_REST_SKIP_FLAGS = [
   "--project",
   "--style",
   "--prompt",
+  "--guide-fix",
   "--json",
 ] as const;
 
@@ -414,6 +440,7 @@ export type ModelCliTextureUv = {
   projectConcept?: boolean;
   conceptView?: ModelConceptView;
   parts?: ModelPartsParam;
+  guideFix?: "on" | "off";
   projectStyleId?: string;
 };
 
@@ -480,6 +507,16 @@ export function parseModelGenerateCli(argv: readonly string[]): ModelCliTextureU
   }
   const partsFlag = cliFlag(argv, "--parts");
   const partRows = partsFlag ? parseModelPartsCli(partsFlag) : undefined;
+  const guideFixRaw = cliFlag(argv, "--guide-fix");
+  let guideFix: "on" | "off" | undefined;
+  if (guideFixRaw !== undefined) {
+    const gf = guideFixRaw.trim().toLowerCase();
+    if (gf === "on" || gf === "off") {
+      guideFix = gf;
+    } else {
+      throw new Error(`--guide-fix must be on or off, got "${guideFixRaw}".`);
+    }
+  }
   return {
     mode: "texture-uv",
     modelPath,
@@ -493,6 +530,7 @@ export function parseModelGenerateCli(argv: readonly string[]): ModelCliTextureU
     projectConcept: parseOptionalBoolFlag(cliFlag(argv, "--project-concept")),
     conceptView: conceptViewRaw as ModelConceptView | undefined,
     parts: partRows?.length ? partRows : undefined,
+    guideFix,
     projectStyleId,
   };
 }
@@ -654,9 +692,29 @@ export function buildTextureUvPrompt(input: {
     );
   }
   const faceClause = input.projected ? "faces, eyes and patterns only where they already are, never add new ones; " : "";
-  const baseColorsClause = locksBaseColors ? "; the base colors" : "";
+  let baseColorsClause = "";
+  if (locksBaseColors) {
+    const partLocks = input.parts
+      .map((p) => {
+        let name = p.colorName;
+        if (!name && p.color) {
+          const rgb = hexToRgb(p.color);
+          if (rgb) name = englishColorName(rgb.r, rgb.g, rgb.b);
+        }
+        if (name && p.part) {
+          return `${p.part} stays ${name}`;
+        }
+        return "";
+      })
+      .filter(Boolean);
+    if (partLocks.length > 0) {
+      baseColorsClause = `; the material color of every shape (${partLocks.join(", ")})`;
+    } else {
+      baseColorsClause = "; the base colors";
+    }
+  }
   lines.push(
-    `Must not change: the position, outline and size of every shape; ${faceClause}the black background${baseColorsClause}.`,
+    `Must not change: the position, outline and size of every shape; ${faceClause}${baseColorsClause ? baseColorsClause.slice(2) + "; " : ""}the black background.`,
   );
   lines.push("Do not add outlines or frames around shapes, text or any new objects.");
   return lines.join("\n");
@@ -664,6 +722,113 @@ export function buildTextureUvPrompt(input: {
 
 function maskAlpha(mask: Rgba, x: number, y: number, threshold = 8): boolean {
   return mask.data[(y * mask.width + x) * 4 + 3]! > threshold;
+}
+
+export type GuideFixResult = {
+  image: Rgba;
+  darkFilled: number;
+  hueFixed: number;
+  maskPixels: number;
+};
+
+function pixelHueAndSat(r: number, g: number, b: number): { hue: number; sat: number } {
+  const mx = Math.max(r, g, b);
+  const mn = Math.min(r, g, b);
+  const d = mx - mn + 1e-6;
+  let h = 0;
+  if (mx === r) {
+    h = (((g - b) / d) % 6 + 6) % 6;
+  } else if (mx === g) {
+    h = (b - r) / d + 2;
+  } else {
+    h = (r - g) / d + 4;
+  }
+  h *= 60;
+  const sat = d / (mx + 1e-6);
+  return { hue: h, sat };
+}
+
+/**
+ * Port of texture_guide_fix.py:
+ * Fix Muse dark gaps and hue swaps using the guide texture.
+ */
+export function guideFix(
+  muse: Rgba,
+  guide: Rgba,
+  opts?: { hue?: boolean },
+): GuideFixResult {
+  const allowHue = opts?.hue ?? true;
+  const targetW = guide.width;
+  const targetH = guide.height;
+  const m = muse.width === targetW && muse.height === targetH ? muse : resize(muse, targetW, targetH);
+  const N = targetW * targetH;
+
+  const outData = new Uint8Array(m.data);
+  let maskPixels = 0;
+  let darkFilled = 0;
+  let hueFixed = 0;
+
+  const isDark = new Uint8Array(N);
+
+  for (let i = 0; i < N; i++) {
+    const p = i * 4;
+    const gr = guide.data[p]!;
+    const gg = guide.data[p + 1]!;
+    const gb = guide.data[p + 2]!;
+    const gSum = gr + gg + gb;
+
+    if (gSum > 30) {
+      maskPixels++;
+      const mr = m.data[p]!;
+      const mg = m.data[p + 1]!;
+      const mb = m.data[p + 2]!;
+      const mSum = mr + mg + mb;
+
+      if (mSum < 60) {
+        darkFilled++;
+        isDark[i] = 1;
+        outData[p] = Math.min(255, Math.round(gr * 1.25));
+        outData[p + 1] = Math.min(255, Math.round(gg * 1.25));
+        outData[p + 2] = Math.min(255, Math.round(gb * 1.25));
+      }
+    }
+  }
+
+  if (allowHue) {
+    for (let i = 0; i < N; i++) {
+      if (isDark[i]) continue;
+      const p = i * 4;
+      const gr = guide.data[p]!;
+      const gg = guide.data[p + 1]!;
+      const gb = guide.data[p + 2]!;
+      if (gr + gg + gb <= 30) continue;
+
+      const mr = m.data[p]!;
+      const mg = m.data[p + 1]!;
+      const mb = m.data[p + 2]!;
+
+      const { hue: hg, sat: sg } = pixelHueAndSat(gr, gg, gb);
+      const { hue: hm, sat: sm } = pixelHueAndSat(mr, mg, mb);
+
+      const dh = Math.abs((((hg - hm) + 180) % 360 + 360) % 360 - 180);
+      if (sg > 0.35 && sm > 0.25 && dh > 22) {
+        hueFixed++;
+        const mMean = (mr + mg + mb) / 3;
+        const gMean = (gr + gg + gb) / 3;
+        const lumRatio = Math.max(0.7, Math.min(1.4, mMean / Math.max(gMean, 1)));
+        outData[p] = Math.max(0, Math.min(255, Math.round(gr * lumRatio)));
+        outData[p + 1] = Math.max(0, Math.min(255, Math.round(gg * lumRatio)));
+        outData[p + 2] = Math.max(0, Math.min(255, Math.round(gb * lumRatio)));
+      }
+    }
+  }
+
+  return {
+    image: { data: outData, width: targetW, height: targetH },
+    darkFilled,
+    hueFixed,
+    maskPixels,
+  };
 }
 
 /** Cut `color` to the mask, then grow visible pixels `px` outward so UV seams do not gap (pure TS). */

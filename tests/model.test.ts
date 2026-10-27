@@ -90,7 +90,7 @@ test("buildTextureUvPrompt follows the TZ layout with concept and projection", (
   assert.match(prompt, /Game look \(lower priority than the Task and the reference images/);
   assert.match(prompt, /lava arena; stylized props/);
   assert.match(prompt, /Must not change:/);
-  assert.match(prompt, /the base colors/);
+  assert.match(prompt, /the material color of every shape/);
   assert.match(prompt, /faces, eyes and patterns only where they already are/);
   assert.match(prompt, /Do not add outlines or frames/);
 });
