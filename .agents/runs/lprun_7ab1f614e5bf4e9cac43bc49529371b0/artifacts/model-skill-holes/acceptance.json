@@ -1,0 +1,15 @@
+{
+  "schema_version": 2,
+  "task_id": "model-skill-holes",
+  "task_sha256": "95357d349563a41ed7606f30aa59103070cb8f005f375bdc2c44a2cdb2959074",
+  "attempt": 1,
+  "provider_exit": 0,
+  "report": "complete",
+  "report_sha256": "60327293f6e4f93cc06e32a2f3b9b7c138dbaa60dac11423940e984434fa610d",
+  "owns_check": "passed",
+  "verification": "passed",
+  "review": "not_required",
+  "accepted": true,
+  "accepted_at": "2026-10-27T19:08:54.315Z",
+  "model": "composer-2.5"
+}

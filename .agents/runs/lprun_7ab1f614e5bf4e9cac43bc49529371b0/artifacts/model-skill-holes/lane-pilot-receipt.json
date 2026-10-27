@@ -1,0 +1,126 @@
+{
+  "schemaVersion": 1,
+  "status": "accepted",
+  "lanePilotRunId": "lprun_7ab1f614e5bf4e9cac43bc49529371b0",
+  "lanePilotTaskId": "model-skill-holes",
+  "attemptId": "lpattempt_cb45bd7f18b9490a9a6dd6849cb00c04",
+  "pmThreadId": "thr_h9t9t78xrx",
+  "writerThreadId": "thr_3djh9faynh",
+  "ownsPaths": [
+    "skills/image-studio/references/model-textures.md"
+  ],
+  "readFirst": [
+    {
+      "path": "skills/image-studio/references/model-textures.md",
+      "windows": []
+    },
+    {
+      "path": "blender/texture_uv.py",
+      "windows": []
+    }
+  ],
+  "output": "Updated `skills/image-studio/references/model-textures.md`: the model-prep rule now says **you** close holes with `bmesh.ops.holes_fill` on boundary edges after removing solid detail, and that **prepare does not fill holes** (open cloth/rag geometry stays intentional). Confirmed `texture_uv.py` has no hole-fill logic; other claims (Smart UV ~69° / margin 0.035, `projectConcept` default off, bake margin 20) match the code.\n\n```plan-fact\n[\n  {\"item\":1,\"status\":\"done\",\"evidence\":[\"skills/image-studio/references/model-textures.md:70-70\",\"cmd:! grep -qi 'prepare runs hole fill' skills/image-studio/references/model-textures.md && grep -q 'holes_fill' skills/image-studio/references/model-textures.md\"]}\n]\n```",
+  "verification": [
+    {
+      "command": "! grep -qi 'prepare runs hole fill' skills/image-studio/references/model-textures.md && grep -q 'holes_fill' skills/image-studio/references/model-textures.md",
+      "exitCode": 0,
+      "stdout": "",
+      "stderr": "",
+      "sandboxBackend": "macos-seatbelt",
+      "policySha256": "e5e6ea5c28d7fb78168f3c7f57edee86dcf2dd05e8bab4a53a11c9a6e472c181",
+      "workspacePath": "/Users/vechkasov/.lane-pilot/worktrees/lpattempt_a0ab1c1c0cf0487f88ec2d7a3248f7f7/bb-plugin-image-studio"
+    }
+  ],
+  "runV2": {
+    "schemaVersion": 1,
+    "pools": {
+      "provider": 15,
+      "verification": 2
+    },
+    "score": 2,
+    "risk": "low",
+    "sourceRisk": "low",
+    "scoreAdapter": "task-risk-v1"
+  },
+  "reasoning": [
+    {
+      "planSha256": "4f441564f13378d825794484638e3b812520e3009b4df45d2d4eb004d7d05791",
+      "sentPlanSha256": "4f441564f13378d825794484638e3b812520e3009b4df45d2d4eb004d7d05791",
+      "sourceLength": 118,
+      "sentLength": 118,
+      "jevStatus": "ok",
+      "jevDecision": "low",
+      "requestedReasoningLevel": "low",
+      "effectiveReasoningLevel": "medium",
+      "fallbackReason": "jev_unsupported_by_selected_model:low",
+      "retryEffort": {
+        "enabled": true,
+        "retryIndex": 0,
+        "before": "medium",
+        "after": "medium",
+        "changed": false
+      },
+      "providerId": "acp-cursor",
+      "model": "composer-2.5",
+      "serviceTier": "default",
+      "requestedServiceTier": "default",
+      "runId": "lprun_7ab1f614e5bf4e9cac43bc49529371b0",
+      "attemptId": "lpattempt_cb45bd7f18b9490a9a6dd6849cb00c04",
+      "threadId": "thr_3djh9faynh",
+      "effortMode": "automatic",
+      "selectionSource": {
+        "providerId": "acp-cursor",
+        "model": "composer-2.5",
+        "reasoningLevel": "medium",
+        "serviceTier": "default",
+        "reasoningLevelSource": "client-preference"
+      },
+      "dispatchContext": {
+        "memoryText": "- Project-life bookkeeping commits run only on main. PM writes to .agents/PROGRESS.md and .agents/CHANGELOG.md are guarded; PM guidance points to .agents/decisions/ and .agents/plans/.\n- image_studio_model mode 'blueprint' is implemented in src/blueprint.ts as pure TypeScript image work (sharp may be missing) and wired in server.ts runModelBlueprint for both the tool and the CLI.\n- Section placement resolves environments by folder path. When the same folder belongs to an ancestor section and its descendant, bind the chat to the ancestor section. Explicit `thread_places` assignments take precedence. A single matching section keeps existing behavior; sibling sections sharing a folder remain unbound, and a project-root match remains unbound. Apply the shared resolution rule consistently in list bindings, `naturalPlace`, and `locate`.",
+        "memoryPicked": [
+          "8c29d00234a4c4165616355505012f163e8eff147bf88e273bad0d05e1a77971",
+          "f2cea6e761516600d9a13912d7ad81efdb7b31db0b2013858646a16e6e2ac4dc",
+          "5cccb6df5ddea03f30a68ce9ee8c9a776cc1926b18f7e9404aa48c2d0cdbdcb8"
+        ],
+        "rulesText": "",
+        "rulesPicked": {
+          "total": 18,
+          "picked": []
+        },
+        "executionPacket": "Read these before editing; they are the context for this task:\n- .agents/plans/2026-10-27-texture-by-model.md L1-L120 (sha256 198aef49)\n- .agents/plans/texture-by-model/tz.md L1-L92 (sha256 da6190c9)\n- skills/image-studio/SKILL.md L1-L52 (sha256 d33e95fe)",
+        "executionPacketSha256": "69d58fdb40dac3b8b10789f7a3c0a7473810e39864ba7653909244ba2ddcaf76",
+        "pmReadContext": "",
+        "agent": "Lane Pilot writer",
+        "promptChars": 12497,
+        "helperMode": "roles",
+        "helperRequired": false,
+        "skillPick": {
+          "enabled": true,
+          "skills": [],
+          "picked": [],
+          "craft": [],
+          "projectFolder": [],
+          "hints": [],
+          "sources": {},
+          "reason": "pick_timeout",
+          "materialized": []
+        },
+        "writerKey": "acp-cursor/composer-2.5",
+        "harness": {
+          "id": "hrn_bb82a6fb4d778cee",
+          "arm": null,
+          "alwaysOnChars": 0,
+          "skills": [],
+          "checks": [],
+          "materialize": null
+        }
+      }
+    }
+  ],
+  "emergencyFallback": null,
+  "warnings": [
+    "the report has no APPROACH line",
+    "the report has no LESSON line (a lesson, or none with the reason)"
+  ],
+  "turns": 1
+}
