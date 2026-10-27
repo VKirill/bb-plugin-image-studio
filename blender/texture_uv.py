@@ -164,6 +164,40 @@ def import_model(path):
         raise SystemExit(f"Unsupported model format: {ext}")
 
 
+def resolve_model_textures(model_path):
+    model_dir = os.path.dirname(os.path.abspath(model_path))
+    for img in bpy.data.images:
+        if img.packed_file:
+            continue
+        raw = img.filepath or ""
+        abs_path = bpy.path.abspath(raw) if raw else ""
+        if abs_path and os.path.isfile(abs_path):
+            if not image_has_pixels(img):
+                img.reload()
+            if image_has_pixels(img):
+                continue
+        names = []
+        if raw:
+            names.append(os.path.basename(raw.replace("\\", "/")))
+        if img.name and img.name not in names:
+            names.append(img.name)
+        for fname in names:
+            if not fname or fname == ".":
+                continue
+            candidate = os.path.join(model_dir, fname)
+            if os.path.isfile(candidate):
+                img.filepath = candidate
+                img.reload()
+                break
+
+
+def apply_mesh_transforms(ob):
+    bpy.ops.object.select_all(action="DESELECT")
+    ob.select_set(True)
+    bpy.context.view_layer.objects.active = ob
+    bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
+
+
 def visible_meshes():
     return [o for o in bpy.context.scene.objects if o.type == "MESH" and o.visible_get()]
 
@@ -426,13 +460,13 @@ def _concept_uv_nodes(nt, sep, view, bbox):
         nt.links.new(mx, one.inputs[1])
         u, v = one.outputs["Value"], mz
     elif view == "left":
-        u, v = my, mz
-    else:
         one = nt.nodes.new("ShaderNodeMath")
         one.operation = "SUBTRACT"
         one.inputs[0].default_value = 1.0
         nt.links.new(my, one.inputs[1])
         u, v = one.outputs["Value"], mz
+    else:
+        u, v = my, mz
     comb = nt.nodes.new("ShaderNodeCombineXYZ")
     nt.links.new(u, comb.inputs["X"])
     nt.links.new(v, comb.inputs["Y"])
@@ -444,8 +478,7 @@ def apply_concept_projection(ob, concept_path, view):
     img = bpy.data.images.load(concept_path)
     img.colorspace_settings.name = "sRGB"
     bbox = object_bbox(ob)
-    view_local = VIEW_DIRS[view]
-    view_world = (ob.matrix_world.to_3x3() @ view_local).normalized()
+    view_world = VIEW_DIRS[view]
     for slot in ob.material_slots:
         mat = slot.material
         if not mat:
@@ -514,11 +547,13 @@ def prepare():
         clear_scene()
         scene_light()
         import_model(src)
+        resolve_model_textures(src)
         result = pick_object(object_name)
         if isinstance(result, tuple):
             ob, joined = result
         else:
             ob = result
+    apply_mesh_transforms(ob)
     ob.name = "model"
     sample_uv = ensure_image_studio_uv(ob)
     parts = flat_materials(ob, sample_uv)
