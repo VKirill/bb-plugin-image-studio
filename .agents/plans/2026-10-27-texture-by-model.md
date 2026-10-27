@@ -73,6 +73,9 @@ checklist.
 | model-panel-v2 | model section tab, generation forms, and texture/blueprint takes gallery | model-section-core | done | lprun_7ab1f614e5bf4e9cac43bc49529371b0 |
 | model-skill-v2 | model texture and blueprint reference, SKILL.md entry, and item pipeline | model-blueprint-v2 | done | lprun_7ab1f614e5bf4e9cac43bc49529371b0 |
 | model-release-prep | release fixes for baking, previews, concept defaults, browser safety, blueprint wording, and version 0.8.5 | model-core-fix, model-blueprint-v2 | done | lprun_7ab1f614e5bf4e9cac43bc49529371b0 |
+| model-preview-framing | preview tiles frame the whole model at 75–85% of the tile, nothing touching the edges; PM guide_check.py | model-release-prep | done | lprun_7ab1f614e5bf4e9cac43bc49529371b0 |
+| model-skill-holes | skill no longer claims prepare fills holes; the agent closes holes in Blender before texture-uv | model-skill-v2 | done | lprun_7ab1f614e5bf4e9cac43bc49529371b0 |
+| model-hub-build-fix | hub install: host.ts imports from the bare `@get-bb/plugin-sdk`; version 0.8.6 | — | done | lprun_7ab1f614e5bf4e9cac43bc49529371b0 |
 
 Checks per task: `npx tsc --noEmit` and `npx vitest run tests/model.test.ts` (new test file); the Blender script
 gets a smoke check `Blender -b --factory-startup -P blender/texture_uv.py -- prepare test <tmp>` that must
@@ -95,6 +98,7 @@ produce guide.png and mask.png (the built-in "test" rock stack from tex_guide.py
 ## History
 ### 2026-10-27
 - Accepted Lane Pilot run `lprun_7ab1f614e5bf4e9cac43bc49529371b0` completed all seven model tasks, including texture-uv core fixes, concept projection, blueprint, panel, and skill updates. Fire-mop and rock-stack runtime acceptance checks remain a follow-up.
+- Same run also completed model-preview-framing, model-skill-holes and model-hub-build-fix (hub bundle build fixed: `bb plugin update` to 0.8.5 was refused; now 0.8.6). These three had no rows in the table until this entry.
 
 ## Skill addition (requester, 2026-10-27): section "Item pipeline" in model-textures.md
 1. Concept (Image Studio: roblox items/props or characters) → approval.

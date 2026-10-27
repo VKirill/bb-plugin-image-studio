@@ -12,8 +12,8 @@
 - Run the planned fire-mop and rock-stack acceptance checks for model texturing and blueprint output.
 
 ## Last verify
-- command: reviewed project plan and accepted-task state for lprun_7ab1f614e5bf4e9cac43bc49529371b0
-- result: accepted model workflow tasks are marked done; fire-mop and rock-stack runtime acceptance checks remain; run reports unavailable in this checkout
+- command: `grep -n "plugin-sdk" host.ts` (bare import only) and `grep '"version"' package.json` (0.8.6); plan table reviewed for lprun_7ab1f614e5bf4e9cac43bc49529371b0
+- result: green for the hub bundle fix; all accepted model tasks marked done in the plan; fire-mop and rock-stack runtime acceptance checks remain; run artifacts under `.agents/runs/` are not in this checkout
 - when: 2026-10-27
 
 ## Pointers
