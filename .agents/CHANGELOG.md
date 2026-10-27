@@ -6,3 +6,4 @@
 - 2026-10-27 lprun_7ab1f614e5bf4e9cac43bc49529371b0: Fixed the hub install by importing the host entry from the bare SDK and bumped the plugin to 0.8.6 (model-hub-build-fix; commit: see git log)
 - 2026-10-27 lprun_7ab1f614e5bf4e9cac43bc49529371b0: Shortened the image-studio skill description under the 1024-character limit with a frontmatter test and bumped the plugin to 0.8.7 (model-skill-desc-limit; commit: see git log)
 - 2026-10-27 lprun_7ab1f614e5bf4e9cac43bc49529371b0: Fixed the skill frontmatter YAML, host file paths made absolute, CLI model flags and the --sheet-style collision, and bumped the plugin to 0.8.8 (model-accept-fixes; commit: see git log)
+- 2026-10-27 lprun_7ab1f614e5bf4e9cac43bc49529371b0: Fixed the blueprint cut to keep the handle, side-copy detection, soft anchors and soft colour key, and marker-coloured untextured models, and bumped the plugin to 0.8.9 (model-accept-round2; commit: see git log)

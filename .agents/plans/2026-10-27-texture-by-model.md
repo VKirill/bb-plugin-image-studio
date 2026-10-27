@@ -76,7 +76,9 @@ checklist.
 | model-preview-framing | preview tiles frame the whole model at 75–85% of the tile, nothing touching the edges; PM guide_check.py | model-release-prep | done | lprun_7ab1f614e5bf4e9cac43bc49529371b0 |
 | model-skill-holes | skill no longer claims prepare fills holes; the agent closes holes in Blender before texture-uv | model-skill-v2 | done | lprun_7ab1f614e5bf4e9cac43bc49529371b0 |
 | model-hub-build-fix | hub install: host.ts imports from the bare `@get-bb/plugin-sdk`; version 0.8.6 | — | done | lprun_7ab1f614e5bf4e9cac43bc49529371b0 |
+| model-skill-desc-limit | image-studio skill description under 1024 characters with every trigger group kept, frontmatter test for all skills; version 0.8.7 | — | done | lprun_7ab1f614e5bf4e9cac43bc49529371b0 |
 | model-accept-fixes | SKILL.md frontmatter valid YAML (skill registers again), absolute paths for every host file call, CLI carries all model flags and `--sheet-style`; version 0.8.8 | model-skill-desc-limit | done | lprun_7ab1f614e5bf4e9cac43bc49529371b0 |
+| model-accept-round2 | blueprint cut keeps the handle (true gaps, label removal), side-copy threshold 0.8 with a narrow-profile test, soft anchor in the top band, pale light-blue soft key, marker-coloured parts not locked to red; version 0.8.9 | model-accept-fixes | done | lprun_7ab1f614e5bf4e9cac43bc49529371b0 |
 
 Checks per task: `npx tsc --noEmit` and `npx vitest run tests/model.test.ts` (new test file); the Blender script
 gets a smoke check `Blender -b --factory-startup -P blender/texture_uv.py -- prepare test <tmp>` that must
@@ -101,6 +103,7 @@ produce guide.png and mask.png (the built-in "test" rock stack from tex_guide.py
 - Accepted Lane Pilot run `lprun_7ab1f614e5bf4e9cac43bc49529371b0` completed all seven model tasks, including texture-uv core fixes, concept projection, blueprint, panel, and skill updates. Fire-mop and rock-stack runtime acceptance checks remain a follow-up.
 - Same run also completed model-preview-framing, model-skill-holes and model-hub-build-fix (hub bundle build fixed: `bb plugin update` to 0.8.5 was refused; now 0.8.6). These three had no rows in the table until this entry.
 - Accepted Lane Pilot run `lprun_7ab1f614e5bf4e9cac43bc49529371b0` also completed model-accept-fixes (version 0.8.8): skill frontmatter fixed so BB registers the skill again, host file paths resolved to absolute, CLI carries all model flags and `--sheet-style`. The row was added in this entry.
+- Accepted Lane Pilot run `lprun_7ab1f614e5bf4e9cac43bc49529371b0` also completed model-skill-desc-limit (version 0.8.7) and model-accept-round2 (version 0.8.9): the blueprint cut keeps the handle, the side-copy threshold is 0.8 with a narrow-profile test, soft anchors sit in the top band, the soft colour key is the pale light-blue clay, and untextured parts with marker colours no longer lock Muse to red. The rows were added in this entry. The `items/*/PLAN.md` files are pointers to this plan and were not edited.
 
 ## Skill addition (requester, 2026-10-27): section "Item pipeline" in model-textures.md
 1. Concept (Image Studio: roblox items/props or characters) → approval.

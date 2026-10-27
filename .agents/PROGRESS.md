@@ -12,11 +12,11 @@
 - Run the planned fire-mop and rock-stack acceptance checks for model texturing and blueprint output.
 
 ## Last verify
-- command: `node --test --experimental-strip-types tests/skill-frontmatter.test.ts tests/model-cli.test.ts` (9 pass); `grep '"version"' package.json` (0.8.8)
-- result: green; skill frontmatter guard rejects the 0.8.7 colon-space description; plan table reviewed for lprun_7ab1f614e5bf4e9cac43bc49529371b0 (model-accept-fixes row added as done); fire-mop and rock-stack runtime acceptance checks remain; run artifacts under `.agents/runs/` are not in this checkout
+- command: `node --test --experimental-strip-types tests/skill-frontmatter.test.ts tests/model-cli.test.ts` (exit 0); `node_modules/.bin/tsc --noEmit` (exit 0); `grep '"version"' package.json` (0.8.9)
+- result: green; the skill frontmatter guard and CLI flag tests pass at 0.8.9; plan table has rows for every accepted task of lprun_7ab1f614e5bf4e9cac43bc49529371b0; fire-mop and rock-stack runtime acceptance checks are not run here
 - when: 2026-10-27
 
 ## Pointers
-- Open todos: none; `.agents/todos/INDEX.md` is absent.
-- Active plan: `.agents/plans/2026-10-27-texture-by-model.md` (accepted tasks complete; fire-mop and rock-stack runtime acceptance checks remain).
+- Open todos: none; `.agents/todos/` is absent.
+- Active plan: `.agents/plans/2026-10-27-texture-by-model.md` (accepted tasks complete; fire-mop and rock-stack runtime acceptance checks remain). `.agents/plans/ROADMAP.md` is absent.
 - Changelog: `.agents/CHANGELOG.md`.
