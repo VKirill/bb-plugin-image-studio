@@ -1,6 +1,6 @@
 ---
 name: image-studio
-description: Generate or edit images in the current BB project through Image Studio (fal.ai/kie.ai: Nano Banana, Muse Image, GPT Image, FLUX.2, Seedream, Grok Imagine, Qwen, Wan; people profiles). Use when the user wants a picture, photo, or poster; game GUI (menus, HUD, buttons, UI kit); a game character for 3D (A-pose front, turnaround, weapons apart); Roblox game art (icon, thumbnails, logo, badges, passes, products, items, props, textures, skybox, decals, particles); texture a 3D model by its UV or a modeling blueprint from a concept; a named person from profiles; or 18+ / adult / NSFW (Qwen by default, Wan fallback).
+description: "Generate or edit images in the current BB project through Image Studio (fal.ai and kie.ai — Nano Banana, Muse Image, GPT Image, FLUX.2, Seedream, Grok Imagine, Qwen, Wan; people profiles). Use when the user wants a picture, photo, or poster; game GUI (menus, HUD, buttons, UI kit); a game character for 3D (A-pose front, turnaround, weapons apart); Roblox game art (icon, thumbnails, logo, badges, passes, products, items, props, textures, skybox, decals, particles); texture a 3D model by its UV or a modeling blueprint from a concept; a named person from profiles; or 18+ / adult / NSFW (Qwen by default, Wan fallback)."
 ---
 
 # Image Studio

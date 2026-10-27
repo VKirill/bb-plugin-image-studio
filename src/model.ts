@@ -100,6 +100,189 @@ export function mergeModelParts(
 export const MODEL_CONCEPT_VIEWS = ["front", "back", "left", "right"] as const;
 export type ModelConceptView = (typeof MODEL_CONCEPT_VIEWS)[number];
 
+/** Absolute path for bb.sdk.files on the project host (relative paths stay relative in manifests). */
+export function hostPath(cwd: string, relOrAbs: string): string {
+  const normalized = relOrAbs.trim().replace(/\\/g, "/");
+  if (normalized.startsWith("/") || /^[A-Za-z]:\//.test(normalized)) return normalized;
+  const base = cwd.trim().replace(/\\/g, "/").replace(/\/$/, "");
+  const rel = normalized.replace(/^\.\//, "");
+  return `${base}/${rel}`;
+}
+
+export function isHostPathAbsolute(path: string): boolean {
+  const normalized = path.trim().replace(/\\/g, "/");
+  return normalized.startsWith("/") || /^[A-Za-z]:\//.test(normalized);
+}
+
+/** CLI flags whose values must not end up in the free-text prompt tail. */
+export const MODEL_CLI_REST_SKIP_FLAGS = [
+  "--mode",
+  "--file",
+  "--model",
+  "--object",
+  "--size",
+  "--variants",
+  "--image",
+  "--subject",
+  "--concept-note",
+  "--project-concept",
+  "--concept-view",
+  "--parts",
+  "--views",
+  "--soft",
+  "--rigid",
+  "--sheet-style",
+  "--project",
+  "--style",
+  "--prompt",
+  "--json",
+] as const;
+
+export function cliFlag(argv: readonly string[], name: string): string | undefined {
+  const index = argv.indexOf(name);
+  if (index === -1) return undefined;
+  return argv[index + 1];
+}
+
+export function cliFlags(argv: readonly string[], name: string): string[] {
+  const out: string[] = [];
+  argv.forEach((token, index) => {
+    const value = argv[index + 1];
+    if (token === name && value) out.push(value);
+  });
+  return out;
+}
+
+export function parseOptionalBoolFlag(value?: string): boolean | undefined {
+  if (value === undefined) return undefined;
+  const v = value.trim().toLowerCase();
+  if (v === "true" || v === "1" || v === "yes") return true;
+  if (v === "false" || v === "0" || v === "no") return false;
+  throw new Error(`--project-concept expects true or false, got "${value}"`);
+}
+
+export function parseModelPartsCli(text: string): ModelPartRow[] {
+  const rows: ModelPartRow[] = [];
+  for (const chunk of text.split(/;/)) {
+    const trimmed = chunk.trim();
+    if (!trimmed) continue;
+    const eq = trimmed.indexOf("=");
+    if (eq < 1) continue;
+    const material = trimmed.slice(0, eq).trim();
+    const part = trimmed.slice(eq + 1).trim();
+    if (material && part) rows.push({ material, part });
+  }
+  return rows;
+}
+
+export type ModelCliTextureUv = {
+  mode: "texture-uv";
+  modelPath: string;
+  prompt: string;
+  object?: string;
+  size: ModelTextureSize;
+  variants: number;
+  images: string[];
+  subject?: string;
+  conceptNote?: string;
+  projectConcept?: boolean;
+  conceptView?: ModelConceptView;
+  parts?: ModelPartsParam;
+  projectStyleId?: string;
+};
+
+export type ModelCliBlueprint = {
+  mode: "blueprint";
+  conceptImage: string;
+  prompt: string;
+  views?: string[];
+  sheetStyle?: string;
+  subject?: string;
+  soft?: string[];
+  rigid?: string[];
+  projectStyleId?: string;
+};
+
+export function parseModelGenerateCli(argv: readonly string[]): ModelCliTextureUv | ModelCliBlueprint {
+  const modeRaw = cliFlag(argv, "--mode") ?? "texture-uv";
+  if (!MODEL_MODES.includes(modeRaw as ModelMode)) {
+    throw new Error(`--mode must be ${MODEL_MODES.join(" or ")}.`);
+  }
+  const mode = modeRaw as ModelMode;
+  const projectStyleId = cliFlag(argv, "--project") ?? cliFlag(argv, "--style");
+  const images = cliFlags(argv, "--image");
+  const skip = new Set<string>(MODEL_CLI_REST_SKIP_FLAGS);
+  const promptTail = modelCliRestAfter(argv, "generate", skip);
+
+  if (mode === "blueprint") {
+    const conceptImage = images[0] ?? cliFlag(argv, "--image");
+    if (!conceptImage) throw new Error("Blueprint mode requires --image <concept>.");
+    const viewsFlag = cliFlag(argv, "--views");
+    const views = viewsFlag ? viewsFlag.split(",").map((part) => part.trim()).filter(Boolean) : undefined;
+    const softFlag = cliFlag(argv, "--soft");
+    const soft = softFlag ? softFlag.split(/[;,]/).map((part) => part.trim()).filter(Boolean) : undefined;
+    const rigidFlag = cliFlag(argv, "--rigid");
+    const rigid = rigidFlag ? rigidFlag.split(/[;,]/).map((part) => part.trim()).filter(Boolean) : undefined;
+    const prompt = cliFlag(argv, "--prompt") ?? promptTail.replace(/^model\s*/, "");
+    return {
+      mode: "blueprint",
+      conceptImage,
+      prompt,
+      views,
+      sheetStyle: cliFlag(argv, "--sheet-style"),
+      subject: cliFlag(argv, "--subject"),
+      soft,
+      rigid,
+      projectStyleId,
+    };
+  }
+
+  const modelPath = cliFlag(argv, "--file") ?? cliFlag(argv, "--model");
+  const prompt = cliFlag(argv, "--prompt") ?? promptTail.replace(/^model\s*/, "");
+  if (!modelPath || !prompt) throw new Error("texture-uv requires --file/--model and --prompt.");
+  const sizeRaw = cliFlag(argv, "--size");
+  const size = sizeRaw ? (Number(sizeRaw) as ModelTextureSize) : 1024;
+  if (!MODEL_TEXTURE_SIZES.includes(size)) throw new Error("--size must be 1024 or 2048.");
+  const variantsRaw = cliFlag(argv, "--variants");
+  const variants = variantsRaw ? Number(variantsRaw) : 1;
+  const conceptViewRaw = cliFlag(argv, "--concept-view");
+  if (conceptViewRaw && !MODEL_CONCEPT_VIEWS.includes(conceptViewRaw as ModelConceptView)) {
+    throw new Error(`--concept-view must be ${MODEL_CONCEPT_VIEWS.join(", ")}.`);
+  }
+  const partsFlag = cliFlag(argv, "--parts");
+  const partRows = partsFlag ? parseModelPartsCli(partsFlag) : undefined;
+  return {
+    mode: "texture-uv",
+    modelPath,
+    prompt,
+    object: cliFlag(argv, "--object"),
+    size,
+    variants,
+    images,
+    subject: cliFlag(argv, "--subject"),
+    conceptNote: cliFlag(argv, "--concept-note"),
+    projectConcept: parseOptionalBoolFlag(cliFlag(argv, "--project-concept")),
+    conceptView: conceptViewRaw as ModelConceptView | undefined,
+    parts: partRows?.length ? partRows : undefined,
+    projectStyleId,
+  };
+}
+
+export function modelCliRestAfter(argv: readonly string[], command: string, skip: Set<string>): string {
+  const out: string[] = [];
+  for (let i = 0; i < argv.length; i++) {
+    const token = argv[i]!;
+    if (token === command) continue;
+    if (skip.has(token)) {
+      i += 1;
+      continue;
+    }
+    if (token.startsWith("--")) continue;
+    out.push(token);
+  }
+  return out.join(" ").trim();
+}
+
 function fileBaseName(path: string): string {
   const normalized = path.trim().replace(/\\/g, "/");
   const slash = normalized.lastIndexOf("/");
