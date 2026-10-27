@@ -73,14 +73,14 @@ export type ModelTextureSize = (typeof MODEL_TEXTURE_SIZES)[number];
 
 export const DEFAULT_DILATE_PX = 12;
 
-export type TextureUvPart = { color: string; part: string };
+export type TextureUvPart = { color: string; part: string; marker?: boolean };
 
 export type ModelPartRow = { material: string; part: string };
 export type ModelPartsParam = Record<string, string> | ModelPartRow[];
 
 /** Apply user material→description overrides onto baked parts.json rows. */
 export function mergeModelParts(
-  baked: Array<{ material: string; part: string; color: string }>,
+  baked: Array<{ material: string; part: string; color: string; marker?: boolean }>,
   user?: ModelPartsParam,
 ): TextureUvPart[] {
   const byMaterial = new Map<string, string>();
@@ -94,6 +94,7 @@ export function mergeModelParts(
   return baked.map((row) => ({
     color: row.color,
     part: byMaterial.get(row.material) ?? row.part,
+    marker: row.marker,
   }));
 }
 
@@ -390,13 +391,20 @@ export function buildTextureUvPrompt(input: {
   task: string;
   theme?: string;
 }): string {
-  const colorList = input.parts.map((p) => `${p.color} = ${p.part}`).join(", ");
+  const hasMarker = input.parts.some((p) => p.marker);
+  const locksBaseColors = input.parts.some((p) => p.color === "textured" || !p.marker);
+  const colorList = input.parts
+    .map((p) =>
+      p.marker ? `${p.color} marks part "${p.part}"` : p.color === "textured" ? `textured = ${p.part}` : `${p.color} = ${p.part}`,
+    )
+    .join(", ");
   const projectedClause = input.projected
     ? "; colors and shading were projected from the design, so faces, eyes and patterns are already where they belong"
     : "";
+  const markerPhrase = hasMarker ? "flat marker colors distinguish" : "flat colors mark";
   const layout =
     `Image 1 is the LAYOUT: a texture atlas (UV map) of a 3D ${input.subject} laid flat on black. ` +
-    `Each separate shape is one piece of the model surface; flat colors mark the parts (${colorList}); ` +
+    `Each separate shape is one piece of the model surface; ${markerPhrase} the parts (${colorList}); ` +
     `the top of each shape is the top of the model${projectedClause}.`;
   const lines = [layout];
   if (input.hasConcept) {
@@ -406,14 +414,18 @@ export function buildTextureUvPrompt(input: {
   if (input.hasStyle) {
     lines.push("Image 3 is the STYLE SHEET: overall colour and material finish for the repaint.");
   }
+  const markerTask = hasMarker
+    ? " The flat marker colors only tell the parts apart: paint each part in its real material colours."
+    : "";
   const taskBody = [input.task.trim(), input.theme?.trim()].filter(Boolean).join("; ");
   const taskLine = input.hasConcept
-    ? `Task: repaint image 1 as a final hand-painted game texture in the look of image 2: ${taskBody || "a cohesive hand-painted game texture"}.`
-    : `Task: repaint image 1 as a final hand-painted game texture: ${taskBody || "a cohesive hand-painted game texture"}.`;
+    ? `Task: repaint image 1 as a final hand-painted game texture in the look of image 2: ${taskBody || "a cohesive hand-painted game texture"}.${markerTask}`
+    : `Task: repaint image 1 as a final hand-painted game texture: ${taskBody || "a cohesive hand-painted game texture"}.${markerTask}`;
   lines.push(taskLine);
   const faceClause = input.projected ? "faces, eyes and patterns only where they already are, never add new ones; " : "";
+  const baseColorsClause = locksBaseColors ? "; the base colors" : "";
   lines.push(
-    `Must not change: the position, outline and size of every shape; ${faceClause}the black background; the base colors.`,
+    `Must not change: the position, outline and size of every shape; ${faceClause}the black background${baseColorsClause}.`,
   );
   lines.push("Do not add outlines or frames around shapes, text or any new objects.");
   return lines.join("\n");

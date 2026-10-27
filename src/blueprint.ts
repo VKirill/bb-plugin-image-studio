@@ -55,11 +55,6 @@ const VIEW_LABELS: Record<BlueprintViewName, string> = {
   top: "TOP",
 };
 
-function parseHex(hex: string): { r: number; g: number; b: number } {
-  const h = hex.replace("#", "");
-  return { r: parseInt(h.slice(0, 2), 16), g: parseInt(h.slice(2, 4), 16), b: parseInt(h.slice(4, 6), 16) };
-}
-
 export function normalizeBlueprintStyle(style: string): BlueprintStyle {
   const s = style.trim().toLowerCase().replace(/-/g, " ");
   if (s === "clean line" || s === "cleanline") return "clean line";
@@ -209,41 +204,96 @@ function componentsMask(mask: Uint8Array, width: number, height: number, minArea
   return { labels, parts };
 }
 
-function columnProjection(mask: Uint8Array, width: number, height: number): number[] {
-  const counts = new Array<number>(width).fill(0);
-  for (let x = 0; x < width; x++) {
-    let c = 0;
-    for (let y = 0; y < height; y++) if (mask[y * width + x]) c++;
-    counts[x] = c;
+function columnHasForeground(mask: Uint8Array, width: number, height: number, x: number): boolean {
+  for (let y = 0; y < height; y++) if (mask[y * width + x]) return true;
+  return false;
+}
+
+/** Drop specks and view labels so thin links (e.g. a mop clamp) do not split columns. */
+function maskWithoutSpecksAndLabels(mask: Uint8Array, width: number, height: number): Uint8Array {
+  const labelMaxH = Math.max(4, Math.round(height * 0.08));
+  const { labels: compLabels, parts } = componentsMask(mask, width, height, 8);
+  const bodyParts = parts.filter((p) => p.y1 - p.y0 >= labelMaxH);
+  let bodyY0 = height;
+  let bodyY1 = 0;
+  for (const p of bodyParts) {
+    bodyY0 = Math.min(bodyY0, p.y0);
+    bodyY1 = Math.max(bodyY1, p.y1);
   }
-  return counts;
+  const dropLabels = new Set<number>();
+  for (const p of parts) {
+    const compH = p.y1 - p.y0;
+    if (compH >= labelMaxH) continue;
+    const aboveBodies = bodyParts.length === 0 || p.y1 <= bodyY0 + 2;
+    const belowBodies = bodyParts.length === 0 || p.y0 >= bodyY1 - 2;
+    if (aboveBodies || belowBodies) dropLabels.add(p.label);
+  }
+  const out = new Uint8Array(width * height);
+  for (let i = 0; i < width * height; i++) {
+    if (!mask[i]) continue;
+    const lab = compLabels[i];
+    if (lab && dropLabels.has(lab)) continue;
+    out[i] = 1;
+  }
+  return out;
+}
+
+function labelComponentIds(mask: Uint8Array, width: number, height: number): Set<number> {
+  const labelMaxH = Math.max(4, Math.round(height * 0.08));
+  const { labels: compLabels, parts } = componentsMask(mask, width, height, 8);
+  const bodyParts = parts.filter((p) => p.y1 - p.y0 >= labelMaxH);
+  let bodyY0 = height;
+  let bodyY1 = 0;
+  for (const p of bodyParts) {
+    bodyY0 = Math.min(bodyY0, p.y0);
+    bodyY1 = Math.max(bodyY1, p.y1);
+  }
+  const dropLabels = new Set<number>();
+  for (const p of parts) {
+    const compH = p.y1 - p.y0;
+    if (compH >= labelMaxH) continue;
+    const aboveBodies = bodyParts.length === 0 || p.y1 <= bodyY0 + 2;
+    const belowBodies = bodyParts.length === 0 || p.y0 >= bodyY1 - 2;
+    if (aboveBodies || belowBodies) dropLabels.add(p.label);
+  }
+  return dropLabels;
 }
 
 function findViewColumns(mask: Uint8Array, width: number, height: number, expect: number): { x0: number; x1: number }[] {
-  const counts = columnProjection(mask, width, height);
-  const max = Math.max(...counts, 1);
-  const thresh = Math.max(2, Math.round(max * 0.08));
-  const active: boolean[] = counts.map((c) => c >= thresh);
+  const work = maskWithoutSpecksAndLabels(mask, width, height);
   const runs: { x0: number; x1: number }[] = [];
-  let i = 0;
-  while (i < width) {
-    if (!active[i]) {
-      i++;
-      continue;
+  let inRun = false;
+  let runStart = 0;
+  for (let x = 0; x < width; x++) {
+    const has = columnHasForeground(work, width, height, x);
+    if (has) {
+      if (!inRun) {
+        runStart = x;
+        inRun = true;
+      }
+    } else if (inRun) {
+      runs.push({ x0: runStart, x1: x });
+      inRun = false;
     }
-    let j = i;
-    while (j < width && active[j]) j++;
-    runs.push({ x0: i, x1: j });
-    i = j;
   }
-  if (runs.length > expect) {
-    const scored = runs.map((r) => ({ r, score: counts.slice(r.x0, r.x1).reduce((a, b) => a + b, 0) }));
-    scored.sort((a, b) => b.score - a.score);
-    const keep = scored.slice(0, expect).map((s) => s.r).sort((a, b) => a.x0 - b.x0);
-    return keep;
+  if (inRun) runs.push({ x0: runStart, x1: width });
+
+  const merged = [...runs];
+  while (merged.length > expect && merged.length > 1) {
+    let bestI = 0;
+    let bestGap = width + 1;
+    for (let i = 0; i < merged.length - 1; i++) {
+      const gap = merged[i + 1]!.x0 - merged[i]!.x1;
+      if (gap < bestGap) {
+        bestGap = gap;
+        bestI = i;
+      }
+    }
+    merged[bestI] = { x0: merged[bestI]!.x0, x1: merged[bestI + 1]!.x1 };
+    merged.splice(bestI + 1, 1);
   }
-  if (runs.length < expect && runs.length > 0) {
-    const widest = runs.reduce((a, b) => (b.x1 - b.x0 > a.x1 - a.x0 ? b : a));
+  if (merged.length < expect && merged.length > 0) {
+    const widest = merged.reduce((a, b) => (b.x1 - b.x0 > a.x1 - a.x0 ? b : a));
     const w = widest.x1 - widest.x0;
     const slice = Math.max(1, Math.floor(w / expect));
     const split: { x0: number; x1: number }[] = [];
@@ -252,7 +302,7 @@ function findViewColumns(mask: Uint8Array, width: number, height: number, expect
     }
     return split;
   }
-  return runs;
+  return merged;
 }
 
 function cropRgba(image: Rgba, x0: number, y0: number, w: number, h: number): Rgba {
@@ -271,16 +321,10 @@ function extractViewColumn(image: Rgba, mask: Uint8Array, col: { x0: number; x1:
     const empty = new Uint8Array(sw * height * 4);
     return { image: { data: empty, width: sw, height }, box: { x: col.x0, y: 0, w: sw, h: height }, baseline: height - 1 };
   }
-  const major = parts.reduce((a, b) => (b.area > a.area ? b : a));
-  const keep = new Set<number>([major.label]);
+  const dropLabels = labelComponentIds(subMask, sw, height);
+  const keep = new Set<number>();
   for (const p of parts) {
-    if (p.label === major.label) continue;
-    const touch =
-      p.x1 >= major.x0 - 2 &&
-      p.x0 <= major.x1 + 2 &&
-      p.y1 >= major.y0 - 2 &&
-      p.y0 <= major.y1 + 2;
-    if (touch) keep.add(p.label);
+    if (!dropLabels.has(p.label)) keep.add(p.label);
   }
   let x0 = sw,
     y0 = height,
@@ -403,19 +447,36 @@ export function silhouetteSimilarity(a: Rgba, b: Rgba): number {
   return union === 0 ? 0 : inter / union;
 }
 
-const softRgb = parseHex(SOFT_CLAY_HEX);
+function rgbHsl(r: number, g: number, b: number): { h: number; s: number; l: number } {
+  const rn = r / 255;
+  const gn = g / 255;
+  const bn = b / 255;
+  const max = Math.max(rn, gn, bn);
+  const min = Math.min(rn, gn, bn);
+  const l = (max + min) / 2;
+  if (max === min) return { h: 0, s: 0, l };
+  const d = max - min;
+  const s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+  let h = 0;
+  if (max === rn) h = ((gn - bn) / d + (gn < bn ? 6 : 0)) / 6;
+  else if (max === gn) h = ((bn - rn) / d + 2) / 6;
+  else h = ((rn - gn) / d + 4) / 6;
+  return { h: h * 360, s, l };
+}
 
+/** Pale light-blue modelling clay (not saturated tape/decal blues). */
 function isSoftBlue(data: Uint8Array, p: number): boolean {
   const r = data[p]!;
   const g = data[p + 1]!;
   const b = data[p + 2]!;
   const a = data[p + 3]!;
   if (a < 100) return false;
-  if (b < 140 || b < r + 20 || b < g + 10) return false;
-  const dr = r - softRgb.r;
-  const dg = g - softRgb.g;
-  const db = b - softRgb.b;
-  return Math.hypot(dr, dg, db) < 90 || (b > 160 && g > 120 && r < 200);
+  const { h, s, l } = rgbHsl(r, g, b);
+  if (l < 0.68 || l > 0.96) return false;
+  if (h < 165 || h > 235) return false;
+  if (s > 0.48 && l < 0.62) return false;
+  if (s < 0.06 || s > 0.45) return false;
+  return b >= g - 8 && b >= r + 12;
 }
 
 function isGreyClay(data: Uint8Array, p: number, bg: { r: number; g: number; b: number }): boolean {
@@ -459,30 +520,63 @@ export function findSoftAnchors(
   const { parts: blueComps } = componentsMask(blueMask, width, height, 12);
   let anchor: { view: BlueprintViewName; x: number; y: number } | null = null;
   if (blueComps.length > 0) {
-    const main = blueComps.reduce((a, b) => (b.area > a.area ? b : a));
+    const union = blueComps.reduce(
+      (u, c) => ({
+        x0: Math.min(u.x0, c.x0),
+        y0: Math.min(u.y0, c.y0),
+        x1: Math.max(u.x1, c.x1),
+        y1: Math.max(u.y1, c.y1),
+      }),
+      { x0: width, y0: height, x1: 0, y1: 0 },
+    );
+    const bandH = Math.max(1, Math.round((union.y1 - union.y0) * 0.04));
+    const bandY1 = Math.min(union.y1, union.y0 + bandH);
+    const touchesRigid = (idx: number, x: number, y: number): boolean => {
+      const p = idx * 4;
+      if (isGreyClay(data, p, bg)) return true;
+      for (let dy = -3; dy <= 3; dy++) {
+        for (let dx = -3; dx <= 3; dx++) {
+          if (dx === 0 && dy === 0) continue;
+          const nx = x + dx;
+          const ny = y + dy;
+          if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
+          const ni = ny * width + nx;
+          if (blueMask[ni]) continue;
+          const np = ni * 4;
+          if (data[np + 3]! < 100) continue;
+          if (isBackground(data, np, bg, 28)) continue;
+          return true;
+        }
+      }
+      return false;
+    };
     let sx = 0,
       sy = 0,
       n = 0;
-    for (let y = main.y0; y < main.y1; y++) {
-      for (let x = main.x0; x < main.x1; x++) {
+    let fx = 0,
+      fy = 0,
+      fn = 0;
+    for (let y = union.y0; y < bandY1; y++) {
+      for (let x = union.x0; x < union.x1; x++) {
         const idx = y * width + x;
         if (!blueMask[idx]) continue;
-        const p = idx * 4;
-        const touchesGrey =
-          (x > 0 && isGreyClay(data, (idx - 1) * 4, bg)) ||
-          (x < width - 1 && isGreyClay(data, (idx + 1) * 4, bg)) ||
-          (y > 0 && isGreyClay(data, (idx - width) * 4, bg)) ||
-          (y < height - 1 && isGreyClay(data, (idx + width) * 4, bg));
-        if (touchesGrey || n === 0) {
+        fx += x;
+        fy += y;
+        fn++;
+        if (touchesRigid(idx, x, y)) {
           sx += x;
           sy += y;
           n++;
         }
       }
     }
-    if (n === 0) {
-      sx = (main.x0 + main.x1) / 2;
-      sy = (main.y1 - 1);
+    if (n === 0 && fn > 0) {
+      sx = fx;
+      sy = fy;
+      n = fn;
+    } else if (n === 0) {
+      sx = (union.x0 + union.x1) / 2;
+      sy = union.y0;
       n = 1;
     }
     anchor = { view: anchorView.name, x: Math.round(sx / n), y: Math.round(sy / n) };
@@ -548,4 +642,4 @@ export function replaceSideView(cut: CutBlueprintResult, sideRaw: Rgba): CutBlue
   return { ...cut, views, rawViews: nextRaw, canvas };
 }
 
-export const SIDE_COPY_THRESHOLD = 0.9;
+export const SIDE_COPY_THRESHOLD = 0.8;

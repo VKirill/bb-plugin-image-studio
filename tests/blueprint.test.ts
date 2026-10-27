@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import type { Rgba } from "../src/image-io.ts";
+import { decodeRgba, type Rgba } from "../src/image-io.ts";
 import {
   buildBlueprintPrompt,
   buildSideOnlyPrompt,
@@ -14,7 +15,7 @@ const BG = [200, 200, 200, 255] as const;
 const CLAY = [120, 120, 120, 255] as const;
 const LINE = [0, 0, 0, 255] as const;
 const LABEL = [0, 0, 0, 255] as const;
-const SOFT = [0x8e, 0xc8, 0xff, 255] as const;
+const SOFT = [0xbf, 0xd8, 0xe6, 255] as const;
 
 function rgba(w: number, h: number, fill: (x: number, y: number) => [number, number, number, number]): Rgba {
   const data = new Uint8Array(w * h * 4);
@@ -150,4 +151,22 @@ test("silhouetteSimilarity detects copied side vs distinct profile", () => {
   const simSide = silhouetteSimilarity(front, side);
   assert.ok(simCopy > SIDE_COPY_THRESHOLD);
   assert.ok(simSide < SIDE_COPY_THRESHOLD);
+});
+
+test("cutBlueprint on real fire-mop Muse sheet keeps handle, flags side copy, rag anchor at mop head", async () => {
+  const sheet = await decodeRgba(readFileSync(new URL("./fixtures/model/blueprint-mop-sheet.png", import.meta.url)));
+  const cut = cutBlueprint(sheet, ["front", "side", "back"]);
+  assert.equal(cut.views.length, 3);
+  const front = cut.rawViews[0]!;
+  const side = cut.rawViews[1]!;
+  assert.ok(front.box.w >= 170, `front view too narrow (handle dropped): w=${front.box.w}`);
+  const hDiff = Math.abs(front.image.height - side.image.height) / Math.max(front.image.height, 1);
+  assert.ok(hDiff <= 0.03, `front/side height mismatch: ${hDiff}`);
+  const sim = silhouetteSimilarity(front.image, side.image);
+  assert.ok(sim > SIDE_COPY_THRESHOLD, `expected side copy flagged, sim=${sim}`);
+  const { parts } = findSoftAnchors(cut.views, ["rags"], []);
+  const anchor = parts[0]?.anchor;
+  assert.ok(anchor);
+  const frontView = cut.views[0]!;
+  assert.ok(anchor.y <= frontView.image.height * 0.2, `anchor too low: y=${anchor.y} h=${frontView.image.height}`);
 });
