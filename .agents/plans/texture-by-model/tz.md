@@ -42,18 +42,41 @@ from: LAVA BONK! (Roblox/lava-arena), эксперименты в живом Ble
 7. Натяжка и предпросмотр: материал с картинкой по той же UV, рендер 2 ракурсов (Cycles/EEVEE), склейка «до / после».
 8. Выход: `color.png`, `mask.png`, `guide.png`, `preview.png`, `manifest.json` (модель, объект, имя UV-слоя, размер, промпт), .blend с назначенным материалом. По желанию — `normal.png` из цвета (как в `texture` режиме).
 
-**Шаблон промпта (проверен):**
-> Texture atlas for a 3D game model. Image 1 is the UV layout: every shape is one piece of the model surface, its flat color tells the material ({список цвет = часть}); the top of each shape is the top of the model. Repaint EVERY shape in place with {стиль}{, in the look of image 2}. {Эффекты по месту: «… only at the BOTTOM end of …»}. Keep every shape exactly where it is with the same outline, size and base color; no outlines or frames; black background stays black; no text.
+**Шаблон промпта texture-uv (структура по документации Muse, проверен на рыбке 27.10):**
+```text
+Image 1 is the LAYOUT: a texture atlas (UV map) of a 3D {предмет} laid flat on black. Each separate shape is one piece of the model surface; flat colors mark the parts ({цвет = часть, …}); the top of each shape is the top of the model{; colors and shading were projected from the design, so faces, eyes and patterns are already where they belong}.
+Image 2 is the STYLE AND DESIGN REFERENCE: {что на концепте: материал, ключевые детали}.
+Task: repaint image 1 as a final hand-painted game texture in the look of image 2: {по частям: что рисовать на каком цвете; эффекты по месту — «only at the BOTTOM end of …»}.
+Must not change: the position, outline and size of every shape; {где лицо/рисунок — only where they already are, never add new ones}; the black background; the base colors.
+Do not add outlines or frames around shapes, text or any new objects.
+```
 
 ### 3.2 Режим `blueprint` (чертёж для моделирования)
 
 **Вход:** концепт предмета/персонажа, список видов (front, side, back, top), стиль подложки (`clay+wire` или `clean line`).
 **Выход:** листы видов одной высоты на общей линии + **нарезка по видам** (`front.png`, `side.png`, …) с одинаковым масштабом, прозрачным фоном и `views.json` (рамки видов, базовая линия, высота в px) — чтобы агент сразу поставил их референсами в Blender (Empty Image, ортокамеры) или скормил силуэтному «вырезанию» (`model_from_picture.py`).
-Промпт проверен: «Technical modeling blueprint … three orthographic views side by side … same scale, same height, aligned on one horizontal baseline … flat grey clay with a visible black quad wireframe … No perspective, no shadows …».
+Промпт (та же структура):
+```text
+Image 1 is the DESIGN REFERENCE: {предмет}.
+Task: draw a technical modeling blueprint of exactly this object for a 3D artist — three orthographic views side by side on a plain light grey background: FRONT, SIDE (exact 90° profile, not a copy of the front), BACK; same scale and height, aligned on one baseline; flat grey clay with a visible black quad wireframe; soft dangling parts ({список}) in light BLUE clay.
+Must not change: the proportions, part count and silhouette of the object in image 1.
+No perspective, no shadows, no fire or effects, no text except the labels FRONT, SIDE, BACK.
+```
+Если SIDE всё равно копирует FRONT — отдельной генерацией только вида сбоку.
 
 ### 3.3 Скилл для агентов
 
 Раздел в скилле `image-studio` (или отдельный `image-studio-3d-textures`): когда брать `texture-uv`, `texture` (бесшовные), `blueprint`; правила из таблицы раздела 2 (без линий на болванке, крупные куски, верх вверх, цвета частей, концепт вторым референсом, ракурсы не проецировать); как натянуть результат в Blender (UV Map node по имени слоя из manifest) и как запечь под Roblox (SurfaceAppearance: Color/Normal/Roughness). Пример вызова MCP-инструмента и чек-лист приёмки: рендер «до/после» с двух сторон, нет рамок по швам, эффекты на своих местах.
+
+## 3.4 Добавлено после тестов на удочке (27.10)
+
+**Проекция концепта перед Muse (обязательно для лиц, глаз, надписей, узоров по месту).** Без неё Muse угадывает, какой кусок развёртки — какая часть модели, и рисует глаза/детали не там (рыбка с глазами на трёх кусках). Шаг: в Blender концепт (вырезанный по предмету, фон вокруг залит основным цветом) проецируется на модель планарно с ракурса концепта (позиция → UV по габариту) и запекается в развёртку вместе со светом. Muse получает болванку, где всё уже стоит на местах, и только дочищает. Проверено: глаз, рот и чешуя легли как на концепте.
+
+**Структура промпта по документации Muse (Meta / fal):** у каждой картинки — роль (`Image 1 is the LAYOUT…`, `Image 2 is the STYLE AND DESIGN REFERENCE…`), затем `Task:` что сделать, затем `Must not change:` — явный список неизменного (положение/контур/размер кусков, где лицо, фон, цвета), затем короткий список запретов (рамки, цветы, текст, новые объекты). Без ролей референсы «усредняются», без списка неизменного Muse перерисовывает всё. Полей negative prompt, seed, strength у Muse нет — только текст.
+
+**Чертёж:** вид «сбоку» Muse рисует копией вида спереди. Сбоку запрашивать отдельной генерацией («exact 90° side profile, the rod seen edge-on…») или брать глубину из концепта.
+
+**Подготовка модели:** при удалении деталей (глаза-шарики) закрывать дыры (`bmesh.ops.holes_fill`), иначе на рендере тёмные провалы.
 
 ## 4. Приёмка
 
