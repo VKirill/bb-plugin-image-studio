@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import type { Rgba } from "../src/image-io.ts";
+import { decodeRgba, type Rgba } from "../src/image-io.ts";
 import {
   assembleBlueprint,
   buildSideOnlyPrompt,
@@ -99,6 +100,36 @@ test("assembleBlueprint replaces copied sheet side with scaled separate profile"
   assert.ok(frontView && sideView);
   assert.equal(sideView.image.height, frontView.image.height);
   assert.ok(silhouetteSimilarity(frontView.image, sideView.image) < 0.85);
+});
+
+function horizontalContentMargins(image: Rgba): { left: number; right: number } {
+  const { data, width, height } = image;
+  let minX = width;
+  let maxX = 0;
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      if (data[(y * width + x) * 4 + 3]! < 32) continue;
+      minX = Math.min(minX, x);
+      maxX = Math.max(maxX, x);
+    }
+  }
+  if (minX >= width) return { left: 0, right: 0 };
+  return { left: minX, right: width - maxX - 1 };
+}
+
+test("0.8.12 side-only sheet: tight crop and centred on the shared canvas", async () => {
+  const sheet = await decodeRgba(
+    readFileSync(new URL("./fixtures/model/blueprint-side-only-0812.png", import.meta.url)),
+  );
+  const cut = cutBlueprint(sheet, ["side"]);
+  const box = cut.rawViews[0]!.box;
+  assert.ok(box.w < sheet.width * 0.45, `box too wide: ${box.w} / ${sheet.width}`);
+  const aligned = cut.views[0]!.image;
+  const { left, right } = horizontalContentMargins(aligned);
+  assert.ok(
+    Math.abs(left - right) < aligned.width * 0.1,
+    `not centred: left=${left} right=${right} canvasW=${aligned.width}`,
+  );
 });
 
 test("assembleBlueprint keeps sheet side when sideSeparate is false", () => {

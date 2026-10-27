@@ -443,6 +443,57 @@ function extractViewColumn(image: Rgba, mask: Uint8Array, col: { x0: number; x1:
   };
 }
 
+/** One-view Muse sheets: drop stray label specks and crop to the main body silhouette. */
+function extractSingleViewSheet(image: Rgba, mask: Uint8Array): { image: Rgba; box: BlueprintViewBox; baseline: number } {
+  const { width, height, data } = image;
+  const work = maskWithoutSpecksAndLabels(mask, width, height);
+  const { labels, parts } = componentsMask(work, width, height, 8);
+  if (parts.length === 0) {
+    return extractViewColumn(image, mask, { x0: 0, x1: width });
+  }
+  const dropLabels = labelComponentIds(work, width, height);
+  const bodies = parts.filter((p) => !dropLabels.has(p.label));
+  const main = bodies.length
+    ? bodies.reduce((a, b) => (b.area > a.area ? b : a))
+    : parts.reduce((a, b) => (b.area > a.area ? b : a));
+  const keep = new Set<number>([main.label]);
+  let x0 = width,
+    y0 = height,
+    x1 = 0,
+    y1 = 0;
+  const out = new Uint8Array(width * height * 4);
+  let baseline = -1;
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const idx = y * width + x;
+      const lab = labels[idx];
+      if (!lab || !keep.has(lab)) continue;
+      const src = idx * 4;
+      const dst = idx * 4;
+      out[dst] = data[src]!;
+      out[dst + 1] = data[src + 1]!;
+      out[dst + 2] = data[src + 2]!;
+      out[dst + 3] = data[src + 3]!;
+      if (x < x0) x0 = x;
+      if (x > x1) x1 = x;
+      if (y < y0) y0 = y;
+      if (y > y1) y1 = y;
+      if (out[dst + 3]! > 128) baseline = Math.max(baseline, y);
+    }
+  }
+  if (x1 < x0) {
+    return extractViewColumn(image, mask, { x0: 0, x1: width });
+  }
+  const w = x1 - x0 + 1;
+  const h = y1 - y0 + 1;
+  const trimmed = cropRgba({ data: out, width, height }, x0, y0, w, h);
+  return {
+    image: trimmed,
+    box: { x: x0, y: y0, w, h },
+    baseline: baseline >= 0 ? baseline - y0 : h - 1,
+  };
+}
+
 function alignViewsOnCanvas(views: BlueprintCutView[], margin = 8): { views: BlueprintCutView[]; canvas: { w: number; h: number; baseline: number } } {
   const maxW = Math.max(...views.map((v) => v.image.width), 1);
   const maxH = Math.max(...views.map((v) => v.image.height), 1);
@@ -478,15 +529,29 @@ function alignViewsOnCanvas(views: BlueprintCutView[], margin = 8): { views: Blu
 export function cutBlueprint(sheet: Rgba, viewNames: readonly BlueprintViewName[]): CutBlueprintResult {
   const warnings: string[] = [];
   const mask = keyedForegroundMask(sheet);
-  const cols = findViewColumns(mask, sheet.width, sheet.height, viewNames.length);
-  if (cols.length !== viewNames.length) {
-    warnings.push(`expected ${viewNames.length} view columns, found ${cols.length}`);
-  }
   const raw: BlueprintCutView[] = [];
-  for (let i = 0; i < viewNames.length; i++) {
-    const col = cols[i] ?? { x0: Math.floor((i * sheet.width) / viewNames.length), x1: Math.floor(((i + 1) * sheet.width) / viewNames.length) };
-    const ex = extractViewColumn(sheet, mask, col);
-    raw.push({ name: viewNames[i]!, image: ex.image, box: ex.box, baseline: ex.baseline, heightPx: ex.image.height });
+  if (viewNames.length === 1) {
+    const ex = extractSingleViewSheet(sheet, mask);
+    raw.push({
+      name: viewNames[0]!,
+      image: ex.image,
+      box: ex.box,
+      baseline: ex.baseline,
+      heightPx: ex.image.height,
+    });
+  } else {
+    const cols = findViewColumns(mask, sheet.width, sheet.height, viewNames.length);
+    if (cols.length !== viewNames.length) {
+      warnings.push(`expected ${viewNames.length} view columns, found ${cols.length}`);
+    }
+    for (let i = 0; i < viewNames.length; i++) {
+      const col = cols[i] ?? {
+        x0: Math.floor((i * sheet.width) / viewNames.length),
+        x1: Math.floor(((i + 1) * sheet.width) / viewNames.length),
+      };
+      const ex = extractViewColumn(sheet, mask, col);
+      raw.push({ name: viewNames[i]!, image: ex.image, box: ex.box, baseline: ex.baseline, heightPx: ex.image.height });
+    }
   }
   const { views, canvas } = alignViewsOnCanvas(raw);
   return { sheet, views, rawViews: raw, canvas, warnings };
