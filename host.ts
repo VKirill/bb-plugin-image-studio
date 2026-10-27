@@ -4,8 +4,10 @@ import { existsSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { defineRpcContract } from "@get-bb/plugin-sdk";
-import { experimental_defineHostEntry } from "@get-bb/plugin-sdk/host";
+import {
+  defineRpcContract,
+  experimental_defineHostEntry,
+} from "@get-bb/plugin-sdk";
 import { z } from "zod";
 import { TEXTURE_UV_SCRIPT } from "./src/blender-scripts.ts";
 
