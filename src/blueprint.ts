@@ -540,7 +540,20 @@ function flipRgbaHorizontal(image: Rgba): Rgba {
   return { data: out, width, height };
 }
 
-const VIEW_CLASSIFY_SIM = 0.72;
+const VIEW_CLASSIFY_MIN_SIM = 0.45;
+/** Best pair wins when its score is at least this multiple of the runner-up. */
+const VIEW_CLASSIFY_MARGIN = 1.6;
+
+function decisiveBestPair(
+  pairs: BlueprintViewClassification["pairs"],
+): BlueprintViewClassification["pairs"][number] | null {
+  const best = pairs[0];
+  const second = pairs[1];
+  if (!best || best.sim < VIEW_CLASSIFY_MIN_SIM) return null;
+  if (!second) return best;
+  if (best.sim >= VIEW_CLASSIFY_MARGIN * second.sim) return best;
+  return null;
+}
 
 function viewPairSimilarity(a: Rgba, b: Rgba, mirrored: boolean): number {
   const base = silhouetteSimilarity(a, b);
@@ -575,33 +588,27 @@ export function classifyViews(views: readonly BlueprintCutView[]): BlueprintView
   if (front && back) pairs.push({ a: "front", b: "back", sim: viewPairSimilarity(front, back, true) });
   if (side && back) pairs.push({ a: "side", b: "back", sim: viewPairSimilarity(side, back, false) });
   pairs.sort((a, b) => b.sim - a.sim);
-  const relabeled = false;
-  let drawn: BlueprintViewClassification["drawn"] = null;
   if (!front || !side || !back) {
-    return { pairs, relabeled, drawn };
+    return { pairs, relabeled: false, drawn: null };
   }
   const odd = (["front", "side", "back"] as const).reduce((best, name) =>
     averageSimilarityToOthers(name, byName) < averageSimilarityToOthers(best, byName) ? name : best,
   );
-  const best = pairs[0];
-  const fs = pairs.find((p) => (p.a === "front" && p.b === "side") || (p.a === "side" && p.b === "front"))?.sim ?? 0;
-  const fb = pairs.find((p) => (p.a === "front" && p.b === "back") || (p.a === "back" && p.b === "front"))?.sim ?? 0;
-  const sb = pairs.find((p) => (p.a === "side" && p.b === "back") || (p.a === "back" && p.b === "side"))?.sim ?? 0;
-  if (fs >= VIEW_CLASSIFY_SIM && fb >= VIEW_CLASSIFY_SIM && sb >= VIEW_CLASSIFY_SIM) {
-    drawn = "side";
-  } else if (best && best.sim >= VIEW_CLASSIFY_SIM) {
-    const isFrontSide =
-      (best.a === "front" && best.b === "side") || (best.a === "side" && best.b === "front");
-    const isFrontBack =
-      (best.a === "front" && best.b === "back") || (best.a === "back" && best.b === "front");
-    if (isFrontSide && odd === "back") {
-      return { pairs, relabeled: true, drawn: "back" };
-    }
-    if (isFrontBack && odd === "side") {
-      return { pairs, relabeled: false, drawn: null };
-    }
+  const best = decisiveBestPair(pairs);
+  if (!best) {
+    return { pairs, relabeled: false, drawn: "side" };
   }
-  return { pairs, relabeled, drawn: "side" };
+  const isFrontSide =
+    (best.a === "front" && best.b === "side") || (best.a === "side" && best.b === "front");
+  const isFrontBack =
+    (best.a === "front" && best.b === "back") || (best.a === "back" && best.b === "front");
+  if (isFrontSide && odd === "back") {
+    return { pairs, relabeled: true, drawn: "back" };
+  }
+  if (isFrontBack && odd === "side") {
+    return { pairs, relabeled: false, drawn: null };
+  }
+  return { pairs, relabeled: false, drawn: "side" };
 }
 
 export function swapBlueprintBackSide(cut: CutBlueprintResult): CutBlueprintResult {
