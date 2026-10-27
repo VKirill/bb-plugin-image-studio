@@ -54,6 +54,7 @@ elif mode == "preview":
         c = (y0 * w + x0) * 4
         bg = p[c:c + 3]
         rows = set()
+        cols = set()
         edge = 0
         lum = 0.0
         n = 0
@@ -62,12 +63,17 @@ elif mode == "preview":
                 i = (y * w + x) * 4
                 if abs(p[i] - bg[0]) + abs(p[i + 1] - bg[1]) + abs(p[i + 2] - bg[2]) > 0.08:
                     rows.add(y)
+                    cols.add(x)
                     if x - x0 < tw * 0.02 or x0 + tw - x < tw * 0.02 or y - y0 < th * 0.02 or y0 + th - y < th * 0.02:
                         edge += 1
                     lum += 0.2126 * p[i] + 0.7152 * p[i + 1] + 0.0722 * p[i + 2]
                     n += 1
         span = (max(rows) - min(rows)) / th if rows else 0
         mean = lum / max(n, 1)
+        box_area = ((max(rows) - min(rows)) * (max(cols) - min(cols)) / (tw * th)) if rows else 0
+        print("BOX_AREA", name, round(box_area, 3))
+        if box_area < 0.3:
+            fail(f"{name}: the model's bounding box covers under 30% of the tile (tile shape does not follow the model)")
         print("PREVIEW", name, "height_fraction", round(span, 3), "edge_pixels", edge, "mean_lum", round(mean, 3))
         if span < 0.6:
             fail(f"{name}: the model fills less than 60% of the tile height")

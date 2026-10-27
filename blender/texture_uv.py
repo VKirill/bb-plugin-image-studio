@@ -332,6 +332,96 @@ def ensure_uv_map_node(mat, uv_name):
 
 MARKER_GREY = (0.706, 0.706, 0.706)
 MARKER_GREY_HEX = "#b4b4b4"
+DEFAULT_BASE = (0.8, 0.8, 0.8)
+
+HUE_KEYWORDS = (
+    (("gold", "brass", "yellow"), 45.0),
+    (("wood", "brown", "leather"), 30.0),
+    (("red", "rubber", "fire", "lava"), 0.0),
+    (("orange",), 25.0),
+    (("green", "moss", "leaf"), 120.0),
+    (("blue", "water", "ice"), 215.0),
+    (("purple", "violet", "gem", "amethyst"), 280.0),
+    (("pink",), 330.0),
+)
+
+
+def rgb_to_hex(rgb):
+    return "#{:02x}{:02x}{:02x}".format(
+        int(max(0, min(255, round(rgb[0] * 255)))),
+        int(max(0, min(255, round(rgb[1] * 255)))),
+        int(max(0, min(255, round(rgb[2] * 255)))),
+    )
+
+
+def read_principled_base_color(mat):
+    if not mat or not mat.use_nodes:
+        return DEFAULT_BASE
+    bsdf = next((n for n in mat.node_tree.nodes if n.type == "BSDF_PRINCIPLED"), None)
+    if not bsdf:
+        return DEFAULT_BASE
+    col = bsdf.inputs["Base Color"].default_value
+    return (float(col[0]), float(col[1]), float(col[2]))
+
+
+def is_default_base(rgb, tol=0.04):
+    return all(abs(rgb[i] - DEFAULT_BASE[i]) < tol for i in range(3))
+
+
+def hue_from_text(text):
+    t = (text or "").lower()
+    for words, hue in HUE_KEYWORDS:
+        for word in words:
+            if word in t:
+                return hue
+    return None
+
+
+def collect_named_hues(labels):
+    hues = []
+    for material, part in labels:
+        for field in (material, part):
+            h = hue_from_text(field)
+            if h is not None:
+                hues.append(h)
+    return hues
+
+
+def hue_distance(a, b):
+    d = abs(a - b) % 360.0
+    return min(d, 360.0 - d)
+
+
+def hsl_to_rgb(h, s, l):
+    h = (h % 360.0) / 360.0
+    if s <= 0:
+        return (l, l, l)
+    q = l * (1 + s) if l < 0.5 else l + s - l * s
+    p = 2 * l - q
+
+    def channel(t):
+        if t < 0:
+            t += 1
+        if t > 1:
+            t -= 1
+        if t < 1 / 6:
+            return p + (q - p) * 6 * t
+        if t < 1 / 2:
+            return q
+        if t < 2 / 3:
+            return p + (q - p) * (2 / 3 - t) * 6
+        return p
+
+    return (channel(h + 1 / 3), channel(h), channel(h - 1 / 3))
+
+
+def pick_marker_rgb(marker_index, reserved_hues):
+    for step in range(72):
+        h = (marker_index * 47.0 + step * 17.0) % 360.0
+        if all(hue_distance(h, rh) >= 60.0 for rh in reserved_hues):
+            return hsl_to_rgb(h, 0.85, 0.55)
+    rgb = DISTINCT_COLORS[marker_index % len(DISTINCT_COLORS)]
+    return rgb
 
 
 def flat_materials(ob, sample_uv_name):
@@ -340,21 +430,35 @@ def flat_materials(ob, sample_uv_name):
     if not me.materials:
         me.materials.append(bpy.data.materials.new("Part_0"))
     me.uv_layers.active = me.uv_layers[UV_LAYER]
+    slots = []
     untextured_count = 0
-    for slot in me.materials:
-        mat = slot
-        if mat is None or not material_has_texture(mat):
-            untextured_count += 1
-    single_marker = len(me.materials) == 1 and untextured_count == 1
     for i, slot in enumerate(me.materials):
         if slot is None:
             slot = bpy.data.materials.new(f"Part_{i}")
             me.materials[i] = slot
         mat = slot
-        if material_has_texture(mat):
+        textured = material_has_texture(mat)
+        if not textured:
+            untextured_count += 1
+        base_rgb = read_principled_base_color(mat) if not textured else None
+        name = mat.name if mat.name and not mat.name.startswith("Material") else f"part_{i + 1}"
+        slots.append({"mat": mat, "textured": textured, "base_rgb": base_rgb, "name": name, "index": i})
+    single_marker = len(me.materials) == 1 and untextured_count == 1
+    base_labels = [
+        (s["mat"].name, s["name"])
+        for s in slots
+        if not s["textured"] and s["base_rgb"] is not None and not is_default_base(s["base_rgb"])
+    ]
+    reserved_hues = collect_named_hues(base_labels)
+    marker_index = 0
+    for s in slots:
+        mat = s["mat"]
+        i = s["index"]
+        if s["textured"]:
             ensure_uv_map_node(mat, sample_uv_name)
-            name = mat.name if mat.name else f"part_{i + 1}"
-            parts.append({"material": mat.name, "part": name, "color": "textured", "marker": False})
+            parts.append(
+                {"material": mat.name, "part": s["name"], "color": "textured", "marker": False, "kind": "textured"}
+            )
             continue
         mat.use_nodes = True
         nt = mat.node_tree
@@ -366,17 +470,24 @@ def flat_materials(ob, sample_uv_name):
         nt.links.new(bsdf.outputs["BSDF"], out.inputs["Surface"])
         if single_marker:
             rgb = MARKER_GREY
-            hex_c = MARKER_GREY_HEX
+            marker = True
+            kind = "marker"
+        elif not is_default_base(s["base_rgb"]):
+            rgb = s["base_rgb"]
+            marker = False
+            kind = "base"
         else:
-            rgb = DISTINCT_COLORS[i % len(DISTINCT_COLORS)]
-            hex_c = "#{:02x}{:02x}{:02x}".format(int(rgb[0] * 255), int(rgb[1] * 255), int(rgb[2] * 255))
+            rgb = pick_marker_rgb(marker_index, reserved_hues)
+            marker_index += 1
+            marker = True
+            kind = "marker"
+        hex_c = MARKER_GREY_HEX if single_marker else rgb_to_hex(rgb)
         bsdf.inputs["Base Color"].default_value = (*rgb, 1.0)
         bsdf.inputs["Roughness"].default_value = 0.85
         uv = nt.nodes.new("ShaderNodeUVMap")
         uv.uv_map = UV_LAYER
         uv.location = (-400, 0)
-        name = mat.name if mat.name and not mat.name.startswith("Material") else f"part_{i + 1}"
-        parts.append({"material": mat.name, "part": name, "color": hex_c, "marker": True})
+        parts.append({"material": mat.name, "part": s["name"], "color": hex_c, "marker": marker, "kind": kind})
     return parts
 
 
@@ -676,18 +787,25 @@ def textured_material(img, uv_name):
     return mat
 
 
-def image_material(img, uv_name):
+def image_material(img, uv_name, unlit=False):
     mat = bpy.data.materials.new("preview_tex")
     mat.use_nodes = True
     nt = mat.node_tree
-    bsdf = next(n for n in nt.nodes if n.type == "BSDF_PRINCIPLED")
     tex = nt.nodes.new("ShaderNodeTexImage")
     tex.image = img
     uv = nt.nodes.new("ShaderNodeUVMap")
     uv.uv_map = uv_name
     nt.links.new(uv.outputs["UV"], tex.inputs["Vector"])
-    nt.links.new(tex.outputs["Color"], bsdf.inputs["Base Color"])
-    bsdf.inputs["Roughness"].default_value = 0.9
+    out = nt.nodes.get("Material Output")
+    if unlit:
+        emit = nt.nodes.new("ShaderNodeEmission")
+        emit.inputs["Strength"].default_value = 1.0
+        nt.links.new(tex.outputs["Color"], emit.inputs["Color"])
+        nt.links.new(emit.outputs["Emission"], out.inputs["Surface"])
+    else:
+        bsdf = next(n for n in nt.nodes if n.type == "BSDF_PRINCIPLED")
+        nt.links.new(tex.outputs["Color"], bsdf.inputs["Base Color"])
+        bsdf.inputs["Roughness"].default_value = 0.9
     return mat
 
 
@@ -735,6 +853,10 @@ def _preview_fit_points(ob):
     return corners + verts
 
 
+def _render_aspect(sc):
+    return sc.render.resolution_x / max(sc.render.resolution_y, 1)
+
+
 def _center_preview_camera(cam_obj, sc, points):
     cam = cam_obj.data
     cam.shift_x = 0.0
@@ -745,11 +867,12 @@ def _center_preview_camera(cam_obj, sc, points):
     rot = cam_obj.matrix_world.to_3x3()
     right = rot @ Vector((1.0, 0.0, 0.0))
     up = rot @ Vector((0.0, 1.0, 0.0))
-    cam_obj.location += (-(cx - 0.5) * cam.ortho_scale) * right
+    film_aspect = _render_aspect(sc)
+    cam_obj.location += (-(cx - 0.5) * cam.ortho_scale * film_aspect) * right
     cam_obj.location += (-(cy - 0.5) * cam.ortho_scale) * up
 
 
-def fit_preview_camera(cam_obj, sc, points, base_location, target_fill=0.80):
+def fit_preview_camera(cam_obj, sc, points, base_location, target_fill=0.80, film_aspect=1.0, target_y_scale=1.0):
     """Frame all fit points at ~target_fill of the tile with margin from edges."""
     cam = cam_obj.data
     cam.type = "ORTHO"
@@ -760,13 +883,15 @@ def fit_preview_camera(cam_obj, sc, points, base_location, target_fill=0.80):
     zs = [p.z for p in points]
     diag = math.sqrt((max(xs) - min(xs)) ** 2 + (max(ys) - min(ys)) ** 2 + (max(zs) - min(zs)) ** 2)
     cam.ortho_scale = max(diag, 1e-3)
-    target_extent = target_fill * 0.94
-    edge_margin = 0.035
+    target_extent = target_fill * 0.94 * target_y_scale
+    edge_margin = 0.05
     for _ in range(28):
         cam_obj.location = base_location.copy()
         _center_preview_camera(cam_obj, sc, points)
         xmin, xmax, ymin, ymax = _project_bounds(sc, cam_obj, points)
-        extent = max(xmax - xmin, ymax - ymin, 1e-9)
+        extent_x = xmax - xmin
+        extent_y = ymax - ymin
+        extent = max(extent_x, extent_y, 1e-9)
         margin_ok = (
             xmin >= edge_margin
             and xmax <= 1.0 - edge_margin
@@ -775,50 +900,118 @@ def fit_preview_camera(cam_obj, sc, points, base_location, target_fill=0.80):
         )
         if margin_ok and extent <= target_extent:
             break
-        if extent > target_extent or not margin_ok:
-            cam.ortho_scale *= max(extent / target_extent, 1.03)
+        scale = 1.03
+        if extent > target_extent:
+            scale = max(scale, extent / target_extent)
+        if not margin_ok:
+            scale = max(scale, 1.03)
+        cam.ortho_scale *= scale
+    for _ in range(24):
+        cam_obj.location = base_location.copy()
+        _center_preview_camera(cam_obj, sc, points)
+        xmin, xmax, ymin, ymax = _project_bounds(sc, cam_obj, points)
+        margin_ok = (
+            xmin >= edge_margin
+            and xmax <= 1.0 - edge_margin
+            and ymin >= edge_margin
+            and ymax <= 1.0 - edge_margin
+        )
+        if margin_ok:
+            break
+        cam.ortho_scale *= 1.05
     cam_obj.location = base_location.copy()
     _center_preview_camera(cam_obj, sc, points)
-    cam.ortho_scale *= 1.04
 
 
-def render_views(ob, tile_w=512):
+PREVIEW_TILE_H = 512
+PREVIEW_QUAD = 512
+
+
+def preview_tile_width(aspect):
+    frac = max(0.35, min(1.0, aspect * 1.2))
+    return max(32, int(PREVIEW_TILE_H * frac))
+
+
+def _preview_view_dir(az, el):
+    return Vector(
+        (
+            math.cos(math.radians(el)) * math.sin(math.radians(az)),
+            -math.cos(math.radians(el)) * math.cos(math.radians(az)),
+            math.sin(math.radians(el)),
+        )
+    ).normalized()
+
+
+def _preview_aspect_for_view(sc, fit_points, ctr, radius, az, el):
+    d = _preview_view_dir(az, el)
+    cam = bpy.data.cameras.new("cam_probe")
+    cam.type = "ORTHO"
+    cam_obj = bpy.data.objects.new("cam_probe", cam)
+    sc.collection.objects.link(cam_obj)
+    base_loc = ctr + d * (radius * 4.0 + 1.0)
+    cam_obj.location = base_loc
+    cam_obj.rotation_euler = (ctr - cam_obj.location).to_track_quat("-Z", "Y").to_euler()
+    fit_preview_camera(cam_obj, sc, fit_points, base_loc, target_fill=0.84, film_aspect=1.0)
+    xmin, xmax, ymin, ymax = _project_bounds(sc, cam_obj, fit_points)
+    aspect = (xmax - xmin) / max(ymax - ymin, 1e-9)
+    bpy.data.objects.remove(cam_obj)
+    bpy.data.cameras.remove(cam)
+    return aspect, d, base_loc
+
+
+def preview_slot_width(ob, tile_h=PREVIEW_TILE_H):
     sc = bpy.context.scene
     fit_points = _preview_fit_points(ob)
     corners = _bbox_world_corners(ob)
     ctr = sum(corners, Vector()) / 8
     radius = max((b - ctr).length for b in corners)
-    sc.render.resolution_x = tile_w
-    sc.render.resolution_y = tile_w
+    aspects = []
+    for az, el in [(35, 20), (145, 20)]:
+        aspect, _, _ = _preview_aspect_for_view(sc, fit_points, ctr, radius, az, el)
+        aspects.append(aspect)
+    return preview_tile_width(min(aspects))
+
+
+def render_views(ob, tile_h=PREVIEW_TILE_H, slot_w=None, unlit=False):
+    sc = bpy.context.scene
+    fit_points = _preview_fit_points(ob)
+    corners = _bbox_world_corners(ob)
+    ctr = sum(corners, Vector()) / 8
+    radius = max((b - ctr).length for b in corners)
     sc.render.film_transparent = False
     views = [(35, 20), (145, 20)]
+    view_setup = []
+    for az, el in views:
+        aspect, d, base_loc = _preview_aspect_for_view(sc, fit_points, ctr, radius, az, el)
+        view_setup.append((az, el, aspect, d, base_loc))
+    if slot_w is None:
+        slot_w = preview_tile_width(min(a for _, _, a, _, _ in view_setup))
+    film_aspect = slot_w / float(tile_h)
     shots = []
     sun = bpy.data.objects.get("sun")
     sun_energy = sun.data.energy if sun else None
-    for az, el in views:
+    for az, el, _aspect, d, base_loc in view_setup:
         cam = bpy.data.cameras.new("cam")
         cam.type = "ORTHO"
         cam_obj = bpy.data.objects.new("cam", cam)
         sc.collection.objects.link(cam_obj)
-        d = Vector(
-            (
-                math.cos(math.radians(el)) * math.sin(math.radians(az)),
-                -math.cos(math.radians(el)) * math.cos(math.radians(az)),
-                math.sin(math.radians(el)),
-            )
-        ).normalized()
-        base_loc = ctr + d * (radius * 4.0 + 1.0)
         cam_obj.location = base_loc
         cam_obj.rotation_euler = (ctr - cam_obj.location).to_track_quat("-Z", "Y").to_euler()
-        fit_preview_camera(cam_obj, sc, fit_points, base_loc, target_fill=0.76)
+        pad = 0.94
+        sc.render.resolution_x = max(32, int(slot_w * pad))
+        sc.render.resolution_y = max(32, int(tile_h * pad))
+        fit_preview_camera(
+            cam_obj, sc, fit_points, base_loc, target_fill=0.76, film_aspect=film_aspect, target_y_scale=1.0
+        )
         if sun:
-            sun.data.energy = 0.35
-        _preview_lights(sc, cam_obj, ctr, d)
+            sun.data.energy = 0.35 if not unlit else 0.0
+        if not unlit:
+            _preview_lights(sc, cam_obj, ctr, d)
         sc.camera = cam_obj
         tmp = os.path.join(bpy.app.tempdir, f"view_{az}.png")
         sc.render.filepath = tmp
         bpy.ops.render.render(write_still=True)
-        shots.append(bpy.data.images.load(tmp))
+        shots.append((bpy.data.images.load(tmp), slot_w))
         bpy.data.objects.remove(cam_obj)
         bpy.data.cameras.remove(cam)
     _clear_preview_lights()
@@ -827,24 +1020,38 @@ def render_views(ob, tile_w=512):
     return shots
 
 
+def _blit_tile_centered(dst, dst_w, dst_h, ox, oy, quad_w, quad_h, img):
+    px = list(img.pixels)
+    iw, ih = img.size
+    bg = px[0:3]
+    for y in range(quad_h):
+        for x in range(quad_w):
+            i1 = ((oy + y) * dst_w + (ox + x)) * 4
+            dst[i1 : i1 + 3] = bg
+            dst[i1 + 3] = 1.0
+    inset = max(6, int(min(quad_w, quad_h) * 0.028))
+    off_x = ox + max(inset, (quad_w - iw) // 2)
+    off_y = oy + max(inset, (quad_h - ih) // 2)
+    for y in range(ih):
+        for x in range(iw):
+            i0 = (y * iw + x) * 4
+            i1 = ((off_y + y) * dst_w + (off_x + x)) * 4
+            dst[i1 : i1 + 4] = px[i0 : i0 + 4]
+
+
 def stitch_rows(row_a, row_b, path):
-    w, h = row_a[0].size
-    comp = bpy.data.images.new("preview", w * 2, h * 2)
-    out = [0.0] * (w * 2 * h * 2 * 4)
+    th = PREVIEW_TILE_H
+    slot_w = max(tw for _, tw in row_a + row_b)
+    comp_w = slot_w * 2
+    comp_h = th * 2
+    comp = bpy.data.images.new("preview", comp_w, comp_h)
+    out = [0.0] * (comp_w * comp_h * 4)
     for row, imgs in ((0, row_a), (1, row_b)):
-        for col, img in enumerate(imgs):
-            px = list(img.pixels)
-            iw, ih = img.size
-            for y in range(ih):
-                for x in range(iw):
-                    i0 = (y * iw + x) * 4
-                    ox = col * w + x
-                    oy = row * h + y
-                    i1 = (oy * w * 2 + ox) * 4
-                    out[i1 : i1 + 4] = px[i0 : i0 + 4]
+        for col, (img, _tw) in enumerate(imgs):
+            _blit_tile_centered(out, comp_w, comp_h, col * slot_w, row * th, slot_w, th, img)
     comp.pixels = out
     save_png(comp, path)
-    for img in row_a + row_b:
+    for img, _ in row_a + row_b:
         bpy.data.images.remove(img)
 
 
@@ -868,11 +1075,12 @@ def apply():
     color_img = bpy.data.images.load(color_path)
     ob.data.materials.clear()
     if guide_img:
-        ob.data.materials.append(image_material(guide_img, uv_name))
-    before = render_views(ob)
+        ob.data.materials.append(image_material(guide_img, uv_name, unlit=True))
+    slot_w = preview_slot_width(ob)
+    before = render_views(ob, slot_w=slot_w, unlit=True)
     ob.data.materials.clear()
     ob.data.materials.append(textured_material(color_img, uv_name))
-    after = render_views(ob)
+    after = render_views(ob, slot_w=slot_w)
     preview_path = os.path.join(out, "preview.png")
     stitch_rows(before, after, preview_path)
     before_path = os.path.join(out, "preview_before.png")

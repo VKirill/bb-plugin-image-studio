@@ -104,7 +104,7 @@ test("buildTextureUvPrompt for marker-only parts drops base colors lock and adds
     hasStyle: false,
     task: "hand-painted stone",
   });
-  assert.match(prompt, /marks part \"stone\"/);
+  assert.match(prompt, /marks part \"stone\" \(paint it as stone\)/);
   assert.match(prompt, /real material colours/);
   assert.doesNotMatch(prompt, /the base colors/);
 });
