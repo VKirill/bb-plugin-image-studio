@@ -79,6 +79,7 @@ checklist.
 | model-skill-desc-limit | image-studio skill description under 1024 characters with every trigger group kept, frontmatter test for all skills; version 0.8.7 | — | done | lprun_7ab1f614e5bf4e9cac43bc49529371b0 |
 | model-accept-fixes | SKILL.md frontmatter valid YAML (skill registers again), absolute paths for every host file call, CLI carries all model flags and `--sheet-style`; version 0.8.8 | model-skill-desc-limit | done | lprun_7ab1f614e5bf4e9cac43bc49529371b0 |
 | model-accept-round2 | blueprint cut keeps the handle (true gaps, label removal), side-copy threshold 0.8 with a narrow-profile test, soft anchor in the top band, pale light-blue soft key, marker-coloured parts not locked to red; version 0.8.9 | model-accept-fixes | done | lprun_7ab1f614e5bf4e9cac43bc49529371b0 |
+| model-accept-round3b | blueprint side always drawn separately in a second Muse call (`assembleBlueprint`, `sideSeparate` default true, `sheetSideSimilarity` diagnostic); texture-uv game look kept out of the albedo prompt; version 0.8.10 | model-accept-round2 | done | lprun_7ab1f614e5bf4e9cac43bc49529371b0 |
 
 Checks per task: `npx tsc --noEmit` and `npx vitest run tests/model.test.ts` (new test file); the Blender script
 gets a smoke check `Blender -b --factory-startup -P blender/texture_uv.py -- prepare test <tmp>` that must
@@ -104,6 +105,7 @@ produce guide.png and mask.png (the built-in "test" rock stack from tex_guide.py
 - Same run also completed model-preview-framing, model-skill-holes and model-hub-build-fix (hub bundle build fixed: `bb plugin update` to 0.8.5 was refused; now 0.8.6). These three had no rows in the table until this entry.
 - Accepted Lane Pilot run `lprun_7ab1f614e5bf4e9cac43bc49529371b0` also completed model-accept-fixes (version 0.8.8): skill frontmatter fixed so BB registers the skill again, host file paths resolved to absolute, CLI carries all model flags and `--sheet-style`. The row was added in this entry.
 - Accepted Lane Pilot run `lprun_7ab1f614e5bf4e9cac43bc49529371b0` also completed model-skill-desc-limit (version 0.8.7) and model-accept-round2 (version 0.8.9): the blueprint cut keeps the handle, the side-copy threshold is 0.8 with a narrow-profile test, soft anchors sit in the top band, the soft colour key is the pale light-blue clay, and untextured parts with marker colours no longer lock Muse to red. The rows were added in this entry. The `items/*/PLAN.md` files are pointers to this plan and were not edited.
+- Accepted Lane Pilot run `lprun_7ab1f614e5bf4e9cac43bc49529371b0` also completed model-accept-round3b (version 0.8.10): the blueprint draws the side view alone in a second Muse call (`sideSeparate`, default on) and the texture-uv prompt puts the game look on its own line after the Task. The row was added in this entry. Model-accept-round3 and model-blueprint have item folders but are not in this run's accepted list, so they have no rows here.
 
 ## Skill addition (requester, 2026-10-27): section "Item pipeline" in model-textures.md
 1. Concept (Image Studio: roblox items/props or characters) → approval.
