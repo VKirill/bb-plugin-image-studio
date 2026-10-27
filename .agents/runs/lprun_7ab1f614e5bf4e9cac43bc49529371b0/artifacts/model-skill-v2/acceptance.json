@@ -1,0 +1,15 @@
+{
+  "schema_version": 2,
+  "task_id": "model-skill-v2",
+  "task_sha256": "0b5926e538d16069c95dbcb777a4d24e71903e241baba1149257d88614a8406b",
+  "attempt": 2,
+  "provider_exit": 0,
+  "report": "complete",
+  "report_sha256": "5c9f81f3760d99e3c9286d7d274a5239244f081c1520acb33c2e5fa5384eb23c",
+  "owns_check": "passed",
+  "verification": "passed",
+  "review": "not_required",
+  "accepted": true,
+  "accepted_at": "2026-10-27T18:53:54.274Z",
+  "model": "composer-2.5"
+}
