@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { GuiStyle } from "./gui.ts";
+import { originName, type GuiStyle } from "./gui.ts";
 import type { Rgba } from "./image-io.ts";
 
 export const MODEL_MODES = ["texture-uv", "blueprint"] as const;
@@ -73,7 +73,18 @@ export type ModelTextureSize = (typeof MODEL_TEXTURE_SIZES)[number];
 
 export const DEFAULT_DILATE_PX = 12;
 
-export type TextureUvPart = { color: string; part: string; marker?: boolean };
+export type TextureUvPart = { color: string; part: string; marker?: boolean; colorName?: string };
+
+export type GuidePaletteEntry = { color: string; name: string; share: number };
+
+/** Folder binding for `bb image-studio model generate` (same origin rules as gui/roblox). */
+export function modelCliProjectOrigin(cwd: string | undefined, projectId: string | null): {
+  origin: string;
+  projectName: string;
+} {
+  const origin = cwd?.trim() || projectId || "unscoped";
+  return { origin, projectName: origin === "unscoped" ? "" : originName(origin) };
+}
 
 export type ModelPartRow = { material: string; part: string };
 export type ModelPartsParam = Record<string, string> | ModelPartRow[];
@@ -96,6 +107,159 @@ export function mergeModelParts(
     part: byMaterial.get(row.material) ?? row.part,
     marker: row.marker,
   }));
+}
+
+function normalizeHexColor(hex: string): string {
+  const h = hex.trim().toLowerCase();
+  if (h.startsWith("#")) return h.length === 7 ? h : hex;
+  if (/^[0-9a-f]{6}$/i.test(h)) return `#${h}`;
+  return h;
+}
+
+function userPartLookup(user?: ModelPartsParam): Map<string, string> {
+  const map = new Map<string, string>();
+  if (!user) return map;
+  const rows = Array.isArray(user) ? user : Object.entries(user).map(([material, part]) => ({ material, part }));
+  for (const row of rows) {
+    const key = row.material.trim().toLowerCase();
+    if (!key) continue;
+    map.set(key, row.part);
+    if (key.startsWith("#")) map.set(normalizeHexColor(key), row.part);
+  }
+  return map;
+}
+
+function englishColorName(r: number, g: number, b: number): string {
+  const rn = r / 255;
+  const gn = g / 255;
+  const bn = b / 255;
+  const max = Math.max(rn, gn, bn);
+  const min = Math.min(rn, gn, bn);
+  const l = (max + min) / 2;
+  if (max === min) return l > 0.85 ? "white" : l > 0.55 ? "light grey" : l > 0.35 ? "grey" : "dark grey";
+  const d = max - min;
+  const s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+  let h = 0;
+  if (max === rn) h = ((gn - bn) / d + (gn < bn ? 6 : 0)) / 6;
+  else if (max === gn) h = ((bn - rn) / d + 2) / 6;
+  else h = ((rn - gn) / d + 4) / 6;
+  const hue = h * 360;
+  if (l > 0.9 && s < 0.12) return "white";
+  if (l > 0.72 && s < 0.18) return "light grey";
+  if (hue >= 180 && hue <= 250 && s > 0.12) return l > 0.55 ? "light blue" : "blue";
+  if (hue >= 15 && hue <= 55 && s > 0.15) return l > 0.45 ? "brown" : "dark brown";
+  if (s < 0.15) return l > 0.6 ? "light grey" : "grey";
+  return "muted colour";
+}
+
+function rgbToHex(r: number, g: number, b: number): string {
+  return `#${[r, g, b].map((c) => Math.max(0, Math.min(255, Math.round(c))).toString(16).padStart(2, "0")).join("")}`;
+}
+
+/** Dominant albedo colours inside the mask (k <= 6, drops clusters under 2% of pixels). */
+export function extractGuidePalette(guide: Rgba, mask: Rgba, maxColors = 6): GuidePaletteEntry[] {
+  if (guide.width !== mask.width || guide.height !== mask.height) {
+    throw new Error("extractGuidePalette: guide and mask must match");
+  }
+  const { width, height } = guide;
+  const buckets = new Map<number, { r: number; g: number; b: number; n: number }>();
+  let total = 0;
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const mp = (y * width + x) * 4;
+      if (mask.data[mp + 3]! < 8) continue;
+      const p = (y * width + x) * 4;
+      const r = guide.data[p]!;
+      const g = guide.data[p + 1]!;
+      const b = guide.data[p + 2]!;
+      if (r + g + b < 24) continue;
+      const key = ((r >> 3) << 10) | ((g >> 3) << 5) | (b >> 3);
+      const prev = buckets.get(key) ?? { r: 0, g: 0, b: 0, n: 0 };
+      prev.r += r;
+      prev.g += g;
+      prev.b += b;
+      prev.n += 1;
+      buckets.set(key, prev);
+      total += 1;
+    }
+  }
+  if (total === 0) return [];
+  const sorted = [...buckets.values()]
+    .map((b) => ({
+      r: b.r / b.n,
+      g: b.g / b.n,
+      b: b.b / b.n,
+      n: b.n,
+      share: b.n / total,
+    }))
+    .sort((a, b) => b.n - a.n);
+  const merged: typeof sorted = [];
+  for (const entry of sorted) {
+    if (entry.share < 0.02) continue;
+    const near = merged.find(
+      (m) => Math.abs(m.r - entry.r) + Math.abs(m.g - entry.g) + Math.abs(m.b - entry.b) < 36,
+    );
+    if (near) {
+      const n = near.n + entry.n;
+      near.r = (near.r * near.n + entry.r * entry.n) / n;
+      near.g = (near.g * near.n + entry.g * entry.n) / n;
+      near.b = (near.b * near.n + entry.b * entry.n) / n;
+      near.n = n;
+      near.share = n / total;
+    } else merged.push({ ...entry });
+    if (merged.length >= maxColors) break;
+  }
+  return merged
+    .sort((a, b) => b.share - a.share)
+    .map((m) => ({
+      color: rgbToHex(m.r, m.g, m.b),
+      name: englishColorName(m.r, m.g, m.b),
+      share: m.share,
+    }));
+}
+
+export function resolveTextureUvParts(
+  baked: Array<{ material: string; part: string; color: string; marker?: boolean }>,
+  palette: GuidePaletteEntry[],
+  user?: ModelPartsParam,
+): TextureUvPart[] {
+  const byMaterial = userPartLookup(user);
+  for (const entry of palette) {
+    const named = byMaterial.get(entry.name.toLowerCase());
+    if (named) byMaterial.set(entry.color.toLowerCase(), named);
+  }
+  const out: TextureUvPart[] = [];
+  for (const row of baked) {
+    if (row.color === "textured" && palette.length > 0) {
+      for (const swatch of palette) {
+        const hex = swatch.color.toLowerCase();
+        const part =
+          byMaterial.get(hex) ?? byMaterial.get(swatch.name.toLowerCase()) ?? byMaterial.get(row.material) ?? swatch.name;
+        out.push({ color: swatch.color, part, colorName: swatch.name });
+      }
+      continue;
+    }
+    const part = byMaterial.get(row.material) ?? byMaterial.get(row.color.toLowerCase()) ?? row.part;
+    out.push({ color: row.color, part, marker: row.marker });
+  }
+  return out;
+}
+
+export function layoutColorPhrase(part: TextureUvPart): string {
+  if (part.marker) return `${part.color} marks part "${part.part}"`;
+  if (part.colorName) return `${part.colorName} (${part.color}) = ${part.part}`;
+  if (part.color === "textured") return `textured = ${part.part}`;
+  return `${part.color} = ${part.part}`;
+}
+
+export function textureUvPaletteHint(palette: GuidePaletteEntry[]): string {
+  if (!palette.length) return "";
+  const lines = palette.map((p) => `  ${p.name} (${p.color}) — ${Math.round(p.share * 100)}%`);
+  return [
+    "Guide colour palette (name swatches in --parts for a better Muse prompt):",
+    ...lines,
+    'Example: --parts "#c9c9cd=grey metal clamp; white=cloth rags"',
+  ].join("\n");
 }
 
 export const MODEL_CONCEPT_VIEWS = ["front", "back", "left", "right"] as const;
@@ -398,11 +562,7 @@ export function buildTextureUvPrompt(input: {
 }): string {
   const hasMarker = input.parts.some((p) => p.marker);
   const locksBaseColors = input.parts.some((p) => p.color === "textured" || !p.marker);
-  const colorList = input.parts
-    .map((p) =>
-      p.marker ? `${p.color} marks part "${p.part}"` : p.color === "textured" ? `textured = ${p.part}` : `${p.color} = ${p.part}`,
-    )
-    .join(", ");
+  const colorList = input.parts.map((p) => layoutColorPhrase(p)).join(", ");
   const projectedClause = input.projected
     ? "; colors and shading were projected from the design, so faces, eyes and patterns are already where they belong"
     : "";
@@ -430,7 +590,7 @@ export function buildTextureUvPrompt(input: {
   const gameLookParts = [input.theme?.trim(), input.artStyle?.trim()].filter(Boolean);
   if (gameLookParts.length > 0) {
     lines.push(
-      `Game look (materials and palette only; paint flat, evenly lit albedo with no coloured light, no cast shadows and no outlines): ${gameLookParts.join("; ")}.`,
+      `Game look (lower priority than the Task and the reference images: where they disagree follow them; materials and palette only; paint flat, evenly lit albedo with no coloured light, no cast shadows and no outlines): ${gameLookParts.join("; ")}.`,
     );
   }
   const faceClause = input.projected ? "faces, eyes and patterns only where they already are, never add new ones; " : "";

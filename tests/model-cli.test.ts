@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { parseModelGenerateCli } from "../src/model.ts";
+import { modelCliProjectOrigin, parseModelGenerateCli } from "../src/model.ts";
 
 test("parseModelGenerateCli reads texture-uv flags", () => {
   const argv = [
@@ -107,6 +107,12 @@ test("parseModelGenerateCli keeps --style as project when --project is absent", 
   assert.equal(parsed.mode, "texture-uv");
   if (parsed.mode !== "texture-uv") return;
   assert.equal(parsed.projectStyleId, "props");
+});
+
+test("modelCliProjectOrigin binds generate to the host folder name", () => {
+  const bound = modelCliProjectOrigin("/x/lava-arena", "bb");
+  assert.equal(bound.origin, "/x/lava-arena");
+  assert.equal(bound.projectName, "lava-arena");
 });
 
 test("readHostBytes resolves paths with hostPath before bb.sdk.files.read", () => {
