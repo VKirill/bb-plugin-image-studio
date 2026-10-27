@@ -1,0 +1,15 @@
+{
+  "schema_version": 2,
+  "task_id": "model-blueprint-v2",
+  "task_sha256": "cee6d23127ebb399082fdd58a9f816be479bfdcc5889d4c40ee9612d65204b0c",
+  "attempt": 1,
+  "provider_exit": 0,
+  "report": "complete",
+  "report_sha256": "856c1c0cc604929619d3beef070e73eec61f18522982b31a164663f8ebb6e8b8",
+  "owns_check": "passed",
+  "verification": "passed",
+  "review": "not_required",
+  "accepted": true,
+  "accepted_at": "2026-10-27T18:50:47.884Z",
+  "model": "composer-2.5"
+}
