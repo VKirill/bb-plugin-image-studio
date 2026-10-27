@@ -1991,7 +1991,7 @@ export default async function plugin(bb: BbPluginApi) {
     const extra = (input.images ?? []).slice(0, 2);
     const hasConcept = extra.length >= 1;
     const hasStyle = extra.length >= 2;
-    const projectConcept = hasConcept ? (input.projectConcept ?? true) : false;
+    const projectConcept = hasConcept ? (input.projectConcept ?? false) : false;
     const errors: string[] = [];
     const takes: ModelTakeManifest[] = [];
     const records: ModelTakeRecord[] = [];

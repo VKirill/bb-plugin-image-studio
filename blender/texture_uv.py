@@ -369,25 +369,81 @@ def set_active_uv_for_bake(ob):
     ob.data.uv_layers.active = ob.data.uv_layers[UV_LAYER]
 
 
+def _principled_bsdf(nt):
+    return next((n for n in nt.nodes if n.type == "BSDF_PRINCIPLED"), None)
+
+
+def begin_guide_bake_materials(ob):
+    """Neutralise metallic for the colour guide bake; keep normal maps."""
+    states = []
+    for slot in ob.material_slots:
+        mat = slot.material
+        if not mat or not mat.use_nodes:
+            states.append(None)
+            continue
+        nt = mat.node_tree
+        bsdf = _principled_bsdf(nt)
+        if not bsdf:
+            states.append(None)
+            continue
+        state = {}
+        met = bsdf.inputs.get("Metallic")
+        if met:
+            state["met_links"] = [link.from_socket for link in met.links]
+            for link in list(met.links):
+                nt.links.remove(link)
+            state["met_val"] = met.default_value
+            met.default_value = 0.0
+        for key in ("Specular IOR Level", "Specular"):
+            spec = bsdf.inputs.get(key)
+            if spec:
+                state["spec_key"] = key
+                state["spec_val"] = spec.default_value
+                spec.default_value = 0.15
+                break
+        states.append(state)
+    return states
+
+
+def end_guide_bake_materials(ob, states):
+    for slot, state in zip(ob.material_slots, states):
+        if not state:
+            continue
+        mat = slot.material
+        if not mat or not mat.use_nodes:
+            continue
+        nt = mat.node_tree
+        bsdf = _principled_bsdf(nt)
+        if not bsdf:
+            continue
+        met = bsdf.inputs.get("Metallic")
+        if met and "met_val" in state:
+            met.default_value = state["met_val"]
+            for from_sock in state.get("met_links", []):
+                nt.links.new(from_sock, met)
+        spec_key = state.get("spec_key")
+        if spec_key:
+            spec = bsdf.inputs.get(spec_key)
+            if spec:
+                spec.default_value = state["spec_val"]
+
+
 def bake_image(ob, name, size, bake_type="COMBINED", margin=20):
     img = bpy.data.images.new(name, size, size, alpha=True)
     img.colorspace_settings.name = "sRGB"
     set_active_uv_for_bake(ob)
+    bake_nodes = []
     for slot in ob.material_slots:
         mat = slot.material
         if not mat or not mat.use_nodes:
             continue
         nt = mat.node_tree
-        tex = None
-        for n in nt.nodes:
-            if n.type == "TEX_IMAGE":
-                tex = n
-                break
-        if tex is None:
-            tex = nt.nodes.new("ShaderNodeTexImage")
-            tex.location = (-400, 200)
+        tex = nt.nodes.new("ShaderNodeTexImage")
         tex.image = img
+        tex.label = "_bake_target"
+        tex.location = (900, 900)
         nt.nodes.active = tex
+        bake_nodes.append((nt, tex))
     bpy.ops.object.select_all(action="DESELECT")
     ob.select_set(True)
     bpy.context.view_layer.objects.active = ob
@@ -398,6 +454,8 @@ def bake_image(ob, name, size, bake_type="COMBINED", margin=20):
         sc.render.bake.use_pass_indirect = True
         sc.render.bake.use_pass_color = True
     bpy.ops.object.bake(type=bake_type)
+    for nt, tex in bake_nodes:
+        nt.nodes.remove(tex)
     return img
 
 
@@ -561,7 +619,11 @@ def prepare():
     if concept_path and os.path.isfile(concept_path):
         apply_concept_projection(ob, concept_path, concept_view)
         concept_used = True
-    guide = bake_image(ob, "guide", size, margin=20)
+    guide_mat_state = begin_guide_bake_materials(ob)
+    try:
+        guide = bake_image(ob, "guide", size, margin=20)
+    finally:
+        end_guide_bake_materials(ob, guide_mat_state)
     guide_path = os.path.join(out, "guide.png")
     save_png(guide, guide_path)
     mask = bake_mask(ob, size)
@@ -614,30 +676,67 @@ def image_material(img, uv_name):
     return mat
 
 
+def _clear_preview_lights():
+    for name in ("preview_key", "preview_fill"):
+        obj = bpy.data.objects.get(name)
+        if obj:
+            bpy.data.objects.remove(obj, do_unlink=True)
+        light = bpy.data.lights.get(name)
+        if light:
+            bpy.data.lights.remove(light)
+
+
+def _preview_lights(sc, cam_obj, ctr, view_dir):
+    _clear_preview_lights()
+    key = bpy.data.lights.new("preview_key", "SUN")
+    key.energy = 4.5
+    key_obj = bpy.data.objects.new("preview_key", key)
+    sc.collection.objects.link(key_obj)
+    key_obj.rotation_euler = view_dir.to_track_quat("Z", "Y").to_euler()
+    fill = bpy.data.lights.new("preview_fill", "SUN")
+    fill.energy = 2.5
+    fill_obj = bpy.data.objects.new("preview_fill", fill)
+    sc.collection.objects.link(fill_obj)
+    fill_dir = (-view_dir + Vector((0.35, 0.2, 0.45))).normalized()
+    fill_obj.rotation_euler = fill_dir.to_track_quat("Z", "Y").to_euler()
+
+
 def render_views(ob, tile_w=512):
     sc = bpy.context.scene
     bb = [ob.matrix_world @ Vector(c) for c in ob.bound_box]
     ctr = sum(bb, Vector()) / 8
-    span = max((b - ctr).length for b in bb) * 2.2
+    radius = max((b - ctr).length for b in bb)
     sc.render.resolution_x = tile_w
     sc.render.resolution_y = tile_w
     sc.render.film_transparent = False
     views = [(35, 20), (145, 20)]
     shots = []
+    sun = bpy.data.objects.get("sun")
+    sun_energy = sun.data.energy if sun else None
     for az, el in views:
         cam = bpy.data.cameras.new("cam")
+        cam.type = "ORTHO"
         cam_obj = bpy.data.objects.new("cam", cam)
         sc.collection.objects.link(cam_obj)
-        cam.lens = 50
         d = Vector(
             (
                 math.cos(math.radians(el)) * math.sin(math.radians(az)),
                 -math.cos(math.radians(el)) * math.cos(math.radians(az)),
                 math.sin(math.radians(el)),
             )
-        )
-        cam_obj.location = ctr + d * span * 2.5
+        ).normalized()
+        cam_obj.location = ctr + d * (radius * 4.0 + 1.0)
         cam_obj.rotation_euler = (ctr - cam_obj.location).to_track_quat("-Z", "Y").to_euler()
+        inv = cam_obj.matrix_world.inverted()
+        local = [inv @ p for p in bb]
+        xs = [p.x for p in local]
+        ys = [p.y for p in local]
+        height = max(ys) - min(ys)
+        width = max(xs) - min(xs)
+        cam.ortho_scale = max(height, width) / 0.8
+        if sun:
+            sun.data.energy = 0.35
+        _preview_lights(sc, cam_obj, ctr, d)
         sc.camera = cam_obj
         tmp = os.path.join(bpy.app.tempdir, f"view_{az}.png")
         sc.render.filepath = tmp
@@ -645,6 +744,9 @@ def render_views(ob, tile_w=512):
         shots.append(bpy.data.images.load(tmp))
         bpy.data.objects.remove(cam_obj)
         bpy.data.cameras.remove(cam)
+    _clear_preview_lights()
+    if sun and sun_energy is not None:
+        sun.data.energy = sun_energy
     return shots
 
 

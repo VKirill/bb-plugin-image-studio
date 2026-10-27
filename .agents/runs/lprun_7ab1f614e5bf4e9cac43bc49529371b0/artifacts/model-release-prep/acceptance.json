@@ -1,0 +1,15 @@
+{
+  "schema_version": 2,
+  "task_id": "model-release-prep",
+  "task_sha256": "0caff61f4c3ff04d9e9ee0301ac907484f0e762030cb322348caca8883f80005",
+  "attempt": 1,
+  "provider_exit": 0,
+  "report": "complete",
+  "report_sha256": "3736a5e3b2ffda389b18c989a1bf439401b410a6b6a17c028be87ae505d66a0d",
+  "owns_check": "passed",
+  "verification": "passed",
+  "review": "not_required",
+  "accepted": true,
+  "accepted_at": "2026-10-27T19:05:12.830Z",
+  "model": "composer-2.5"
+}

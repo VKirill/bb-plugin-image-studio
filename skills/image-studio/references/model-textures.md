@@ -28,7 +28,7 @@ Concept art for items still starts in `image_studio_roblox` (`items`, `props`) o
 | `prompt` | Effects and per-part paint notes (scorch, wear, fibres) — place effects by location (`only at the BOTTOM end of the rags`) |
 | `parts` | Optional map from baked material name → part label (`{"Material.003":"oak handle"}` or `[{"material":"…","part":"…"}]`) |
 | `images` | Up to 2: `[0]` concept (design reference), `[1]` optional style sheet |
-| `projectConcept` | Default **on** when `images[0]` is set: cut concept, fill background, **planar project** onto the mesh from `conceptView`, bake into `guide.png` before Muse (faces, eyes, lettering, patterns land in place) |
+| `projectConcept` | Default **off**. Set **true** only when `images[0]` shows the object straight-on from `conceptView` in the model's pose (faces, eyes, lettering, patterns): cut concept, fill background, **planar project** onto the mesh, bake into `guide.png` before Muse. The concept still goes to Muse as image 2 when projection is off. |
 | `conceptView` | `front` \| `back` \| `left` \| `right` (default `front`) |
 | `conceptNote` | What image 2 shows (`weathered oak handle, iron rivets`) — not the whole game style |
 | `subject` | Short object name in the Muse layout line (defaults from the file name) |
@@ -65,7 +65,7 @@ Proven in production tests; the plugin enforces most of this in Blender prepare:
 - **Large UV islands:** Smart UV angle ~66–72°, island margin **0.03–0.04**; bake margin 16–24 px.
 - **Top of each island = top of the model:** `uv.align_rotation` (geometry, Z) then `pack_islands(rotate=False)` so Muse places effects by picture bottom (`only at the BOTTOM end of …`).
 - **Flat part colours** on the guide = materials/parts; describe what to paint on each colour in `prompt` / `parts`, not in the game's global style.
-- **Concept as `images[0]`** with **`projectConcept` on** (default): projection before Muse so faces, eyes, lettering and placed patterns stay aligned; Muse only cleans up.
+- **Concept as `images[0]`** always feeds Muse. Turn **`projectConcept` on** only for straight-on concepts (same pose as the mesh) so faces, eyes, lettering and placed patterns are projected before Muse; diagonal concept art will smear if projected.
 - **Never** repaint model render views and project them back onto the UV — silhouette and scale drift.
 - **Model prep:** after deleting mesh details (eye spheres, etc.) **close holes** (`bmesh.ops.holes_fill`) before texturing; prepare runs hole fill on open boundaries.
 - **Muse:** image roles → `Task:` → `Must not change:` → short bans. No negative prompt, seed, or strength — text only. Describe subject, `conceptNote`, `parts`, and effects in `prompt`; the plugin adds theme/style.
