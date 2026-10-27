@@ -132,6 +132,9 @@ import {
   DEFAULT_DILATE_PX,
   mergeModelParts,
   MODEL_CONCEPT_VIEWS,
+  MODEL_CLI_REST_SKIP_FLAGS,
+  hostPath,
+  parseModelGenerateCli,
   subjectFromFile,
   MODEL_TAKE_MAX,
   modelTakeKvKey,
@@ -497,7 +500,40 @@ function flags(argv: string[], name: string): string[] {
 }
 
 function restAfter(argv: string[], command: string): string {
-  const skip = new Set(["--model", "--gateway", "--profile", "--image", "--aspect", "--resolution", "--refs", "--seed", "--count", "--batch", "--parallel", "--slots", "--json", "--mode", "--style", "--project", "--rename", "--name", "--theme", "--tags", "--palette", "--notes", "--role", "--sheet", "--elements", "--items", "--variants", "--frames", "--object", "--size", "--file"]);
+  const skip = new Set([
+    "--model",
+    "--gateway",
+    "--profile",
+    "--image",
+    "--aspect",
+    "--resolution",
+    "--refs",
+    "--seed",
+    "--count",
+    "--batch",
+    "--parallel",
+    "--slots",
+    "--json",
+    "--mode",
+    "--style",
+    "--project",
+    "--rename",
+    "--name",
+    "--theme",
+    "--tags",
+    "--palette",
+    "--notes",
+    "--role",
+    "--sheet",
+    "--elements",
+    "--items",
+    "--variants",
+    "--frames",
+    "--object",
+    "--size",
+    "--file",
+    ...MODEL_CLI_REST_SKIP_FLAGS,
+  ]);
   const out: string[] = [];
   for (let i = 0; i < argv.length; i++) {
     const token = argv[i]!;
@@ -1900,14 +1936,15 @@ export default async function plugin(bb: BbPluginApi) {
   }
 
   async function readHostBytes(path: string, cwd: string, hostId?: string): Promise<Buffer> {
-    const file = await bb.sdk.files.read({ path, rootPath: cwd, hostId });
+    const absolute = hostPath(cwd, path);
+    const file = await bb.sdk.files.read({ path: absolute, hostId });
     return Buffer.from(file.content, file.contentEncoding === "base64" ? "base64" : "utf8");
   }
 
   async function writeHostBytes(path: string, cwd: string, hostId: string | undefined, bytes: Buffer): Promise<void> {
+    const absolute = hostPath(cwd, path);
     await bb.sdk.files.write({
-      path,
-      rootPath: cwd,
+      path: absolute,
       content: bytes.toString("base64"),
       contentEncoding: "base64",
       createParents: true,
@@ -2857,8 +2894,8 @@ export default async function plugin(bb: BbPluginApi) {
     "  bb image-studio character cut --sheet <path> [--grid 1x2 | --items \"rifle; knife\"] [--json]   (re-cut a white sheet; free)",
     "  bb image-studio roblox projects|project|ref|delete …   (games; the same options as gui; --tags simulator,stylized,lowpoly,…)",
     "  bb image-studio model projects|project|ref|delete …   (texture-by-UV projects; same theme options as gui)",
-    "  bb image-studio model generate --mode texture-uv --file <model.fbx|glb|blend> [--object NAME] [--size 1024|2048] [--variants 1-4] [--image <concept|style>]… --prompt <style> [--json]",
-    "  bb image-studio model generate --mode blueprint --image <concept> [--views front,side,back] [--style clay+wire|clean-line] [--soft \"rags; rope\"] [--subject \"fire mop\"] [--json]",
+    "  bb image-studio model generate --mode texture-uv --file <model.fbx|glb|blend> [--object NAME] [--size 1024|2048] [--variants 1-4] [--image <concept|style>]… [--subject …] [--concept-note …] [--project-concept true|false] [--concept-view front|back|left|right] [--parts \"mat=part; …\"] --prompt <style> [--project <name>] [--json]",
+    "  bb image-studio model generate --mode blueprint --image <concept> [--views front,side,back] [--sheet-style clay+wire|clean-line] [--soft \"rags; rope\"] [--rigid \"…\"] [--subject \"fire mop\"] [--project <name>] [--json]",
     "  bb image-studio roblox generate --mode icon|thumbnail|logo|loading|badges|passes|products|items|props|texture|skybox|decal|vfx|flipbook",
     "                                  [--project <game>] [--variants 1-4] [--frames 4|16] [--aspect 1:1|16:9|…] [--image <path>]… --prompt <what> [--json]",
     "                                  (list modes take the list in --prompt or --items: \"VIP; 2x Coins\")",
@@ -3479,32 +3516,28 @@ export default async function plugin(bb: BbPluginApi) {
         return reply({ removed: style.id }, `Deleted ${word} project ${style.name} (${style.id}): its list and references. Saved files stay.`);
       }
       case "generate": {
-        const mode = modelModeSchema.safeParse(flag(argv, "--mode") ?? "texture-uv");
-        if (!mode.success) return { exitCode: 1, stderr: `--mode takes ${MODEL_MODES.join(", ")}.` };
         const source = await projectSource(projectId);
         const cwd = ctx.cwd ?? source.cwd;
+        if (!cwd) return { exitCode: 1, stderr: "Model generate needs a project folder on a host." };
         const hostId = source.hostId;
-        const images = flags(argv, "--image");
-        if (mode.data === "blueprint") {
-          const concept = images[0] ?? flag(argv, "--image");
-          if (!concept) return { exitCode: 1, stderr: usage };
-          const viewsFlag = flag(argv, "--views");
-          const views = viewsFlag
-            ? defaultBlueprintViews(viewsFlag.split(",").map((part) => part.trim()))
-            : undefined;
-          const styleFlag = flag(argv, "--style");
-          const softFlag = flag(argv, "--soft");
-          const soft = softFlag
-            ? softFlag.split(/[;,]/).map((part) => part.trim()).filter(Boolean)
-            : undefined;
+        let parsed: ReturnType<typeof parseModelGenerateCli>;
+        try {
+          parsed = parseModelGenerateCli(argv);
+        } catch (error) {
+          return { exitCode: 1, stderr: describe(error) };
+        }
+        const styleId = parsed.projectStyleId ?? projectFlag;
+        if (parsed.mode === "blueprint") {
+          const views = parsed.views ? defaultBlueprintViews(parsed.views) : undefined;
           const run = await runModelBlueprint({
             projectId,
-            styleId: projectFlag,
-            images: [concept],
+            styleId,
+            images: [parsed.conceptImage],
             views,
-            style: styleFlag,
-            subject: flag(argv, "--subject"),
-            soft,
+            style: parsed.sheetStyle,
+            subject: parsed.subject,
+            soft: parsed.soft,
+            rigid: parsed.rigid,
             cwd,
             hostId,
             originLabel: source.name,
@@ -3512,24 +3545,22 @@ export default async function plugin(bb: BbPluginApi) {
           const text = blueprintSummary(run);
           return !run.blueprint ? { exitCode: 1, stderr: text || "Nothing was generated." } : reply(run, text);
         }
-        const modelFile = flag(argv, "--file") ?? flag(argv, "--model");
-        const prompt = flag(argv, "--prompt") ?? restAfter(argv, "generate").replace(/^model\s*/, "");
-        if (!modelFile || !prompt) return { exitCode: 1, stderr: usage };
-        const sizeFlag = flag(argv, "--size");
-        const sizeParsed = sizeFlag ? modelTextureSizeSchema.safeParse(Number(sizeFlag)) : { success: true as const, data: 1024 as ModelTextureSize };
-        if (!sizeParsed.success) return { exitCode: 1, stderr: "--size takes 1024 or 2048." };
-        const variantsFlag = flag(argv, "--variants");
-        const variants = variantsFlag ? Number(variantsFlag) : 1;
+        const modelFile = isAbsolute(parsed.modelPath) ? parsed.modelPath : join(cwd, parsed.modelPath);
         const run = await runModelTextureUv({
           projectId,
-          styleId: projectFlag,
-          mode: mode.data,
+          styleId,
+          mode: parsed.mode,
           model: modelFile,
-          object: flag(argv, "--object"),
-          prompt,
-          images,
-          size: sizeParsed.data,
-          variants,
+          object: parsed.object,
+          prompt: parsed.prompt,
+          parts: parsed.parts,
+          images: parsed.images,
+          size: parsed.size,
+          variants: parsed.variants,
+          subject: parsed.subject,
+          conceptNote: parsed.conceptNote,
+          projectConcept: parsed.projectConcept,
+          conceptView: parsed.conceptView,
           cwd,
           hostId,
           originLabel: source.name,

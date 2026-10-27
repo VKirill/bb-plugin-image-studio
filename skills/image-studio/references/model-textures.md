@@ -116,7 +116,11 @@ CLI (hidden thread):
 
 ```bash
 bb image-studio model generate --mode texture-uv --file assets/3d/fire-mop.fbx \
-  --image assets/concept/weapons/fire-mop.png --prompt "charred rag ends; warm wood grain on handle" \
+  --image assets/concept/weapons/fire-mop.png \
+  --subject "fire mop" --concept-note "stylized fire mop with layered rags" \
+  --project-concept false --concept-view front \
+  --parts "fire-mop_baked=rag head; wood=handle" \
+  --prompt "charred rag ends; warm wood grain on handle" \
   --size 2048 --variants 2 --json
 ```
 
@@ -136,7 +140,7 @@ bb image-studio model generate --mode texture-uv --file assets/3d/fire-mop.fbx \
 ```bash
 bb image-studio model generate --mode blueprint \
   --image assets/concept/weapons/fire-mop.png \
-  --views front,side,back --style clay+wire --soft "rags" --subject "fire mop" --json
+  --views front,side,back --sheet-style clay+wire --soft "rags" --subject "fire mop" --json
 ```
 
 Set look on the project: `bb image-studio model project --theme "…" --tags stylized --notes "…"`; list: `bb image-studio model projects`.

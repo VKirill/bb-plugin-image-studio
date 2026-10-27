@@ -6,6 +6,8 @@ import {
   buildTextureUvPrompt,
   cutAndDilate,
   cutConcept,
+  hostPath,
+  isHostPathAbsolute,
   mergeModelParts,
   subjectFromFile,
 } from "../src/model.ts";
@@ -40,6 +42,15 @@ test("texture-uv projectConcept defaults to false unless explicitly true", () =>
 test("model.ts is browser-safe (no node:path import)", () => {
   const model = readFileSync(new URL("../src/model.ts", import.meta.url), "utf8");
   assert.doesNotMatch(model, /node:path/);
+});
+
+test("hostPath turns model take relative paths into absolute host paths", () => {
+  const cwd = "/game/project";
+  const rel = "image-studio/model/mop/abc123/take-1/preview.png";
+  const absolute = hostPath(cwd, rel);
+  assert.equal(absolute, "/game/project/image-studio/model/mop/abc123/take-1/preview.png");
+  assert.equal(isHostPathAbsolute(absolute), true);
+  assert.equal(isHostPathAbsolute(rel), false);
 });
 
 test("TEXTURE_UV_SCRIPT matches blender/texture_uv.py byte for byte", () => {
