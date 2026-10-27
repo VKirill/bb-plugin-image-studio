@@ -30,11 +30,22 @@ DISTINCT_COLORS = [
 ]
 
 
+CONCEPT_VIEWS = ("front", "back", "left", "right")
+VIEW_DIRS = {
+    "front": Vector((0.0, -1.0, 0.0)),
+    "back": Vector((0.0, 1.0, 0.0)),
+    "left": Vector((-1.0, 0.0, 0.0)),
+    "right": Vector((1.0, 0.0, 0.0)),
+}
+
+
 def parse_prepare_args(args):
     src = args[0]
     out = args[1]
     object_name = None
     size = 1024
+    concept_path = None
+    concept_view = "front"
     i = 2
     while i < len(args):
         if args[i] == "--object" and i + 1 < len(args):
@@ -43,11 +54,19 @@ def parse_prepare_args(args):
         elif args[i] == "--size" and i + 1 < len(args):
             size = int(args[i + 1])
             i += 2
+        elif args[i] == "--concept" and i + 1 < len(args):
+            concept_path = args[i + 1]
+            i += 2
+        elif args[i] == "--concept-view" and i + 1 < len(args):
+            concept_view = args[i + 1]
+            i += 2
         else:
             i += 1
     if size not in (1024, 2048):
         raise SystemExit("--size must be 1024 or 2048")
-    return src, out, object_name, size
+    if concept_view not in CONCEPT_VIEWS:
+        raise SystemExit("--concept-view must be front, back, left or right")
+    return src, out, object_name, size, concept_path, concept_view
 
 
 def scene_light():
@@ -376,8 +395,103 @@ def save_png(img, path):
     img.save()
 
 
+def object_bbox(ob):
+    xs = [v.co.x for v in ob.data.vertices]
+    ys = [v.co.y for v in ob.data.vertices]
+    zs = [v.co.z for v in ob.data.vertices]
+    return min(xs), max(xs), min(ys), max(ys), min(zs), max(zs)
+
+
+def _map_range(nt, val, lo, hi):
+    node = nt.nodes.new("ShaderNodeMapRange")
+    node.inputs["From Min"].default_value = lo
+    node.inputs["From Max"].default_value = hi
+    node.inputs["To Min"].default_value = 0.0
+    node.inputs["To Max"].default_value = 1.0
+    nt.links.new(val, node.inputs["Value"])
+    return node.outputs["Result"]
+
+
+def _concept_uv_nodes(nt, sep, view, bbox):
+    xmin, xmax, ymin, ymax, zmin, zmax = bbox
+    mx = _map_range(nt, sep.outputs["X"], xmin, xmax)
+    my = _map_range(nt, sep.outputs["Y"], ymin, ymax)
+    mz = _map_range(nt, sep.outputs["Z"], zmin, zmax)
+    if view == "front":
+        u, v = mx, mz
+    elif view == "back":
+        one = nt.nodes.new("ShaderNodeMath")
+        one.operation = "SUBTRACT"
+        one.inputs[0].default_value = 1.0
+        nt.links.new(mx, one.inputs[1])
+        u, v = one.outputs["Value"], mz
+    elif view == "left":
+        u, v = my, mz
+    else:
+        one = nt.nodes.new("ShaderNodeMath")
+        one.operation = "SUBTRACT"
+        one.inputs[0].default_value = 1.0
+        nt.links.new(my, one.inputs[1])
+        u, v = one.outputs["Value"], mz
+    comb = nt.nodes.new("ShaderNodeCombineXYZ")
+    nt.links.new(u, comb.inputs["X"])
+    nt.links.new(v, comb.inputs["Y"])
+    comb.inputs["Z"].default_value = 0.0
+    return comb.outputs["Vector"]
+
+
+def apply_concept_projection(ob, concept_path, view):
+    img = bpy.data.images.load(concept_path)
+    img.colorspace_settings.name = "sRGB"
+    bbox = object_bbox(ob)
+    view_local = VIEW_DIRS[view]
+    view_world = (ob.matrix_world.to_3x3() @ view_local).normalized()
+    for slot in ob.material_slots:
+        mat = slot.material
+        if not mat:
+            continue
+        mat.use_nodes = True
+        nt = mat.node_tree
+        bsdf = next((n for n in nt.nodes if n.type == "BSDF_PRINCIPLED"), None)
+        if not bsdf:
+            continue
+        base_in = bsdf.inputs["Base Color"]
+        base_socket = base_in.links[0].from_socket if base_in.links else None
+        if base_socket is None:
+            base = nt.nodes.new("ShaderNodeRGB")
+            base.outputs[0].default_value = base_in.default_value
+            base_socket = base.outputs["Color"]
+        tex = nt.nodes.new("ShaderNodeTexImage")
+        tex.image = img
+        tex.interpolation = "Linear"
+        tex.extension = "CLIP"
+        coord = nt.nodes.new("ShaderNodeTexCoord")
+        sep = nt.nodes.new("ShaderNodeSeparateXYZ")
+        nt.links.new(coord.outputs["Object"], sep.inputs["Vector"])
+        nt.links.new(_concept_uv_nodes(nt, sep, view, bbox), tex.inputs["Vector"])
+        geo = nt.nodes.new("ShaderNodeNewGeometry")
+        dot = nt.nodes.new("ShaderNodeVectorMath")
+        dot.operation = "DOT_PRODUCT"
+        nt.links.new(geo.outputs["Normal"], dot.inputs[0])
+        dot.inputs[1].default_value = view_world
+        facing = nt.nodes.new("ShaderNodeMapRange")
+        facing.inputs["From Min"].default_value = -0.05
+        facing.inputs["From Max"].default_value = 0.25
+        facing.inputs["To Min"].default_value = 0.0
+        facing.inputs["To Max"].default_value = 1.0
+        nt.links.new(dot.outputs["Value"], facing.inputs["Value"])
+        mix = nt.nodes.new("ShaderNodeMixRGB")
+        mix.blend_type = "MIX"
+        nt.links.new(facing.outputs["Result"], mix.inputs["Fac"])
+        nt.links.new(base_socket, mix.inputs["Color1"])
+        nt.links.new(tex.outputs["Color"], mix.inputs["Color2"])
+        if base_in.links:
+            nt.links.remove(base_in.links[0])
+        nt.links.new(mix.outputs["Color"], base_in)
+
+
 def prepare():
-    src, out, object_name, size = parse_prepare_args(ARGS)
+    src, out, object_name, size, concept_path, concept_view = parse_prepare_args(ARGS)
     os.makedirs(out, exist_ok=True)
     joined = []
     if src == "test":
@@ -408,6 +522,10 @@ def prepare():
     ob.name = "model"
     sample_uv = ensure_image_studio_uv(ob)
     parts = flat_materials(ob, sample_uv)
+    concept_used = False
+    if concept_path and os.path.isfile(concept_path):
+        apply_concept_projection(ob, concept_path, concept_view)
+        concept_used = True
     guide = bake_image(ob, "guide", size, margin=20)
     guide_path = os.path.join(out, "guide.png")
     save_png(guide, guide_path)
@@ -422,6 +540,8 @@ def prepare():
         "size": size,
         "model": src if src != "test" else "test",
         "joined": joined,
+        "concept": concept_used,
+        "conceptView": concept_view if concept_used else None,
     }
     with open(os.path.join(out, "prepare.json"), "w", encoding="utf-8") as f:
         json.dump(meta, f, indent=2)

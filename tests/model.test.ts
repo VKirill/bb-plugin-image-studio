@@ -2,7 +2,13 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { TEXTURE_UV_SCRIPT } from "../src/blender-scripts.ts";
-import { buildTextureUvPrompt, cutAndDilate, mergeModelParts } from "../src/model.ts";
+import {
+  buildTextureUvPrompt,
+  cutAndDilate,
+  cutConcept,
+  mergeModelParts,
+  subjectFromFile,
+} from "../src/model.ts";
 import type { Rgba } from "../src/image-io.ts";
 
 function rgba(w: number, h: number, fill: (x: number, y: number) => [number, number, number, number]): Rgba {
@@ -39,18 +45,58 @@ test("mergeModelParts applies material descriptions from a record", () => {
   assert.equal(merged[0]?.part, "scorched rag head");
 });
 
-test("texture-uv prompt lists part colours and forbids outlines", () => {
+test("subjectFromFile turns a file name into a readable subject", () => {
+  assert.equal(subjectFromFile("/assets/fire-mop.fbx"), "fire mop");
+});
+
+test("buildTextureUvPrompt follows the TZ layout with concept and projection", () => {
   const prompt = buildTextureUvPrompt({
-    parts: [{ color: "#dc382e", part: "wood_handle" }, { color: "#38a044", part: "cloth" }],
-    style: "stylized lava arena props",
+    subject: "fire mop",
+    parts: [{ color: "#dc382e", part: "rag head" }],
+    projected: true,
     hasConcept: true,
-    hasStyle: false,
+    conceptNote: "a burning mop with charred rags",
+    hasStyle: true,
+    task: "scorch only at the bottom ends of the rags",
+    theme: "lava arena stylized props",
   });
-  assert.match(prompt, /#dc382e = wood_handle/);
-  assert.match(prompt, /#38a044 = cloth/);
-  assert.match(prompt, /no outlines or frames/i);
-  assert.match(prompt, /black background stays black/i);
-  assert.match(prompt, /stylized lava arena props/);
+  assert.match(prompt, /Image 1 is the LAYOUT/);
+  assert.match(prompt, /projected from the design/);
+  assert.match(prompt, /Image 2 is the STYLE AND DESIGN REFERENCE: a burning mop/);
+  assert.match(prompt, /Image 3 is the STYLE SHEET/);
+  assert.match(prompt, /Task: repaint image 1 as a final hand-painted game texture in the look of image 2:/);
+  assert.match(prompt, /Must not change:/);
+  assert.match(prompt, /faces, eyes and patterns only where they already are/);
+  assert.match(prompt, /Do not add outlines or frames/);
+});
+
+test("buildTextureUvPrompt omits Image 2 without a concept", () => {
+  const prompt = buildTextureUvPrompt({
+    subject: "rock stack",
+    parts: [{ color: "#dc382e", part: "stone" }],
+    projected: false,
+    hasConcept: false,
+    hasStyle: false,
+    task: "hand-painted stone",
+  });
+  assert.match(prompt, /Image 1 is the LAYOUT/);
+  assert.doesNotMatch(prompt, /Image 2 is the STYLE/);
+  assert.match(prompt, /Task: repaint image 1 as a final hand-painted game texture: hand-painted stone/);
+  assert.doesNotMatch(prompt, /projected from the design/);
+});
+
+test("cutConcept crops to the object and fills the background with the main colour", () => {
+  const image = rgba(8, 8, (x, y) => {
+    if (x >= 2 && x <= 4 && y >= 2 && y <= 4) return [200, 40, 40, 255];
+    return [10, 200, 10, 255];
+  });
+  const cut = cutConcept(image);
+  assert.equal(cut.width, 3);
+  assert.equal(cut.height, 3);
+  const corner = cut.data[0]!;
+  const center = cut.data[(1 * cut.width + 1) * 4]!;
+  assert.equal(center, 200);
+  assert.equal(corner, center);
 });
 
 test("cutAndDilate extends colour past the mask edge and leaves the rest empty", () => {
