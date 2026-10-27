@@ -13,11 +13,11 @@
 - Run the planned fire-mop and rock-stack acceptance checks for model texturing and blueprint output.
 
 ## Last verify
-- command: read README, implementation, and model skill; run artifacts were unavailable in this checkout
-- result: documentation and capability review only; tests not run
+- command: accepted Lane Pilot run lprun_7ab1f614e5bf4e9cac43bc49529371b0; task reports unavailable in this checkout
+- result: model workflow shipped; fire-mop and rock-stack runtime acceptance checks remain
 - when: 2026-10-27
 
 ## Pointers
 - Open todos: none; `.agents/todos/INDEX.md` is absent.
-- Plan: `.agents/plans/2026-10-27-texture-by-model.md` (accepted run tasks complete; follow-up acceptance checks remain).
+- Active plan: `.agents/plans/2026-10-27-texture-by-model.md` (accepted tasks complete; fire-mop and rock-stack runtime acceptance checks remain).
 - Changelog: `.agents/CHANGELOG.md`.

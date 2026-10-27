@@ -72,6 +72,7 @@ checklist.
 | model-blueprint-v2 | blueprint prompt, view cutting and baseline alignment, soft anchors, side regeneration, and `views.json` | model-section-core | done | lprun_7ab1f614e5bf4e9cac43bc49529371b0 |
 | model-panel-v2 | model section tab, generation forms, and texture/blueprint takes gallery | model-section-core | done | lprun_7ab1f614e5bf4e9cac43bc49529371b0 |
 | model-skill-v2 | model texture and blueprint reference, SKILL.md entry, and item pipeline | model-blueprint-v2 | done | lprun_7ab1f614e5bf4e9cac43bc49529371b0 |
+| model-release-prep | release fixes for baking, previews, concept defaults, browser safety, blueprint wording, and version 0.8.5 | model-core-fix, model-blueprint-v2 | done | lprun_7ab1f614e5bf4e9cac43bc49529371b0 |
 
 Checks per task: `npx tsc --noEmit` and `npx vitest run tests/model.test.ts` (new test file); the Blender script
 gets a smoke check `Blender -b --factory-startup -P blender/texture_uv.py -- prepare test <tmp>` that must
