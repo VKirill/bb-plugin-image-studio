@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import type { Rgba } from "../src/image-io.ts";
+import { decodeRgba, type Rgba } from "../src/image-io.ts";
 import { classifyViews, cutBlueprint, swapBlueprintBackSide } from "../src/blueprint.ts";
 
 const BG = [200, 200, 200, 255] as const;
@@ -99,4 +100,22 @@ test("three copied views fall back to drawing side separately", () => {
   const cut = cutBlueprint(sheet, ["front", "side", "back"]);
   const classed = classifyViews(cut.views);
   assert.equal(classed.drawn, "side");
+});
+
+test("0.8.9 fire-mop sheet: decisive front/side pair with back odd relabels and draws back", async () => {
+  const sheet = await decodeRgba(readFileSync(new URL("./fixtures/model/blueprint-mop-sheet.png", import.meta.url)));
+  const cut = cutBlueprint(sheet, ["front", "side", "back"]);
+  const classed = classifyViews(cut.views);
+  assert.equal(classed.relabeled, true);
+  assert.equal(classed.drawn, "back");
+});
+
+test("0.8.10 fire-mop sheet: mislabeled back panel relabels and draws back", async () => {
+  const sheet = await decodeRgba(
+    readFileSync(new URL("./fixtures/model/blueprint-mop-sheet-0810.png", import.meta.url)),
+  );
+  const cut = cutBlueprint(sheet, ["front", "side", "back"]);
+  const classed = classifyViews(cut.views);
+  assert.equal(classed.relabeled, true);
+  assert.equal(classed.drawn, "back");
 });

@@ -1,0 +1,15 @@
+{
+  "schema_version": 2,
+  "task_id": "model-classify-real",
+  "task_sha256": "3ccd101e58052fe416a7535c2ed765595dba5c6f5be44986dd80a1b646e6ac69",
+  "attempt": 1,
+  "provider_exit": 0,
+  "report": "complete",
+  "report_sha256": "407f87a59c0d621f1396b8b9b9ab48a255d6f2dd7a2fa6a436741ee5d888a5fe",
+  "owns_check": "passed",
+  "verification": "passed",
+  "review": "not_required",
+  "accepted": true,
+  "accepted_at": "2026-10-27T20:50:35.633Z",
+  "model": "composer-2.5"
+}
