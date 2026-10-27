@@ -87,8 +87,23 @@ test("buildTextureUvPrompt follows the TZ layout with concept and projection", (
   assert.match(prompt, /Image 3 is the STYLE SHEET/);
   assert.match(prompt, /Task: repaint image 1 as a final hand-painted game texture in the look of image 2:/);
   assert.match(prompt, /Must not change:/);
+  assert.match(prompt, /the base colors/);
   assert.match(prompt, /faces, eyes and patterns only where they already are/);
   assert.match(prompt, /Do not add outlines or frames/);
+});
+
+test("buildTextureUvPrompt for marker-only parts drops base colors lock and adds material colours task", () => {
+  const prompt = buildTextureUvPrompt({
+    subject: "rock stack",
+    parts: [{ color: "#b4b4b4", part: "stone", marker: true }],
+    projected: false,
+    hasConcept: false,
+    hasStyle: false,
+    task: "hand-painted stone",
+  });
+  assert.match(prompt, /marks part \"stone\"/);
+  assert.match(prompt, /real material colours/);
+  assert.doesNotMatch(prompt, /the base colors/);
 });
 
 test("buildTextureUvPrompt omits Image 2 without a concept", () => {

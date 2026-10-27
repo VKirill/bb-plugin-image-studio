@@ -330,12 +330,22 @@ def ensure_uv_map_node(mat, uv_name):
             return
 
 
+MARKER_GREY = (0.706, 0.706, 0.706)
+MARKER_GREY_HEX = "#b4b4b4"
+
+
 def flat_materials(ob, sample_uv_name):
     parts = []
     me = ob.data
     if not me.materials:
         me.materials.append(bpy.data.materials.new("Part_0"))
     me.uv_layers.active = me.uv_layers[UV_LAYER]
+    untextured_count = 0
+    for slot in me.materials:
+        mat = slot
+        if mat is None or not material_has_texture(mat):
+            untextured_count += 1
+    single_marker = len(me.materials) == 1 and untextured_count == 1
     for i, slot in enumerate(me.materials):
         if slot is None:
             slot = bpy.data.materials.new(f"Part_{i}")
@@ -344,7 +354,7 @@ def flat_materials(ob, sample_uv_name):
         if material_has_texture(mat):
             ensure_uv_map_node(mat, sample_uv_name)
             name = mat.name if mat.name else f"part_{i + 1}"
-            parts.append({"material": mat.name, "part": name, "color": "textured"})
+            parts.append({"material": mat.name, "part": name, "color": "textured", "marker": False})
             continue
         mat.use_nodes = True
         nt = mat.node_tree
@@ -354,15 +364,19 @@ def flat_materials(ob, sample_uv_name):
         bsdf = nt.nodes.new("ShaderNodeBsdfPrincipled")
         out = nt.nodes.get("Material Output") or nt.nodes.new("ShaderNodeOutputMaterial")
         nt.links.new(bsdf.outputs["BSDF"], out.inputs["Surface"])
-        rgb = DISTINCT_COLORS[i % len(DISTINCT_COLORS)]
+        if single_marker:
+            rgb = MARKER_GREY
+            hex_c = MARKER_GREY_HEX
+        else:
+            rgb = DISTINCT_COLORS[i % len(DISTINCT_COLORS)]
+            hex_c = "#{:02x}{:02x}{:02x}".format(int(rgb[0] * 255), int(rgb[1] * 255), int(rgb[2] * 255))
         bsdf.inputs["Base Color"].default_value = (*rgb, 1.0)
         bsdf.inputs["Roughness"].default_value = 0.85
         uv = nt.nodes.new("ShaderNodeUVMap")
         uv.uv_map = UV_LAYER
         uv.location = (-400, 0)
         name = mat.name if mat.name and not mat.name.startswith("Material") else f"part_{i + 1}"
-        hex_c = "#{:02x}{:02x}{:02x}".format(int(rgb[0] * 255), int(rgb[1] * 255), int(rgb[2] * 255))
-        parts.append({"material": mat.name, "part": name, "color": hex_c})
+        parts.append({"material": mat.name, "part": name, "color": hex_c, "marker": True})
     return parts
 
 

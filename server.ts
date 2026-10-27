@@ -2053,13 +2053,14 @@ export default async function plugin(bb: BbPluginApi) {
       }
       await runBlenderOnHost(input.hostId, prepArgs, input.cwd);
       const partsJson = JSON.parse((await readHostBytes(join(runRel, "parts.json"), input.cwd, input.hostId)).toString("utf8")) as {
-        parts: Array<{ material: string; part: string; color: string }>;
+        parts: Array<{ material: string; part: string; color: string; marker?: boolean }>;
       };
       const partList = mergeModelParts(partsJson.parts, input.parts);
       const mergedPartsFile = partsJson.parts.map((row, index) => ({
         material: row.material,
         part: partList[index]?.part ?? row.part,
         color: row.color,
+        marker: row.marker,
       }));
       await writeHostBytes(join(runRel, "parts.json"), input.cwd, input.hostId, Buffer.from(JSON.stringify({ parts: mergedPartsFile }, null, 2)));
       const prepareMeta = JSON.parse((await readHostBytes(join(runRel, "prepare.json"), input.cwd, input.hostId)).toString("utf8")) as {
