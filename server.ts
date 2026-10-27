@@ -128,8 +128,12 @@ import {
   MODEL_TEXTURE_SIZES,
   buildTextureUvPrompt,
   cutAndDilate,
+  cutConcept,
   DEFAULT_DILATE_PX,
   mergeModelParts,
+  MODEL_CONCEPT_VIEWS,
+  subjectFromFile,
+  type ModelConceptView,
   type ModelMode,
   type ModelPartsParam,
   type ModelTextureSize,
@@ -168,6 +172,7 @@ const modelPartsSchema = z.union([
   z.record(z.string(), z.string()),
   z.array(z.object({ material: z.string().min(1), part: z.string().min(1) }).strict()),
 ]);
+const modelConceptViewSchema = z.enum(MODEL_CONCEPT_VIEWS);
 /** One-time move of the GUI and Characters projects into Roblox games. */
 const GAMES_MIGRATED_KEY = "roblox-games-migrated";
 const guiResultSchema = z.object({
@@ -1852,6 +1857,10 @@ export default async function plugin(bb: BbPluginApi) {
     images?: string[];
     size?: ModelTextureSize;
     variants?: number;
+    subject?: string;
+    conceptNote?: string;
+    projectConcept?: boolean;
+    conceptView?: ModelConceptView;
     cwd?: string;
     hostId?: string;
     originLabel?: string;
@@ -1882,15 +1891,28 @@ export default async function plugin(bb: BbPluginApi) {
     const extra = (input.images ?? []).slice(0, 2);
     const hasConcept = extra.length >= 1;
     const hasStyle = extra.length >= 2;
+    const projectConcept = hasConcept ? (input.projectConcept ?? true) : false;
     const errors: string[] = [];
     const takes: ModelTakeManifest[] = [];
     const run = randomUUID().slice(0, 8);
     const runRel = join("image-studio", "model", slugify(style.name, "model"), run);
     const runAbs = join(input.cwd, runRel);
+    let conceptProjUri: string | undefined;
 
     try {
       const prepArgs = ["prepare", modelPath, runAbs, "--size", String(size)];
       if (input.object) prepArgs.push("--object", input.object);
+      if (hasConcept && projectConcept && extra[0]) {
+        const [conceptUri] = await sourceDataUris([extra[0]], input.projectId, input.cwd, input.hostId);
+        if (conceptUri) {
+          const conceptBytes = Buffer.from(conceptUri.slice(conceptUri.indexOf(",") + 1), "base64");
+          const cut = cutConcept(await decodeRgba(conceptBytes));
+          const conceptProjBytes = await encodePng(cut);
+          await writeHostBytes(join(runRel, "concept_proj.png"), input.cwd, input.hostId, conceptProjBytes);
+          prepArgs.push("--concept", join(runAbs, "concept_proj.png"), "--concept-view", input.conceptView ?? "front");
+          conceptProjUri = `data:image/png;base64,${conceptProjBytes.toString("base64")}`;
+        }
+      }
       await runBlenderOnHost(input.hostId, prepArgs, input.cwd);
       const partsJson = JSON.parse((await readHostBytes(join(runRel, "parts.json"), input.cwd, input.hostId)).toString("utf8")) as {
         parts: Array<{ material: string; part: string; color: string }>;
@@ -1910,12 +1932,19 @@ export default async function plugin(bb: BbPluginApi) {
       const maskBytes = await readHostBytes(join(runRel, "mask.png"), input.cwd, input.hostId);
       const guideUri = `data:image/png;base64,${guideBytes.toString("base64")}`;
       const composed = buildTextureUvPrompt({
+        subject: input.subject?.trim() || subjectFromFile(modelPath),
         parts: partList,
-        style: [input.prompt.trim(), styleLine].filter(Boolean).join("; "),
+        projected: projectConcept,
         hasConcept,
+        conceptNote: input.conceptNote,
         hasStyle,
+        task: input.prompt.trim(),
+        theme: styleLine,
       });
       const userUris = await sourceDataUris(extra, input.projectId, input.cwd, input.hostId);
+      const museLead = [guideUri];
+      if (hasConcept) museLead.push(conceptProjUri ?? userUris[0]!);
+      if (hasStyle) museLead.push(userUris[hasConcept ? 1 : 0]!);
       const blendBytes = await readHostBytes(join(runRel, "model.blend"), input.cwd, input.hostId);
       const prepareBytes = await readHostBytes(join(runRel, "prepare.json"), input.cwd, input.hostId);
 
@@ -1933,7 +1962,7 @@ export default async function plugin(bb: BbPluginApi) {
             model: MODEL_MUSE,
             gateway: "fal",
             aspectRatio: "1:1",
-            leadUris: [guideUri, ...userUris],
+            leadUris: museLead,
             cwd: input.cwd,
             hostId: input.hostId,
           });
@@ -3242,6 +3271,10 @@ export default async function plugin(bb: BbPluginApi) {
       images: z.array(z.string().min(1)).max(2).optional(),
       size: modelTextureSizeSchema.optional(),
       variants: z.number().int().min(1).max(MAX_VARIANTS).optional(),
+      subject: z.string().max(120).optional(),
+      conceptNote: z.string().max(500).optional(),
+      projectConcept: z.boolean().optional(),
+      conceptView: modelConceptViewSchema.optional(),
       project: z.string().optional(),
     }),
     async execute(input, ctx) {
@@ -3257,6 +3290,10 @@ export default async function plugin(bb: BbPluginApi) {
           images: input.images,
           size: input.size,
           variants: input.variants,
+          subject: input.subject,
+          conceptNote: input.conceptNote,
+          projectConcept: input.projectConcept,
+          conceptView: input.conceptView,
           ...(await threadFolder(ctx.threadId, ctx.projectId || null)),
         });
         const text = modelSummary(run);

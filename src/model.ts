@@ -1,3 +1,4 @@
+import { basename } from "node:path";
 import type { Rgba } from "./image-io.ts";
 
 export const MODEL_MODES = ["texture-uv", "blueprint"] as const;
@@ -34,24 +35,137 @@ export function mergeModelParts(
   }));
 }
 
+export const MODEL_CONCEPT_VIEWS = ["front", "back", "left", "right"] as const;
+export type ModelConceptView = (typeof MODEL_CONCEPT_VIEWS)[number];
+
+/** `fire-mop.fbx` → `fire mop`. */
+export function subjectFromFile(path: string): string {
+  const base = basename(path.trim());
+  const stem = base.includes(".") ? base.slice(0, base.lastIndexOf(".")) : base;
+  return stem.replace(/[-_]+/g, " ").trim() || "model";
+}
+
+function medianChannel(values: number[]): number {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0 ? Math.round((sorted[mid - 1]! + sorted[mid]!) / 2) : sorted[mid]!;
+}
+
+/** Crop to the object's alpha box; fill the background with the object's main colour (median of opaque pixels). */
+export function cutConcept(image: Rgba, alphaThreshold = 12): Rgba {
+  const { width, height, data } = image;
+  const corners = [
+    [0, 0],
+    [width - 1, 0],
+    [0, height - 1],
+    [width - 1, height - 1],
+  ];
+  const bg = { r: 0, g: 0, b: 0 };
+  for (const [cx, cy] of corners) {
+    const p = (cy * width + cx) * 4;
+    bg.r += data[p]!;
+    bg.g += data[p + 1]!;
+    bg.b += data[p + 2]!;
+  }
+  bg.r = Math.round(bg.r / corners.length);
+  bg.g = Math.round(bg.g / corners.length);
+  bg.b = Math.round(bg.b / corners.length);
+
+  let minX = width;
+  let minY = height;
+  let maxX = -1;
+  let maxY = -1;
+  const rs: number[] = [];
+  const gs: number[] = [];
+  const bs: number[] = [];
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const p = (y * width + x) * 4;
+      const a = data[p + 3]!;
+      const dr = Math.abs(data[p]! - bg.r);
+      const dg = Math.abs(data[p + 1]! - bg.g);
+      const db = Math.abs(data[p + 2]! - bg.b);
+      const keyed = a > alphaThreshold && dr + dg + db > 40;
+      if (!keyed) continue;
+      minX = Math.min(minX, x);
+      minY = Math.min(minY, y);
+      maxX = Math.max(maxX, x);
+      maxY = Math.max(maxY, y);
+      rs.push(data[p]!);
+      gs.push(data[p + 1]!);
+      bs.push(data[p + 2]!);
+    }
+  }
+  if (maxX < minX || maxY < minY) return image;
+  const fill = { r: medianChannel(rs), g: medianChannel(gs), b: medianChannel(bs) };
+  const cw = maxX - minX + 1;
+  const ch = maxY - minY + 1;
+  const out = new Uint8Array(cw * ch * 4);
+  for (let y = 0; y < ch; y++) {
+    for (let x = 0; x < cw; x++) {
+      const sx = minX + x;
+      const sy = minY + y;
+      const sp = (sy * width + sx) * 4;
+      const dp = (y * cw + x) * 4;
+      const a = data[sp + 3]!;
+      const dr = Math.abs(data[sp]! - bg.r);
+      const dg = Math.abs(data[sp + 1]! - bg.g);
+      const db = Math.abs(data[sp + 2]! - bg.b);
+      const keyed = a > alphaThreshold && dr + dg + db > 40;
+      if (keyed) {
+        out[dp] = data[sp]!;
+        out[dp + 1] = data[sp + 1]!;
+        out[dp + 2] = data[sp + 2]!;
+        out[dp + 3] = 255;
+      } else {
+        out[dp] = fill.r;
+        out[dp + 1] = fill.g;
+        out[dp + 2] = fill.b;
+        out[dp + 3] = 255;
+      }
+    }
+  }
+  return { data: out, width: cw, height: ch };
+}
+
 export function buildTextureUvPrompt(input: {
+  subject: string;
   parts: TextureUvPart[];
-  style: string;
-  effects?: string;
+  projected: boolean;
   hasConcept: boolean;
+  conceptNote?: string;
   hasStyle: boolean;
+  task: string;
+  theme?: string;
 }): string {
   const colorList = input.parts.map((p) => `${p.color} = ${p.part}`).join(", ");
-  let look = "";
-  if (input.hasConcept && input.hasStyle) look = ", in the look of image 2 and image 3";
-  else if (input.hasConcept || input.hasStyle) look = ", in the look of image 2";
-  const effects = input.effects?.trim() ? ` ${input.effects.trim()}` : "";
-  const style = input.style.trim() || "a cohesive hand-painted game texture";
-  return (
-    `Texture atlas for a 3D game model. Image 1 is the UV layout: every shape is one piece of the model surface, its flat color tells the material (${colorList}); the top of each shape is the top of the model. ` +
-    `Repaint EVERY shape in place with ${style}${look}.${effects} ` +
-    `Keep every shape exactly where it is with the same outline, size and base color; no outlines or frames; black background stays black; no text.`
+  const projectedClause = input.projected
+    ? "; colors and shading were projected from the design, so faces, eyes and patterns are already where they belong"
+    : "";
+  const layout =
+    `Image 1 is the LAYOUT: a texture atlas (UV map) of a 3D ${input.subject} laid flat on black. ` +
+    `Each separate shape is one piece of the model surface; flat colors mark the parts (${colorList}); ` +
+    `the top of each shape is the top of the model${projectedClause}.`;
+  const lines = [layout];
+  if (input.hasConcept) {
+    const note = input.conceptNote?.trim() || "the design of this object";
+    lines.push(`Image 2 is the STYLE AND DESIGN REFERENCE: ${note}.`);
+  }
+  if (input.hasStyle) {
+    lines.push("Image 3 is the STYLE SHEET: overall colour and material finish for the repaint.");
+  }
+  const taskBody = [input.task.trim(), input.theme?.trim()].filter(Boolean).join("; ");
+  const taskLine = input.hasConcept
+    ? `Task: repaint image 1 as a final hand-painted game texture in the look of image 2: ${taskBody || "a cohesive hand-painted game texture"}.`
+    : `Task: repaint image 1 as a final hand-painted game texture: ${taskBody || "a cohesive hand-painted game texture"}.`;
+  lines.push(taskLine);
+  const faceClause = input.projected ? "faces, eyes and patterns only where they already are, never add new ones; " : "";
+  lines.push(
+    `Must not change: the position, outline and size of every shape; ${faceClause}the black background; the base colors.`,
   );
+  lines.push("Do not add outlines or frames around shapes, text or any new objects.");
+  return lines.join("\n");
 }
 
 function maskAlpha(mask: Rgba, x: number, y: number, threshold = 8): boolean {
