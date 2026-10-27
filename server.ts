@@ -149,16 +149,15 @@ import {
   type ModelTextureSize,
 } from "./src/model.ts";
 import {
+  assembleBlueprint,
   blueprintAspect,
   buildBlueprintPrompt,
   buildSideOnlyPrompt,
   cutBlueprint,
   defaultBlueprintViews,
   findSoftAnchors,
+  frontReferencePlate,
   normalizeBlueprintStyle,
-  replaceSideView,
-  SIDE_COPY_THRESHOLD,
-  silhouetteSimilarity,
   viewsJsonFromCut,
   type BlueprintStyle,
   type BlueprintViewName,
@@ -218,6 +217,7 @@ const imageStudioModelParamsSchema = z
     style: blueprintStyleSchema.optional(),
     soft: z.array(z.string().min(1)).optional(),
     rigid: z.array(z.string().min(1)).optional(),
+    sideSeparate: z.boolean().optional(),
     project: z.string().optional(),
   })
   .superRefine((input, ctx) => {
@@ -337,6 +337,7 @@ export const rpcContract = defineRpcContract({
         style: blueprintStyleSchema.optional(),
         soft: z.array(z.string().min(1)).optional(),
         rigid: z.array(z.string().min(1)).optional(),
+        sideSeparate: z.boolean().optional(),
       })
       .superRefine((input, ctx) => {
         if (input.mode === "texture-uv" && !input.model?.trim()) {
@@ -2021,7 +2022,8 @@ export default async function plugin(bb: BbPluginApi) {
     });
     const game = await gameOf(style);
     const merged = game ? mergeGameStyle(style, game) : { style, owners: style.refs.map(() => style.id) };
-    const styleLine = [merged.style.theme, merged.style.notes].filter(Boolean).join(". ");
+    const gameTheme = merged.style.theme.trim();
+    const gameArtStyle = [merged.style.notes.trim(), merged.style.tags.join(", ")].filter(Boolean).join("; ");
     const size = input.size ?? 1024;
     if (!MODEL_TEXTURE_SIZES.includes(size)) throw new Error(`size must be ${MODEL_TEXTURE_SIZES.join(" or ")}.`);
     const variants = Math.max(1, Math.min(4, input.variants ?? 1));
@@ -2078,7 +2080,8 @@ export default async function plugin(bb: BbPluginApi) {
         conceptNote: input.conceptNote,
         hasStyle,
         task: input.prompt.trim(),
-        theme: styleLine,
+        theme: gameTheme || undefined,
+        artStyle: gameArtStyle || undefined,
       });
       const userUris = await sourceDataUris(extra, input.projectId, input.cwd, input.hostId);
       const museLead = [guideUri];
@@ -2167,6 +2170,7 @@ export default async function plugin(bb: BbPluginApi) {
     files: {
       sheet: string;
       views: string;
+      "side-sheet"?: string;
       front?: string;
       side?: string;
       back?: string;
@@ -2183,6 +2187,7 @@ export default async function plugin(bb: BbPluginApi) {
     subject?: string;
     soft?: string[];
     rigid?: string[];
+    sideSeparate?: boolean;
     cwd?: string;
     hostId?: string;
     originLabel?: string;
@@ -2227,36 +2232,50 @@ export default async function plugin(bb: BbPluginApi) {
       });
       const sheetRgba = await decodeRgba(rendered.original);
       await writeHostBytes(join(blueprintRel, "sheet.png"), input.cwd, input.hostId, rendered.original);
-      let cut = cutBlueprint(sheetRgba, viewNames);
-      let sideRegenerated = false;
-      const frontView = cut.views.find((v) => v.name === "front");
-      const sideView = cut.views.find((v) => v.name === "side");
-      if (frontView && sideView && silhouetteSimilarity(frontView.image, sideView.image) > SIDE_COPY_THRESHOLD) {
-        const sidePrompt = buildSideOnlyPrompt({ subject, style: clayStyle, softParts });
-        const sideRendered = await renderImage({
-          projectId: input.projectId,
-          prompt: sidePrompt,
-          rawPrompt: true,
-          recordPrompt: sidePrompt,
-          model: MODEL_MUSE,
-          gateway: "fal",
-          aspectRatio: "16:9",
-          leadUris: [conceptUri],
-          cwd: input.cwd,
-          hostId: input.hostId,
-        });
-        const sideSheet = await decodeRgba(sideRendered.original);
-        const sideCut = cutBlueprint(sideSheet, ["side"]);
-        const sideRaw = sideCut.rawViews[0]?.image;
-        if (sideRaw) {
-          cut = replaceSideView(cut, sideRaw);
-          sideRegenerated = true;
+      const sheetCut = cutBlueprint(sheetRgba, viewNames);
+      const wantsSide = viewNames.includes("side");
+      const sideSeparate = input.sideSeparate ?? true;
+      let sideCut: ReturnType<typeof cutBlueprint> | null = null;
+      let sideSheetBytes: Buffer | null = null;
+      if (wantsSide && sideSeparate) {
+        const frontRaw = sheetCut.rawViews.find((v) => v.name === "front")?.image;
+        if (!frontRaw) {
+          errors.push("side regeneration: no front view on the sheet to reference");
         } else {
-          errors.push("side regeneration: could not cut the new side sheet");
+          const frontPlate = frontReferencePlate(sheetRgba, frontRaw);
+          const frontPlateBytes = await encodePng(frontPlate);
+          const frontPlateUri = `data:image/png;base64,${frontPlateBytes.toString("base64")}`;
+          const sidePrompt = buildSideOnlyPrompt({ subject, style: clayStyle, softParts });
+          const sideRendered = await renderImage({
+            projectId: input.projectId,
+            prompt: sidePrompt,
+            rawPrompt: true,
+            recordPrompt: sidePrompt,
+            model: MODEL_MUSE,
+            gateway: "fal",
+            aspectRatio: "16:9",
+            leadUris: [conceptUri, frontPlateUri],
+            cwd: input.cwd,
+            hostId: input.hostId,
+          });
+          sideSheetBytes = sideRendered.original;
+          const sideSheet = await decodeRgba(sideRendered.original);
+          sideCut = cutBlueprint(sideSheet, ["side"]);
         }
       }
+      const assembled = assembleBlueprint(sheetCut, sideCut, { sideSeparate: wantsSide && sideSeparate });
+      const cut = assembled.cut;
       const { parts, warnings: softWarnings } = findSoftAnchors(cut.views, softParts, rigidParts);
-      const viewsJson = viewsJsonFromCut(cut, parts, sideRegenerated, softWarnings);
+      const viewsJson = viewsJsonFromCut(
+        cut,
+        parts,
+        assembled.sideRegenerated,
+        [...assembled.warnings, ...softWarnings],
+        assembled.sheetSideSimilarity,
+      );
+      if (sideSheetBytes) {
+        await writeHostBytes(join(blueprintRel, "side-sheet.png"), input.cwd, input.hostId, sideSheetBytes);
+      }
       for (const v of cut.views) {
         const bytes = await encodePng(v.image);
         await writeHostBytes(join(blueprintRel, `${v.name}.png`), input.cwd, input.hostId, bytes);
@@ -2270,6 +2289,7 @@ export default async function plugin(bb: BbPluginApi) {
       const files: ModelBlueprintManifest["files"] = {
         sheet: join(blueprintRel, "sheet.png"),
         views: join(blueprintRel, "views.json"),
+        ...(sideSheetBytes ? { "side-sheet": join(blueprintRel, "side-sheet.png") } : {}),
       };
       for (const name of viewNames) files[name] = join(blueprintRel, `${name}.png`);
       const blueprint = { mode: "blueprint" as const, subject, style: clayStyle, views: viewNames, dir: blueprintRel, files };
@@ -2818,6 +2838,7 @@ export default async function plugin(bb: BbPluginApi) {
         subject: input.subject,
         soft: input.soft,
         rigid: input.rigid,
+        sideSeparate: input.sideSeparate,
         cwd,
         hostId,
         originLabel: source.name,
@@ -3539,6 +3560,7 @@ export default async function plugin(bb: BbPluginApi) {
             subject: parsed.subject,
             soft: parsed.soft,
             rigid: parsed.rigid,
+            sideSeparate: parsed.sideSeparate,
             cwd,
             hostId,
             originLabel: source.name,
@@ -3664,7 +3686,7 @@ export default async function plugin(bb: BbPluginApi) {
     description:
       "Game model textures and modeling blueprints (Muse Image). Mode texture-uv: Blender bakes a colour guide on the project host, Muse repaints each UV island, the result is applied back with a before/after preview. Mode blueprint: orthographic clay wireframe views cut from one sheet for a 3D artist (decorative reference, not a mesh). Runs at once, no Send form.",
     instructions:
-      "texture-uv: pass mode texture-uv, the model path, and a style prompt. Optional images (up to 2): concept art, then style reference. Output: image-studio/model/<project>/<take>/ with color.png, guide.png, mask.png, preview.png, parts.json, model.blend and manifest.json. blueprint: pass mode blueprint and images[0] as concept; optional views (front, side, back, top), style clay+wire or clean line, soft (dangling parts), rigid, subject. Output: image-studio/model/<project>/<run>/blueprint/ with sheet.png, one PNG per view, and views.json (anchors for soft parts). The side view is redrawn alone when it copies the front. In a Roblox game folder the project inherits the game's look like GUI and Characters.",
+      "texture-uv: pass mode texture-uv, the model path, and a style prompt. Optional images (up to 2): concept art, then style reference. Output: image-studio/model/<project>/<take>/ with color.png, guide.png, mask.png, preview.png, parts.json, model.blend and manifest.json. blueprint: pass mode blueprint and images[0] as concept; optional views (front, side, back, top), style clay+wire or clean line, soft (dangling parts), rigid, subject, sideSeparate (default true). Output: image-studio/model/<project>/<run>/blueprint/ with sheet.png, side-sheet.png when side is drawn separately, one PNG per view, and views.json (anchors for soft parts, sheetSideSimilarity). By default the side view is always a second Muse call (90° profile with the cut front as image 2). Set sideSeparate false to keep the side from the main sheet only. In a Roblox game folder the project inherits the game's look like GUI and Characters.",
     presentation: {
       label: { pending: "Working on model image", completed: "Finished model image" },
       icon: { glyph: "Palette" },
@@ -3683,6 +3705,7 @@ export default async function plugin(bb: BbPluginApi) {
             subject: input.subject,
             soft: input.soft,
             rigid: input.rigid,
+            sideSeparate: input.sideSeparate,
             ...folder,
           });
           const text = blueprintSummary(run);

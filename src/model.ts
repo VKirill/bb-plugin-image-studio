@@ -133,6 +133,7 @@ export const MODEL_CLI_REST_SKIP_FLAGS = [
   "--soft",
   "--rigid",
   "--sheet-style",
+  "--side-separate",
   "--project",
   "--style",
   "--prompt",
@@ -201,6 +202,7 @@ export type ModelCliBlueprint = {
   subject?: string;
   soft?: string[];
   rigid?: string[];
+  sideSeparate?: boolean;
   projectStyleId?: string;
 };
 
@@ -225,6 +227,7 @@ export function parseModelGenerateCli(argv: readonly string[]): ModelCliTextureU
     const rigidFlag = cliFlag(argv, "--rigid");
     const rigid = rigidFlag ? rigidFlag.split(/[;,]/).map((part) => part.trim()).filter(Boolean) : undefined;
     const prompt = cliFlag(argv, "--prompt") ?? promptTail.replace(/^model\s*/, "");
+    const sideSeparateRaw = cliFlag(argv, "--side-separate");
     return {
       mode: "blueprint",
       conceptImage,
@@ -234,6 +237,7 @@ export function parseModelGenerateCli(argv: readonly string[]): ModelCliTextureU
       subject: cliFlag(argv, "--subject"),
       soft,
       rigid,
+      sideSeparate: sideSeparateRaw === undefined ? undefined : parseOptionalBoolFlag(sideSeparateRaw),
       projectStyleId,
     };
   }
@@ -390,6 +394,7 @@ export function buildTextureUvPrompt(input: {
   hasStyle: boolean;
   task: string;
   theme?: string;
+  artStyle?: string;
 }): string {
   const hasMarker = input.parts.some((p) => p.marker);
   const locksBaseColors = input.parts.some((p) => p.color === "textured" || !p.marker);
@@ -417,11 +422,17 @@ export function buildTextureUvPrompt(input: {
   const markerTask = hasMarker
     ? " The flat marker colors only tell the parts apart: paint each part in its real material colours."
     : "";
-  const taskBody = [input.task.trim(), input.theme?.trim()].filter(Boolean).join("; ");
+  const taskBody = input.task.trim() || "a cohesive hand-painted game texture";
   const taskLine = input.hasConcept
-    ? `Task: repaint image 1 as a final hand-painted game texture in the look of image 2: ${taskBody || "a cohesive hand-painted game texture"}.${markerTask}`
-    : `Task: repaint image 1 as a final hand-painted game texture: ${taskBody || "a cohesive hand-painted game texture"}.${markerTask}`;
+    ? `Task: repaint image 1 as a final hand-painted game texture in the look of image 2: ${taskBody}.${markerTask}`
+    : `Task: repaint image 1 as a final hand-painted game texture: ${taskBody}.${markerTask}`;
   lines.push(taskLine);
+  const gameLookParts = [input.theme?.trim(), input.artStyle?.trim()].filter(Boolean);
+  if (gameLookParts.length > 0) {
+    lines.push(
+      `Game look (materials and palette only; paint flat, evenly lit albedo with no coloured light, no cast shadows and no outlines): ${gameLookParts.join("; ")}.`,
+    );
+  }
   const faceClause = input.projected ? "faces, eyes and patterns only where they already are, never add new ones; " : "";
   const baseColorsClause = locksBaseColors ? "; the base colors" : "";
   lines.push(

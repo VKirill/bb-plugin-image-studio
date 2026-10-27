@@ -79,13 +79,16 @@ test("buildTextureUvPrompt follows the TZ layout with concept and projection", (
     conceptNote: "a burning mop with charred rags",
     hasStyle: true,
     task: "scorch only at the bottom ends of the rags",
-    theme: "lava arena stylized props",
+    theme: "lava arena",
+    artStyle: "stylized props",
   });
   assert.match(prompt, /Image 1 is the LAYOUT/);
   assert.match(prompt, /projected from the design/);
   assert.match(prompt, /Image 2 is the STYLE AND DESIGN REFERENCE: a burning mop/);
   assert.match(prompt, /Image 3 is the STYLE SHEET/);
-  assert.match(prompt, /Task: repaint image 1 as a final hand-painted game texture in the look of image 2:/);
+  assert.match(prompt, /Task: repaint image 1 as a final hand-painted game texture in the look of image 2: scorch only at the bottom ends of the rags\./);
+  assert.match(prompt, /Game look \(materials and palette only/);
+  assert.match(prompt, /lava arena; stylized props/);
   assert.match(prompt, /Must not change:/);
   assert.match(prompt, /the base colors/);
   assert.match(prompt, /faces, eyes and patterns only where they already are/);

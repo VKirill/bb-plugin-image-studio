@@ -110,6 +110,7 @@ test("buildBlueprintPrompt and buildSideOnlyPrompt follow TZ 3.2 structure", () 
 
   const side = buildSideOnlyPrompt({ subject: "fire mop", style: "clean line", softParts: [] });
   assert.match(side, /DESIGN REFERENCE/);
+  assert.match(side, /Image 2 is the FRONT VIEW of this blueprint/);
   assert.match(side, /90° side profile/);
   assert.match(side, /Must not change:/);
   assert.doesNotMatch(side, /light BLUE clay/);
