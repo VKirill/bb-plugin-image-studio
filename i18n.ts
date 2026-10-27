@@ -293,6 +293,8 @@ const en = {
   robloxVariants: "Takes",
   robloxFrames: "Frames",
   robloxAspect: "Frame",
+  blenderPath: "Blender executable (texture-by-model)",
+  blenderPathHint: "Path on the project host, e.g. /Applications/Blender.app/Contents/MacOS/Blender",
 };
 
 export type I18nKey = keyof typeof en;
@@ -592,6 +594,8 @@ const ru: Record<I18nKey, string> = {
   robloxVariants: "Вариантов",
   robloxFrames: "Кадров",
   robloxAspect: "Кадр",
+  blenderPath: "Blender (текстура по модели)",
+  blenderPathHint: "Путь на хосте проекта, например /Applications/Blender.app/Contents/MacOS/Blender",
 };
 
 export type Locale = "en" | "ru";

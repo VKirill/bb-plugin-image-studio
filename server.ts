@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { chmod, mkdir, readFile, rm, unlink, writeFile } from "node:fs/promises";
-import { isAbsolute, join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { defineRpcContract, type BbPluginApi, type PluginRpcHandlers } from "@get-bb/plugin-sdk";
 import { z } from "zod";
 import {
@@ -63,13 +64,13 @@ import {
   elementsJob,
   findGuiStyle,
   guiStyleSchema,
+  parseGuiStyles,
   ideasJobs,
   keyGreen,
   kitJobs,
   originName,
   originProject,
   parseElementList,
-  parseGuiStyles,
   screenJob,
   sheetLayout,
   slugify,
@@ -121,8 +122,22 @@ import {
   resolvePickerSelection,
   type LastChoice,
 } from "./src/formats.js";
+import { hostContract } from "./host.ts";
+import {
+  MODEL_MODES,
+  MODEL_MUSE,
+  MODEL_TEXTURE_SIZES,
+  buildTextureUvPrompt,
+  cutAndDilate,
+  DEFAULT_DILATE_PX,
+  type ModelMode,
+  type ModelTextureSize,
+} from "./src/model.ts";
 
 const ENV_CATALOG_PLUGIN_ID = "env-catalog";
+const DEFAULT_BLENDER_PATH = "/Applications/Blender.app/Contents/MacOS/Blender";
+const pluginDir = dirname(fileURLToPath(import.meta.url));
+const blenderScriptPath = join(pluginDir, "blender", "texture_uv.py");
 const SETTINGS_KEY = "settings";
 /** A 480px WebP thumbnail stays far below this; a bigger cached file is a stale original. */
 const THUMB_MAX_BYTES = 400 * 1024;
@@ -144,10 +159,12 @@ const guiModeSchema = z.enum(GUI_MODES);
 const characterModeSchema = z.enum(CHARACTER_MODES);
 const bodySchema = z.enum(BODY_TYPES);
 const robloxModeSchema = z.enum(ROBLOX_MODES);
-const sectionSchema = z.enum(["gui", "characters", "roblox"]);
+const sectionSchema = z.enum(["gui", "characters", "roblox", "model"]);
 type Section = z.infer<typeof sectionSchema>;
 /** "GUI project" / "Characters project": the word the CLI and the tools use for a section. */
-const SECTION_WORD: Record<Section, string> = { gui: "GUI", characters: "Characters", roblox: "Roblox" };
+const SECTION_WORD: Record<Section, string> = { gui: "GUI", characters: "Characters", roblox: "Roblox", model: "Model" };
+const modelModeSchema = z.enum(MODEL_MODES);
+const modelTextureSizeSchema = z.union([z.literal(1024), z.literal(2048)]);
 /** One-time move of the GUI and Characters projects into Roblox games. */
 const GAMES_MIGRATED_KEY = "roblox-games-migrated";
 const guiResultSchema = z.object({
@@ -381,7 +398,7 @@ function flags(argv: string[], name: string): string[] {
 }
 
 function restAfter(argv: string[], command: string): string {
-  const skip = new Set(["--model", "--gateway", "--profile", "--image", "--aspect", "--resolution", "--refs", "--seed", "--count", "--batch", "--parallel", "--slots", "--json", "--mode", "--style", "--project", "--rename", "--name", "--theme", "--tags", "--palette", "--notes", "--role", "--sheet", "--elements", "--items", "--variants", "--frames"]);
+  const skip = new Set(["--model", "--gateway", "--profile", "--image", "--aspect", "--resolution", "--refs", "--seed", "--count", "--batch", "--parallel", "--slots", "--json", "--mode", "--style", "--project", "--rename", "--name", "--theme", "--tags", "--palette", "--notes", "--role", "--sheet", "--elements", "--items", "--variants", "--frames", "--object", "--size", "--file"]);
   const out: string[] = [];
   for (let i = 0; i < argv.length; i++) {
     const token = argv[i]!;
@@ -399,6 +416,7 @@ function restAfter(argv: string[], command: string): string {
 export default async function plugin(bb: BbPluginApi) {
   bb.log.info("loaded");
 
+  const blenderHost = bb.hosts.experimental_client({ contract: hostContract });
   const rootDir = join(bb.server.experimental_dataDir, "plugins", bb.pluginId);
   const secretsFile = join(rootDir, "secrets.json");
 
@@ -1550,12 +1568,13 @@ export default async function plugin(bb: BbPluginApi) {
       });
     }
     if (input.styleId) {
-      const found = findGuiStyle(inSection(await readGuiStyles()), input.styleId, input.origin);
-      if (!found) throw new Error(`No ${SECTION_WORD[section]} project "${input.styleId}". Run bb image-studio ${section === "gui" ? "gui" : "character"} projects.`);
-      return found;
+      const found = findGuiStyle((inSection(await readGuiStyles())), input.styleId, input.origin);
+      const sectionCli = section === "gui" ? "gui" : section === "roblox" ? "roblox" : section === "model" ? "model" : "character";
+      if (!found) throw new Error(`No ${SECTION_WORD[section]} project "${input.styleId}". Run bb image-studio ${sectionCli} projects.`);
+      return (await readGuiStyles()).find((item) => item.id === found.id) ?? (found as GuiStyle);
     }
     return withGuiStyles((styles) => {
-      const bound = originProject(inSection(styles), input.origin);
+      const bound = originProject((inSection(styles)), input.origin);
       if (bound) return bound;
       const created = blankProject(
         section,
@@ -1564,7 +1583,7 @@ export default async function plugin(bb: BbPluginApi) {
         input.name || (input.origin === "unscoped" ? "" : originName(input.origin)) || `${SECTION_WORD[section]} ${inSection(styles).length + 1}`,
       );
       // A folder that has a Roblox game: its GUI and Characters belong to that game.
-      if (section !== "roblox") created.gameId = originProject(styles.filter((style) => style.section === "roblox"), input.origin)?.id ?? "";
+      if (section !== "roblox") created.gameId = originProject((styles.filter((style) => style.section === "roblox")), input.origin)?.id ?? "";
       styles.push(created);
       return created;
     });
@@ -1600,7 +1619,7 @@ export default async function plugin(bb: BbPluginApi) {
   async function migrateGames(): Promise<void> {
     if (await bb.storage.kv.get<boolean>(GAMES_MIGRATED_KEY)) return;
     await lockedStyles((styles) => {
-      const plan = planGameMigration(styles, new Date().toISOString(), () => randomUUID().slice(0, 8));
+      const plan = planGameMigration((styles), new Date().toISOString(), () => randomUUID().slice(0, 8));
       styles.push(...plan.games);
       for (const style of styles) if (plan.links[style.id]) style.gameId = plan.links[style.id]!;
     });
@@ -1638,7 +1657,10 @@ export default async function plugin(bb: BbPluginApi) {
     const style = await resolveGuiProject({ styleId: input.styleId, origin, projectId: input.projectId, name: input.originLabel, section, gameId: input.gameId });
     const game = await gameOf(style);
     // A game's GUI and Characters see the game's theme, art style and approved art.
-    const merged = section !== "roblox" && game ? mergeGameStyle(style, game) : { style, owners: style.refs.map(() => style.id) };
+    const merged =
+      section !== "roblox" && game
+        ? mergeGameStyle(style, game)
+        : { style: style, owners: style.refs.map(() => style.id) };
     const run = randomUUID().slice(0, 8);
     const lead = await guiRefUris(merged.style, merged.owners);
     const extra = input.images ?? [];
@@ -1761,6 +1783,185 @@ export default async function plugin(bb: BbPluginApi) {
         ]
           .filter(Boolean)
           .join("\n"),
+      ),
+      ...run.errors.map((error) => `failed: ${error}`),
+    ].join("\n");
+  }
+
+  async function readHostBytes(path: string, cwd: string, hostId?: string): Promise<Buffer> {
+    const file = await bb.sdk.files.read({ path, rootPath: cwd, hostId });
+    return Buffer.from(file.content, file.contentEncoding === "base64" ? "base64" : "utf8");
+  }
+
+  async function writeHostBytes(path: string, cwd: string, hostId: string | undefined, bytes: Buffer): Promise<void> {
+    await bb.sdk.files.write({
+      path,
+      rootPath: cwd,
+      content: bytes.toString("base64"),
+      contentEncoding: "base64",
+      createParents: true,
+      hostId,
+    });
+  }
+
+  async function runBlenderOnHost(hostId: string, args: string[], cwd?: string): Promise<void> {
+    const settings = await readSettings();
+    const blenderPath = settings.blenderPath.trim() || DEFAULT_BLENDER_PATH;
+    try {
+      await blenderHost.call(
+        "blender",
+        { blenderPath, scriptPath: blenderScriptPath, args, cwd },
+        { hostId, timeoutMs: 12 * 60 * 1000 },
+      );
+    } catch (error) {
+      throw new Error(
+        `Could not run Blender (${describe(error)}). Set blenderPath in Image Studio settings (default ${DEFAULT_BLENDER_PATH}).`,
+      );
+    }
+  }
+
+  type ModelTakeManifest = {
+    mode: ModelMode;
+    model: string;
+    object: string;
+    uvLayer: string;
+    size: ModelTextureSize;
+    prompt: string;
+    files: {
+      color: string;
+      mask: string;
+      guide: string;
+      preview: string;
+      blend: string;
+      parts: string;
+      normal?: string;
+    };
+  };
+
+  async function runModelTextureUv(input: {
+    projectId: string | null;
+    styleId?: string;
+    mode: ModelMode;
+    model: string;
+    object?: string;
+    prompt: string;
+    images?: string[];
+    size?: ModelTextureSize;
+    variants?: number;
+    cwd?: string;
+    hostId?: string;
+    originLabel?: string;
+    gameId?: string;
+  }): Promise<{ takes: ModelTakeManifest[]; errors: string[]; style: GuiStyle }> {
+    if (input.mode === "blueprint") {
+      throw new Error("Mode blueprint is not implemented yet.");
+    }
+    if (!input.cwd || !input.hostId) {
+      throw new Error("Texture-by-model needs a project folder on a host with Blender installed.");
+    }
+    const modelPath = isAbsolute(input.model) ? input.model : join(input.cwd, input.model);
+    const origin = input.cwd ?? input.projectId ?? "unscoped";
+    const style = await resolveGuiProject({
+      styleId: input.styleId,
+      origin,
+      projectId: input.projectId,
+      name: input.originLabel,
+      section: "model",
+      gameId: input.gameId,
+    });
+    const game = await gameOf(style);
+    const merged = game
+      ? mergeGameStyle(style, game)
+      : { style: style, owners: style.refs.map(() => style.id) };
+    const styleLine = [merged.style.theme, merged.style.notes].filter(Boolean).join(". ");
+    const size = input.size ?? 1024;
+    if (!MODEL_TEXTURE_SIZES.includes(size)) throw new Error(`size must be ${MODEL_TEXTURE_SIZES.join(" or ")}.`);
+    const variants = Math.max(1, Math.min(4, input.variants ?? 1));
+    const extra = (input.images ?? []).slice(0, 2);
+    const hasConcept = extra.length >= 1;
+    const hasStyle = extra.length >= 2;
+    const errors: string[] = [];
+    const takes: ModelTakeManifest[] = [];
+    const run = randomUUID().slice(0, 8);
+
+    for (let v = 0; v < variants; v++) {
+      const take = v === 0 ? run : `${run}-${v + 1}`;
+      const relDir = join("image-studio", "model", slugify(style.name, "model"), take);
+      const workDir = join(input.cwd, relDir);
+      try {
+        const prepArgs = ["prepare", modelPath, workDir, "--size", String(size)];
+        if (input.object) prepArgs.push("--object", input.object);
+        await runBlenderOnHost(input.hostId, prepArgs, input.cwd);
+        const partsJson = JSON.parse((await readHostBytes(join(relDir, "parts.json"), input.cwd, input.hostId)).toString("utf8")) as {
+          parts: Array<{ part: string; color: string }>;
+        };
+        const prepareMeta = JSON.parse((await readHostBytes(join(relDir, "prepare.json"), input.cwd, input.hostId)).toString("utf8")) as {
+          object: string;
+          uvLayer: string;
+        };
+        const guideBytes = await readHostBytes(join(relDir, "guide.png"), input.cwd, input.hostId);
+        const maskBytes = await readHostBytes(join(relDir, "mask.png"), input.cwd, input.hostId);
+        const guideUri = `data:image/png;base64,${guideBytes.toString("base64")}`;
+        const partList = partsJson.parts.map((p) => ({ color: p.color, part: p.part }));
+        const composed = buildTextureUvPrompt({
+          parts: partList,
+          style: [input.prompt.trim(), styleLine].filter(Boolean).join("; "),
+          hasConcept,
+          hasStyle,
+        });
+        const userUris = await sourceDataUris(extra, input.projectId, input.cwd, input.hostId);
+        const rendered = await renderImage({
+          projectId: input.projectId,
+          prompt: composed,
+          rawPrompt: true,
+          recordPrompt: input.prompt.trim(),
+          model: MODEL_MUSE,
+          gateway: "fal",
+          aspectRatio: "1:1",
+          leadUris: [guideUri, ...userUris],
+          cwd: input.cwd,
+          hostId: input.hostId,
+        });
+        const painted = await decodeRgba(rendered.original);
+        const guideRgba = await decodeRgba(guideBytes);
+        const maskRgba = await decodeRgba(maskBytes);
+        const fitted = resize(painted, guideRgba.width, guideRgba.height);
+        const color = cutAndDilate(fitted, maskRgba, DEFAULT_DILATE_PX);
+        const colorBytes = await encodePng(color);
+        await writeHostBytes(join(relDir, "color.png"), input.cwd, input.hostId, colorBytes);
+        await runBlenderOnHost(input.hostId, ["apply", workDir, join(workDir, "color.png")], input.cwd);
+        const manifest: ModelTakeManifest = {
+          mode: "texture-uv",
+          model: modelPath,
+          object: prepareMeta.object,
+          uvLayer: prepareMeta.uvLayer,
+          size,
+          prompt: composed,
+          files: {
+            color: join(relDir, "color.png"),
+            mask: join(relDir, "mask.png"),
+            guide: join(relDir, "guide.png"),
+            preview: join(relDir, "preview.png"),
+            blend: join(relDir, "model.blend"),
+            parts: join(relDir, "parts.json"),
+          },
+        };
+        await writeHostBytes(join(relDir, "manifest.json"), input.cwd, input.hostId, Buffer.from(JSON.stringify(manifest, null, 2)));
+        takes.push(manifest);
+      } catch (error) {
+        errors.push(`take ${take}: ${describe(error)}`);
+      }
+    }
+    await withGuiStyle(style.id, () => undefined).catch(() => undefined);
+    return { takes, errors, style };
+  }
+
+  function modelSummary(run: { takes: ModelTakeManifest[]; errors: string[]; style: GuiStyle }): string {
+    return [
+      `Model project: ${run.style.name} (${run.style.id})`,
+      ...run.takes.map(
+        (take) =>
+          `texture-uv: ${take.files.color}\n  guide: ${take.files.guide}\n  mask: ${take.files.mask}\n  preview: ${take.files.preview}\n  manifest: ${join(dirname(take.files.color), "manifest.json")}`,
       ),
       ...run.errors.map((error) => `failed: ${error}`),
     ].join("\n");
@@ -1933,7 +2134,9 @@ export default async function plugin(bb: BbPluginApi) {
       profiles,
       generations,
       lastGenerate,
-      guiStyles: [...guiStyles].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
+      guiStyles: (guiStyles.filter((style) => style.section !== "model")).sort((a, b) =>
+        b.updatedAt.localeCompare(a.updatedAt),
+      ),
     };
   };
   const update_settings: RpcHandlers["update_settings"] = (patch) =>
@@ -1955,6 +2158,7 @@ export default async function plugin(bb: BbPluginApi) {
     if (patch.jevModel !== undefined && patch.jevModel.trim() !== "") next.jevModel = patch.jevModel.trim();
     if (patch.jevKeyCatalog !== undefined) next.jevKeyCatalog = patch.jevKeyCatalog;
     if (patch.jevFallbackKeyCatalog !== undefined) next.jevFallbackKeyCatalog = patch.jevFallbackKeyCatalog;
+    if (patch.blenderPath !== undefined && patch.blenderPath.trim() !== "") next.blenderPath = patch.blenderPath.trim();
     await writeSettings(next);
     providerLimiter.setLimit(next.concurrency);
     return { saved: true };
@@ -2262,6 +2466,8 @@ export default async function plugin(bb: BbPluginApi) {
     "                                     [--equipment \"rifle; knife\"] [--accessories \"helmet; left pauldron\"] [--image <design picture>]… --prompt <who the character is> [--json]",
     "  bb image-studio character cut --sheet <path> [--grid 1x2 | --items \"rifle; knife\"] [--json]   (re-cut a white sheet; free)",
     "  bb image-studio roblox projects|project|ref|delete …   (games; the same options as gui; --tags simulator,stylized,lowpoly,…)",
+    "  bb image-studio model projects|project|ref|delete …   (texture-by-UV projects; same theme options as gui)",
+    "  bb image-studio model generate --mode texture-uv|blueprint --file <model.fbx|glb|blend> [--object NAME] [--size 1024|2048] [--variants 1-4] [--image <concept|style>]… --prompt <style> [--json]",
     "  bb image-studio roblox generate --mode icon|thumbnail|logo|loading|badges|passes|products|items|props|texture|skybox|decal|vfx|flipbook",
     "                                  [--project <game>] [--variants 1-4] [--frames 4|16] [--aspect 1:1|16:9|…] [--image <path>]… --prompt <what> [--json]",
     "                                  (list modes take the list in --prompt or --items: \"VIP; 2x Coins\")",
@@ -2310,6 +2516,11 @@ export default async function plugin(bb: BbPluginApi) {
         name: "roblox",
         summary: "Roblox games: icon, thumbnails, logo, badges, passes, products, item icons, props for 3D, textures, skyboxes, decals, VFX — fitted to Roblox sizes",
         usage: "bb image-studio roblox projects|project|ref|generate|delete …",
+      },
+      {
+        name: "model",
+        summary: "Texture by model UV: bake a UV guide in Blender, repaint with Muse, apply back and save color/guide/mask/preview",
+        usage: "bb image-studio model projects|project|ref|generate|delete …",
       },
     ],
     async run(argv, ctx) {
@@ -2541,6 +2752,8 @@ export default async function plugin(bb: BbPluginApi) {
           return runGuiCommand(argv, ctx, reply, "characters");
         case "roblox":
           return runGuiCommand(argv, ctx, reply, "roblox");
+        case "model":
+          return runModelCommand(argv, ctx, reply);
         case "generate": {
           const defaults = {
             model: flag(argv, "--model"),
@@ -2665,7 +2878,7 @@ export default async function plugin(bb: BbPluginApi) {
       case "styles":
       case "projects": {
         const styles = [...(await readStyles())].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-        const here = originProject(styles, origin);
+        const here = originProject((styles), origin);
         return reply(
           styles.map((style) => ({ ...style, current: style.id === here?.id })),
           styles.length === 0
@@ -2678,9 +2891,9 @@ export default async function plugin(bb: BbPluginApi) {
       case "style":
       case "project": {
         // A fresh folder: the project is named after it, as the first generation would name it.
-        const name = flag(argv, "--name") ?? projectFlag ?? originProject(await readStyles(), origin)?.name ?? (origin === "unscoped" ? undefined : originName(origin));
+        const name = flag(argv, "--name") ?? projectFlag ?? originProject((await readStyles()), origin)?.name ?? (origin === "unscoped" ? undefined : originName(origin));
         if (!name) return { exitCode: 1, stderr: usage };
-        const existing = findGuiStyle(await readStyles(), name, origin);
+        const existing = findGuiStyle((await readStyles()), name, origin);
         const palette = { ...(existing?.palette ?? { background: "", button: "", outline: "", highlight: "", text: "" }) };
         for (const pair of (flag(argv, "--palette") ?? "").split(",").filter(Boolean)) {
           const [key, value] = pair.split("=").map((part) => part.trim());
@@ -2704,7 +2917,7 @@ export default async function plugin(bb: BbPluginApi) {
       }
       case "delete": {
         if (!projectFlag) return { exitCode: 1, stderr: `Name the project: bb image-studio ${command} delete --project <name>` };
-        const style = findGuiStyle(await readStyles(), projectFlag, origin);
+        const style = findGuiStyle((await readStyles()), projectFlag, origin);
         if (!style) return { exitCode: 1, stderr: `No ${word} project "${projectFlag}".` };
         await delete_gui_style({ id: style.id });
         return reply({ removed: style.id }, `Deleted ${word} project ${style.name} (${style.id}): its list and references. Files saved in folders stay.`);
@@ -2713,7 +2926,9 @@ export default async function plugin(bb: BbPluginApi) {
         const image = flag(argv, "--image");
         if (!image) return { exitCode: 1, stderr: usage };
         const styles = await readStyles();
-        const style = projectFlag ? findGuiStyle(styles, projectFlag, origin) : originProject(styles, origin);
+        const style = projectFlag
+          ? findGuiStyle((styles), projectFlag, origin)
+          : originProject((styles), origin);
         if (!style) return { exitCode: 1, stderr: projectFlag ? `No ${word} project "${projectFlag}".` : `No ${word} project for this folder yet: generate first or pass --project.` };
         const role = flag(argv, "--role") === "art" ? "art" : "concept";
         const { cwd } = ctx;
@@ -2806,6 +3021,105 @@ export default async function plugin(bb: BbPluginApi) {
     return { exitCode: 1, stderr: usage };
   }
 
+  async function runModelCommand(
+    argv: string[],
+    ctx: CliCtx,
+    reply: (value: unknown, text: string) => { exitCode: number; stdout: string },
+  ) {
+    const sub = argv[argv.indexOf("model") + 1];
+    const projectId = ctx.projectId ?? null;
+    const origin = ctx.cwd ?? projectId ?? "unscoped";
+    const projectFlag = flag(argv, "--project") ?? flag(argv, "--style");
+    const word = SECTION_WORD.model;
+    const readStyles = async () => (await readGuiStyles()).filter((style) => style.section === "model");
+    switch (sub) {
+      case "projects": {
+        const styles = [...(await readStyles())].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+        const here = originProject((styles), origin);
+        return reply(
+          styles.map((style) => ({ ...style, current: style.id === here?.id })),
+          styles.length === 0
+            ? `No ${word} projects yet. The first texture run from this folder creates one named after it.`
+            : styles
+                .map((style) => `${style.id === here?.id ? "* " : "  "}${style.name} (${style.id}): ${style.theme || "no theme"}; references: ${style.refs.length}${style.origin ? `; folder: ${style.origin}` : ""}`)
+                .join("\n") + (here ? `\n* = where ${word} generations from this folder go` : ""),
+        );
+      }
+      case "project": {
+        const name = flag(argv, "--name") ?? projectFlag ?? originProject((await readStyles()), origin)?.name ?? (origin === "unscoped" ? undefined : originName(origin));
+        if (!name) return { exitCode: 1, stderr: usage };
+        const existing = findGuiStyle((await readStyles()), name, origin);
+        const palette = { ...(existing?.palette ?? { background: "", button: "", outline: "", highlight: "", text: "" }) };
+        const tags = flag(argv, "--tags");
+        const saved = await save_gui_style({
+          id: existing?.id,
+          projectId,
+          origin,
+          section: "model",
+          name: existing && flag(argv, "--rename") ? flag(argv, "--rename")! : (existing?.name ?? name),
+          theme: flag(argv, "--theme") ?? existing?.theme ?? "",
+          tags: tags !== undefined ? tags.split(",").map((tag) => tag.trim()).filter(Boolean) : (existing?.tags ?? []),
+          palette: paletteInputSchema.parse(palette),
+          notes: flag(argv, "--notes") ?? existing?.notes ?? "",
+        });
+        if (existing && !existing.origin) await withGuiStyle(existing.id, (style) => void (style.origin = origin));
+        return reply(saved, `${existing ? "Updated" : "Created"} ${word} project ${saved.name} (${saved.id}).`);
+      }
+      case "ref": {
+        const image = flag(argv, "--image");
+        if (!image) return { exitCode: 1, stderr: usage };
+        const styles = await readStyles();
+        const style = projectFlag
+          ? findGuiStyle((styles), projectFlag, origin)
+          : originProject((styles), origin);
+        if (!style) return { exitCode: 1, stderr: projectFlag ? `No ${word} project "${projectFlag}".` : `No ${word} project for this folder yet: generate first or pass --project.` };
+        const role = flag(argv, "--role") === "art" ? "art" : "concept";
+        const { cwd } = ctx;
+        const [uri] = await sourceDataUris([image], projectId, cwd);
+        const bytes = Buffer.from(uri!.slice(uri!.indexOf(",") + 1), "base64");
+        const saved = await addGuiRefFile(style.id, role, bytes, image.split("/").pop() ?? "ref");
+        return reply(saved, `Added ${role === "art" ? "an art" : "a concept"} reference to ${saved.name}: ${saved.refs.length} of ${GUI_MAX_REFS}.`);
+      }
+      case "delete": {
+        if (!projectFlag) return { exitCode: 1, stderr: `Name the project: bb image-studio model delete --project <name>` };
+        const style = findGuiStyle((await readStyles()), projectFlag, origin);
+        if (!style) return { exitCode: 1, stderr: `No ${word} project "${projectFlag}".` };
+        await delete_gui_style({ id: style.id });
+        return reply({ removed: style.id }, `Deleted ${word} project ${style.name} (${style.id}): its list and references. Saved files stay.`);
+      }
+      case "generate": {
+        const mode = modelModeSchema.safeParse(flag(argv, "--mode") ?? "texture-uv");
+        if (!mode.success) return { exitCode: 1, stderr: `--mode takes ${MODEL_MODES.join(", ")}.` };
+        const modelFile = flag(argv, "--file") ?? flag(argv, "--model");
+        const prompt = flag(argv, "--prompt") ?? restAfter(argv, "generate").replace(/^model\s*/, "");
+        if (!modelFile || !prompt) return { exitCode: 1, stderr: usage };
+        const sizeFlag = flag(argv, "--size");
+        const sizeParsed = sizeFlag ? modelTextureSizeSchema.safeParse(Number(sizeFlag)) : { success: true as const, data: 1024 as ModelTextureSize };
+        if (!sizeParsed.success) return { exitCode: 1, stderr: "--size takes 1024 or 2048." };
+        const variantsFlag = flag(argv, "--variants");
+        const variants = variantsFlag ? Number(variantsFlag) : 1;
+        const source = await projectSource(projectId);
+        const run = await runModelTextureUv({
+          projectId,
+          styleId: projectFlag,
+          mode: mode.data,
+          model: modelFile,
+          object: flag(argv, "--object"),
+          prompt,
+          images: flags(argv, "--image"),
+          size: sizeParsed.data,
+          variants,
+          cwd: ctx.cwd ?? source.cwd,
+          hostId: source.hostId,
+          originLabel: source.name,
+        });
+        const text = modelSummary(run);
+        return run.takes.length === 0 ? { exitCode: 1, stderr: text || "Nothing was generated." } : reply(run, text);
+      }
+    }
+    return { exitCode: 1, stderr: usage };
+  }
+
   bb.agents.registerTool({
     name: "image_studio_gui",
     description:
@@ -2886,6 +3200,52 @@ export default async function plugin(bb: BbPluginApi) {
       } catch (error) {
         if (isStaleHandleError(error) || error instanceof ReloadingError) {
           return { content: [{ type: "text", text: "Image Studio was reloaded while this ran and nothing was saved. Call image_studio_character again." }], isError: true };
+        }
+        return { content: [{ type: "text", text: describe(error) }], isError: true };
+      }
+    },
+  });
+
+  bb.agents.registerTool({
+    name: "image_studio_model",
+    description:
+      "Paint a game model's UV texture in place (Muse Image): Blender bakes a colour guide on the project host, Muse repaints each UV island, the result is applied back with a before/after preview. Mode texture-uv is fully supported; blueprint is reserved for modeling sheets. Runs at once, no Send form.",
+    instructions:
+      "For a 3D model file (FBX, GLB, or .blend) call image_studio_model with mode texture-uv, the model path, and a style prompt. Optional images (up to 2): concept art, then style reference. Generations land in image-studio/model/<project>/<take>/ with color.png, guide.png, mask.png, preview.png, parts.json, model.blend and manifest.json. In a Roblox game folder the project inherits the game's look like GUI and Characters. blueprint returns not implemented yet.",
+    presentation: {
+      label: { pending: "Texturing model UV", completed: "Textured model UV" },
+      icon: { glyph: "Palette" },
+    },
+    parameters: z.object({
+      mode: modelModeSchema,
+      model: z.string().min(1),
+      object: z.string().optional(),
+      prompt: z.string().default(""),
+      parts: z.array(z.object({ color: z.string(), part: z.string() })).optional(),
+      images: z.array(z.string().min(1)).max(2).optional(),
+      size: modelTextureSizeSchema.optional(),
+      variants: z.number().int().min(1).max(MAX_VARIANTS).optional(),
+      project: z.string().optional(),
+    }),
+    async execute(input, ctx) {
+      try {
+        const run = await runModelTextureUv({
+          projectId: ctx.projectId || null,
+          styleId: input.project,
+          mode: input.mode,
+          model: input.model,
+          object: input.object,
+          prompt: input.prompt,
+          images: input.images,
+          size: input.size,
+          variants: input.variants,
+          ...(await threadFolder(ctx.threadId, ctx.projectId || null)),
+        });
+        const text = modelSummary(run);
+        return run.takes.length === 0 ? { content: [{ type: "text", text: text || "Nothing was generated." }], isError: true } : text;
+      } catch (error) {
+        if (isStaleHandleError(error) || error instanceof ReloadingError) {
+          return { content: [{ type: "text", text: "Image Studio was reloaded while this ran and nothing was saved. Call image_studio_model again." }], isError: true };
         }
         return { content: [{ type: "text", text: describe(error) }], isError: true };
       }
@@ -3081,7 +3441,7 @@ export default async function plugin(bb: BbPluginApi) {
   });
 
   bb.agents.configure(() => ({
-    tools: ["image_studio_generate", "image_studio_gui", "image_studio_character", "image_studio_roblox"],
+    tools: ["image_studio_generate", "image_studio_gui", "image_studio_character", "image_studio_roblox", "image_studio_model"],
     skills: ["image-studio"],
   }));
 
