@@ -1,2 +1,3 @@
 # Changelog
 - 2026-10-27 lprun_7ab1f614e5bf4e9cac43bc49529371b0: Added model texture-uv generation from UV guide baking through Muse repainting and Blender application, with CLI and agent tool support (model-section-core; commit: see git log)
+- 2026-10-27 lprun_7ab1f614e5bf4e9cac43bc49529371b0: Completed model texture-uv fixes and concept projection, blueprint generation, model panel, and model workflow skill (model-blueprint-v2, model-concept-projection, model-core-fix, model-panel-v2, model-projection-fix, model-section-core, model-skill-v2; commit: see git log)

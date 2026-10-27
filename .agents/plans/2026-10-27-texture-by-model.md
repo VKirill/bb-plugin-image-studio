@@ -2,7 +2,7 @@
 title: Image Studio — "Texture by model" (texture-uv), blueprint, agent skill
 date: 2026-10-27
 source: TZ /Users/vechkasov/Documents/Мои проекты/Roblox/lava-arena/.bb/chats/thr_vgdyg342s5/artifacts/image-studio-texture-tz.md
-status: approved 2026-10-27 (with soft-parts addition)
+status: complete 2026-10-27 (accepted Lane Pilot tasks shipped; runtime acceptance checks remain)
 ---
 
 # Plan
@@ -66,9 +66,12 @@ checklist.
 | id | what | depends_on | status | run |
 |---|---|---|---|---|
 | model-section-core | section `model`, `src/model.ts` (modes, prompts, request → jobs), Blender script `blender/texture_uv.py` (prepare / apply), runner on the project host, post (mask cut, dilate), tool `image_studio_model` mode texture-uv, CLI `bb image-studio model`, unit tests for prompt build and dilate | — | done | lprun_7ab1f614e5bf4e9cac43bc49529371b0 |
-| model-blueprint | blueprint mode: prompt, view cut + baseline align, `views.json`, tests on a fixture sheet | model-section-core | todo | — |
-| model-panel | the section tab in the app | model-section-core | todo | — |
-| model-skill | skill reference + SKILL.md section | model-blueprint | todo | — |
+| model-core-fix | bundle delivery, dedicated UV, existing textures, parts, tested light/mask, preview and variant preparation fixes | model-section-core | done | lprun_7ab1f614e5bf4e9cac43bc49529371b0 |
+| model-concept-projection | project concept onto model before Muse and structure the texture prompt | model-section-core | done | lprun_7ab1f614e5bf4e9cac43bc49529371b0 |
+| model-projection-fix | correct world-space projection, view mirroring, and fixture texture lookup | model-concept-projection | done | lprun_7ab1f614e5bf4e9cac43bc49529371b0 |
+| model-blueprint-v2 | blueprint prompt, view cutting and baseline alignment, soft anchors, side regeneration, and `views.json` | model-section-core | done | lprun_7ab1f614e5bf4e9cac43bc49529371b0 |
+| model-panel-v2 | model section tab, generation forms, and texture/blueprint takes gallery | model-section-core | done | lprun_7ab1f614e5bf4e9cac43bc49529371b0 |
+| model-skill-v2 | model texture and blueprint reference, SKILL.md entry, and item pipeline | model-blueprint-v2 | done | lprun_7ab1f614e5bf4e9cac43bc49529371b0 |
 
 Checks per task: `npx tsc --noEmit` and `npx vitest run tests/model.test.ts` (new test file); the Blender script
 gets a smoke check `Blender -b --factory-startup -P blender/texture_uv.py -- prepare test <tmp>` that must
@@ -87,6 +90,10 @@ produce guide.png and mask.png (the built-in "test" rock stack from tex_guide.py
 ## Open points
 - Where the plugin server runs vs where Blender is: Blender runs on the project folder's host via the SDK
   host command API; if the host has no Blender the tool returns a clear error naming the path setting.
+
+## History
+### 2026-10-27
+- Accepted Lane Pilot run `lprun_7ab1f614e5bf4e9cac43bc49529371b0` completed all seven model tasks, including texture-uv core fixes, concept projection, blueprint, panel, and skill updates. Fire-mop and rock-stack runtime acceptance checks remain a follow-up.
 
 ## Skill addition (requester, 2026-10-27): section "Item pipeline" in model-textures.md
 1. Concept (Image Studio: roblox items/props or characters) → approval.
