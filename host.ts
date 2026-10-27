@@ -1,16 +1,20 @@
 // Runs on the machine that holds the project folder: background Blender for texture-uv prepare/apply.
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { defineRpcContract } from "@get-bb/plugin-sdk";
 import { experimental_defineHostEntry } from "@get-bb/plugin-sdk/host";
 import { z } from "zod";
+import { TEXTURE_UV_SCRIPT } from "./src/blender-scripts.ts";
 
 export const hostContract = defineRpcContract({
   blender: {
     input: z
       .object({
-        blenderPath: z.string().min(1),
-        scriptPath: z.string().min(1),
+        blenderPath: z.string(),
+        script: z.literal("texture_uv"),
         args: z.array(z.string().max(2000)).max(32),
         cwd: z.string().optional(),
       })
@@ -21,6 +25,12 @@ export const hostContract = defineRpcContract({
 
 const BLENDER_TIMEOUT_MS = 12 * 60 * 1000;
 
+function resolveBlenderBin(blenderPath: string): string {
+  const trimmed = blenderPath.trim();
+  if (trimmed && existsSync(trimmed)) return trimmed;
+  return "blender";
+}
+
 function runBlender(
   blenderPath: string,
   scriptPath: string,
@@ -29,11 +39,7 @@ function runBlender(
   signal: AbortSignal,
 ): Promise<void> {
   return new Promise((resolve, reject) => {
-    if (!existsSync(scriptPath)) {
-      reject(new Error(`Blender script not found at ${scriptPath}`));
-      return;
-    }
-    const bin = existsSync(blenderPath) ? blenderPath : "blender";
+    const bin = resolveBlenderBin(blenderPath);
     const child = spawn(bin, ["--factory-startup", "-b", "-P", scriptPath, "--", ...args], {
       cwd,
       signal,
@@ -44,7 +50,17 @@ function runBlender(
       stderr += String(chunk);
       if (stderr.length > 64_000) stderr = stderr.slice(-64_000);
     });
-    child.on("error", reject);
+    child.on("error", (error) => {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        reject(
+          new Error(
+            `Blender not found (tried "${bin}"). Set blenderPath in Image Studio settings, e.g. /Applications/Blender.app/Contents/MacOS/Blender.`,
+          ),
+        );
+        return;
+      }
+      reject(error);
+    });
     child.on("close", (code) => {
       if (code === 0) resolve();
       else {
@@ -63,8 +79,16 @@ function runBlender(
 export default experimental_defineHostEntry({
   contract: hostContract,
   handlers: {
-    blender: async ({ blenderPath, scriptPath, args, cwd }, context) => {
-      await runBlender(blenderPath, scriptPath, args, cwd, context.signal);
+    blender: async ({ blenderPath, script, args, cwd }, context) => {
+      if (script !== "texture_uv") throw new Error(`Unknown Blender script "${script}"`);
+      const dir = await mkdtemp(join(tmpdir(), "image-studio-blender-"));
+      const scriptPath = join(dir, "texture_uv.py");
+      await writeFile(scriptPath, TEXTURE_UV_SCRIPT, "utf8");
+      try {
+        await runBlender(blenderPath, scriptPath, args, cwd, context.signal);
+      } finally {
+        await rm(dir, { recursive: true, force: true }).catch(() => undefined);
+      }
       return { ok: true as const };
     },
   },

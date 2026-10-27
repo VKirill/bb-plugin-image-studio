@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { chmod, mkdir, readFile, rm, unlink, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { defineRpcContract, type BbPluginApi, type PluginRpcHandlers } from "@get-bb/plugin-sdk";
 import { z } from "zod";
 import {
@@ -130,14 +129,14 @@ import {
   buildTextureUvPrompt,
   cutAndDilate,
   DEFAULT_DILATE_PX,
+  mergeModelParts,
   type ModelMode,
+  type ModelPartsParam,
   type ModelTextureSize,
 } from "./src/model.ts";
 
 const ENV_CATALOG_PLUGIN_ID = "env-catalog";
 const DEFAULT_BLENDER_PATH = "/Applications/Blender.app/Contents/MacOS/Blender";
-const pluginDir = dirname(fileURLToPath(import.meta.url));
-const blenderScriptPath = join(pluginDir, "blender", "texture_uv.py");
 const SETTINGS_KEY = "settings";
 /** A 480px WebP thumbnail stays far below this; a bigger cached file is a stale original. */
 const THUMB_MAX_BYTES = 400 * 1024;
@@ -165,6 +164,10 @@ type Section = z.infer<typeof sectionSchema>;
 const SECTION_WORD: Record<Section, string> = { gui: "GUI", characters: "Characters", roblox: "Roblox", model: "Model" };
 const modelModeSchema = z.enum(MODEL_MODES);
 const modelTextureSizeSchema = z.union([z.literal(1024), z.literal(2048)]);
+const modelPartsSchema = z.union([
+  z.record(z.string(), z.string()),
+  z.array(z.object({ material: z.string().min(1), part: z.string().min(1) }).strict()),
+]);
 /** One-time move of the GUI and Characters projects into Roblox games. */
 const GAMES_MIGRATED_KEY = "roblox-games-migrated";
 const guiResultSchema = z.object({
@@ -1568,13 +1571,13 @@ export default async function plugin(bb: BbPluginApi) {
       });
     }
     if (input.styleId) {
-      const found = findGuiStyle((inSection(await readGuiStyles())), input.styleId, input.origin);
+      const found = findGuiStyle(inSection(await readGuiStyles()), input.styleId, input.origin);
       const sectionCli = section === "gui" ? "gui" : section === "roblox" ? "roblox" : section === "model" ? "model" : "character";
       if (!found) throw new Error(`No ${SECTION_WORD[section]} project "${input.styleId}". Run bb image-studio ${sectionCli} projects.`);
-      return (await readGuiStyles()).find((item) => item.id === found.id) ?? (found as GuiStyle);
+      return found;
     }
     return withGuiStyles((styles) => {
-      const bound = originProject((inSection(styles)), input.origin);
+      const bound = originProject(inSection(styles), input.origin);
       if (bound) return bound;
       const created = blankProject(
         section,
@@ -1583,7 +1586,7 @@ export default async function plugin(bb: BbPluginApi) {
         input.name || (input.origin === "unscoped" ? "" : originName(input.origin)) || `${SECTION_WORD[section]} ${inSection(styles).length + 1}`,
       );
       // A folder that has a Roblox game: its GUI and Characters belong to that game.
-      if (section !== "roblox") created.gameId = originProject((styles.filter((style) => style.section === "roblox")), input.origin)?.id ?? "";
+      if (section !== "roblox") created.gameId = originProject(styles.filter((style) => style.section === "roblox"), input.origin)?.id ?? "";
       styles.push(created);
       return created;
     });
@@ -1619,7 +1622,7 @@ export default async function plugin(bb: BbPluginApi) {
   async function migrateGames(): Promise<void> {
     if (await bb.storage.kv.get<boolean>(GAMES_MIGRATED_KEY)) return;
     await lockedStyles((styles) => {
-      const plan = planGameMigration((styles), new Date().toISOString(), () => randomUUID().slice(0, 8));
+      const plan = planGameMigration(styles, new Date().toISOString(), () => randomUUID().slice(0, 8));
       styles.push(...plan.games);
       for (const style of styles) if (plan.links[style.id]) style.gameId = plan.links[style.id]!;
     });
@@ -1810,7 +1813,7 @@ export default async function plugin(bb: BbPluginApi) {
     try {
       await blenderHost.call(
         "blender",
-        { blenderPath, scriptPath: blenderScriptPath, args, cwd },
+        { blenderPath, script: "texture_uv", args, cwd },
         { hostId, timeoutMs: 12 * 60 * 1000 },
       );
     } catch (error) {
@@ -1845,6 +1848,7 @@ export default async function plugin(bb: BbPluginApi) {
     model: string;
     object?: string;
     prompt: string;
+    parts?: ModelPartsParam;
     images?: string[];
     size?: ModelTextureSize;
     variants?: number;
@@ -1870,9 +1874,7 @@ export default async function plugin(bb: BbPluginApi) {
       gameId: input.gameId,
     });
     const game = await gameOf(style);
-    const merged = game
-      ? mergeGameStyle(style, game)
-      : { style: style, owners: style.refs.map(() => style.id) };
+    const merged = game ? mergeGameStyle(style, game) : { style, owners: style.refs.map(() => style.id) };
     const styleLine = [merged.style.theme, merged.style.notes].filter(Boolean).join(". ");
     const size = input.size ?? 1024;
     if (!MODEL_TEXTURE_SIZES.includes(size)) throw new Error(`size must be ${MODEL_TEXTURE_SIZES.join(" or ")}.`);
@@ -1883,76 +1885,91 @@ export default async function plugin(bb: BbPluginApi) {
     const errors: string[] = [];
     const takes: ModelTakeManifest[] = [];
     const run = randomUUID().slice(0, 8);
+    const runRel = join("image-studio", "model", slugify(style.name, "model"), run);
+    const runAbs = join(input.cwd, runRel);
 
-    for (let v = 0; v < variants; v++) {
-      const take = v === 0 ? run : `${run}-${v + 1}`;
-      const relDir = join("image-studio", "model", slugify(style.name, "model"), take);
-      const workDir = join(input.cwd, relDir);
-      try {
-        const prepArgs = ["prepare", modelPath, workDir, "--size", String(size)];
-        if (input.object) prepArgs.push("--object", input.object);
-        await runBlenderOnHost(input.hostId, prepArgs, input.cwd);
-        const partsJson = JSON.parse((await readHostBytes(join(relDir, "parts.json"), input.cwd, input.hostId)).toString("utf8")) as {
-          parts: Array<{ part: string; color: string }>;
-        };
-        const prepareMeta = JSON.parse((await readHostBytes(join(relDir, "prepare.json"), input.cwd, input.hostId)).toString("utf8")) as {
-          object: string;
-          uvLayer: string;
-        };
-        const guideBytes = await readHostBytes(join(relDir, "guide.png"), input.cwd, input.hostId);
-        const maskBytes = await readHostBytes(join(relDir, "mask.png"), input.cwd, input.hostId);
-        const guideUri = `data:image/png;base64,${guideBytes.toString("base64")}`;
-        const partList = partsJson.parts.map((p) => ({ color: p.color, part: p.part }));
-        const composed = buildTextureUvPrompt({
-          parts: partList,
-          style: [input.prompt.trim(), styleLine].filter(Boolean).join("; "),
-          hasConcept,
-          hasStyle,
-        });
-        const userUris = await sourceDataUris(extra, input.projectId, input.cwd, input.hostId);
-        const rendered = await renderImage({
-          projectId: input.projectId,
-          prompt: composed,
-          rawPrompt: true,
-          recordPrompt: input.prompt.trim(),
-          model: MODEL_MUSE,
-          gateway: "fal",
-          aspectRatio: "1:1",
-          leadUris: [guideUri, ...userUris],
-          cwd: input.cwd,
-          hostId: input.hostId,
-        });
-        const painted = await decodeRgba(rendered.original);
-        const guideRgba = await decodeRgba(guideBytes);
-        const maskRgba = await decodeRgba(maskBytes);
-        const fitted = resize(painted, guideRgba.width, guideRgba.height);
-        const color = cutAndDilate(fitted, maskRgba, DEFAULT_DILATE_PX);
-        const colorBytes = await encodePng(color);
-        await writeHostBytes(join(relDir, "color.png"), input.cwd, input.hostId, colorBytes);
-        await runBlenderOnHost(input.hostId, ["apply", workDir, join(workDir, "color.png")], input.cwd);
-        const manifest: ModelTakeManifest = {
-          mode: "texture-uv",
-          model: modelPath,
-          object: prepareMeta.object,
-          uvLayer: prepareMeta.uvLayer,
-          size,
-          prompt: composed,
-          files: {
-            color: join(relDir, "color.png"),
-            mask: join(relDir, "mask.png"),
-            guide: join(relDir, "guide.png"),
-            preview: join(relDir, "preview.png"),
-            blend: join(relDir, "model.blend"),
-            parts: join(relDir, "parts.json"),
-          },
-        };
-        await writeHostBytes(join(relDir, "manifest.json"), input.cwd, input.hostId, Buffer.from(JSON.stringify(manifest, null, 2)));
-        takes.push(manifest);
-      } catch (error) {
-        errors.push(`take ${take}: ${describe(error)}`);
+    try {
+      const prepArgs = ["prepare", modelPath, runAbs, "--size", String(size)];
+      if (input.object) prepArgs.push("--object", input.object);
+      await runBlenderOnHost(input.hostId, prepArgs, input.cwd);
+      const partsJson = JSON.parse((await readHostBytes(join(runRel, "parts.json"), input.cwd, input.hostId)).toString("utf8")) as {
+        parts: Array<{ material: string; part: string; color: string }>;
+      };
+      const partList = mergeModelParts(partsJson.parts, input.parts);
+      const mergedPartsFile = partsJson.parts.map((row, index) => ({
+        material: row.material,
+        part: partList[index]?.part ?? row.part,
+        color: row.color,
+      }));
+      await writeHostBytes(join(runRel, "parts.json"), input.cwd, input.hostId, Buffer.from(JSON.stringify({ parts: mergedPartsFile }, null, 2)));
+      const prepareMeta = JSON.parse((await readHostBytes(join(runRel, "prepare.json"), input.cwd, input.hostId)).toString("utf8")) as {
+        object: string;
+        uvLayer: string;
+      };
+      const guideBytes = await readHostBytes(join(runRel, "guide.png"), input.cwd, input.hostId);
+      const maskBytes = await readHostBytes(join(runRel, "mask.png"), input.cwd, input.hostId);
+      const guideUri = `data:image/png;base64,${guideBytes.toString("base64")}`;
+      const composed = buildTextureUvPrompt({
+        parts: partList,
+        style: [input.prompt.trim(), styleLine].filter(Boolean).join("; "),
+        hasConcept,
+        hasStyle,
+      });
+      const userUris = await sourceDataUris(extra, input.projectId, input.cwd, input.hostId);
+      const blendBytes = await readHostBytes(join(runRel, "model.blend"), input.cwd, input.hostId);
+      const prepareBytes = await readHostBytes(join(runRel, "prepare.json"), input.cwd, input.hostId);
+
+      for (let v = 0; v < variants; v++) {
+        const takeRel = join(runRel, `take-${v + 1}`);
+        const takeAbs = join(input.cwd, takeRel);
+        try {
+          await writeHostBytes(join(takeRel, "model.blend"), input.cwd, input.hostId, blendBytes);
+          await writeHostBytes(join(takeRel, "prepare.json"), input.cwd, input.hostId, prepareBytes);
+          const rendered = await renderImage({
+            projectId: input.projectId,
+            prompt: composed,
+            rawPrompt: true,
+            recordPrompt: input.prompt.trim(),
+            model: MODEL_MUSE,
+            gateway: "fal",
+            aspectRatio: "1:1",
+            leadUris: [guideUri, ...userUris],
+            cwd: input.cwd,
+            hostId: input.hostId,
+          });
+          const painted = await decodeRgba(rendered.original);
+          const guideRgba = await decodeRgba(guideBytes);
+          const maskRgba = await decodeRgba(maskBytes);
+          const fitted = resize(painted, guideRgba.width, guideRgba.height);
+          const color = cutAndDilate(fitted, maskRgba, DEFAULT_DILATE_PX);
+          const colorBytes = await encodePng(color);
+          await writeHostBytes(join(takeRel, "color.png"), input.cwd, input.hostId, colorBytes);
+          await runBlenderOnHost(input.hostId, ["apply", takeAbs, join(takeAbs, "color.png")], input.cwd);
+          const manifest: ModelTakeManifest = {
+            mode: "texture-uv",
+            model: modelPath,
+            object: prepareMeta.object,
+            uvLayer: prepareMeta.uvLayer,
+            size,
+            prompt: composed,
+            files: {
+              color: join(takeRel, "color.png"),
+              mask: join(runRel, "mask.png"),
+              guide: join(runRel, "guide.png"),
+              preview: join(takeRel, "preview.png"),
+              blend: join(takeRel, "model.blend"),
+              parts: join(runRel, "parts.json"),
+            },
+          };
+          await writeHostBytes(join(takeRel, "manifest.json"), input.cwd, input.hostId, Buffer.from(JSON.stringify(manifest, null, 2)));
+          takes.push(manifest);
+        } catch (error) {
+          errors.push(`take-${v + 1}: ${describe(error)}`);
+        }
       }
+    } catch (error) {
+      errors.push(`prepare: ${describe(error)}`);
     }
-    await withGuiStyle(style.id, () => undefined).catch(() => undefined);
     return { takes, errors, style };
   }
 
@@ -2134,7 +2151,7 @@ export default async function plugin(bb: BbPluginApi) {
       profiles,
       generations,
       lastGenerate,
-      guiStyles: (guiStyles.filter((style) => style.section !== "model")).sort((a, b) =>
+      guiStyles: guiStyles.filter((style) => style.section !== "model").sort((a, b) =>
         b.updatedAt.localeCompare(a.updatedAt),
       ),
     };
@@ -2878,7 +2895,7 @@ export default async function plugin(bb: BbPluginApi) {
       case "styles":
       case "projects": {
         const styles = [...(await readStyles())].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-        const here = originProject((styles), origin);
+        const here = originProject(styles, origin);
         return reply(
           styles.map((style) => ({ ...style, current: style.id === here?.id })),
           styles.length === 0
@@ -2891,9 +2908,9 @@ export default async function plugin(bb: BbPluginApi) {
       case "style":
       case "project": {
         // A fresh folder: the project is named after it, as the first generation would name it.
-        const name = flag(argv, "--name") ?? projectFlag ?? originProject((await readStyles()), origin)?.name ?? (origin === "unscoped" ? undefined : originName(origin));
+        const name = flag(argv, "--name") ?? projectFlag ?? originProject(await readStyles(), origin)?.name ?? (origin === "unscoped" ? undefined : originName(origin));
         if (!name) return { exitCode: 1, stderr: usage };
-        const existing = findGuiStyle((await readStyles()), name, origin);
+        const existing = findGuiStyle(await readStyles(), name, origin);
         const palette = { ...(existing?.palette ?? { background: "", button: "", outline: "", highlight: "", text: "" }) };
         for (const pair of (flag(argv, "--palette") ?? "").split(",").filter(Boolean)) {
           const [key, value] = pair.split("=").map((part) => part.trim());
@@ -2917,7 +2934,7 @@ export default async function plugin(bb: BbPluginApi) {
       }
       case "delete": {
         if (!projectFlag) return { exitCode: 1, stderr: `Name the project: bb image-studio ${command} delete --project <name>` };
-        const style = findGuiStyle((await readStyles()), projectFlag, origin);
+        const style = findGuiStyle(await readStyles(), projectFlag, origin);
         if (!style) return { exitCode: 1, stderr: `No ${word} project "${projectFlag}".` };
         await delete_gui_style({ id: style.id });
         return reply({ removed: style.id }, `Deleted ${word} project ${style.name} (${style.id}): its list and references. Files saved in folders stay.`);
@@ -2927,8 +2944,8 @@ export default async function plugin(bb: BbPluginApi) {
         if (!image) return { exitCode: 1, stderr: usage };
         const styles = await readStyles();
         const style = projectFlag
-          ? findGuiStyle((styles), projectFlag, origin)
-          : originProject((styles), origin);
+          ? findGuiStyle(styles, projectFlag, origin)
+          : originProject(styles, origin);
         if (!style) return { exitCode: 1, stderr: projectFlag ? `No ${word} project "${projectFlag}".` : `No ${word} project for this folder yet: generate first or pass --project.` };
         const role = flag(argv, "--role") === "art" ? "art" : "concept";
         const { cwd } = ctx;
@@ -3035,7 +3052,7 @@ export default async function plugin(bb: BbPluginApi) {
     switch (sub) {
       case "projects": {
         const styles = [...(await readStyles())].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-        const here = originProject((styles), origin);
+        const here = originProject(styles, origin);
         return reply(
           styles.map((style) => ({ ...style, current: style.id === here?.id })),
           styles.length === 0
@@ -3046,9 +3063,9 @@ export default async function plugin(bb: BbPluginApi) {
         );
       }
       case "project": {
-        const name = flag(argv, "--name") ?? projectFlag ?? originProject((await readStyles()), origin)?.name ?? (origin === "unscoped" ? undefined : originName(origin));
+        const name = flag(argv, "--name") ?? projectFlag ?? originProject(await readStyles(), origin)?.name ?? (origin === "unscoped" ? undefined : originName(origin));
         if (!name) return { exitCode: 1, stderr: usage };
-        const existing = findGuiStyle((await readStyles()), name, origin);
+        const existing = findGuiStyle(await readStyles(), name, origin);
         const palette = { ...(existing?.palette ?? { background: "", button: "", outline: "", highlight: "", text: "" }) };
         const tags = flag(argv, "--tags");
         const saved = await save_gui_style({
@@ -3070,8 +3087,8 @@ export default async function plugin(bb: BbPluginApi) {
         if (!image) return { exitCode: 1, stderr: usage };
         const styles = await readStyles();
         const style = projectFlag
-          ? findGuiStyle((styles), projectFlag, origin)
-          : originProject((styles), origin);
+          ? findGuiStyle(styles, projectFlag, origin)
+          : originProject(styles, origin);
         if (!style) return { exitCode: 1, stderr: projectFlag ? `No ${word} project "${projectFlag}".` : `No ${word} project for this folder yet: generate first or pass --project.` };
         const role = flag(argv, "--role") === "art" ? "art" : "concept";
         const { cwd } = ctx;
@@ -3082,7 +3099,7 @@ export default async function plugin(bb: BbPluginApi) {
       }
       case "delete": {
         if (!projectFlag) return { exitCode: 1, stderr: `Name the project: bb image-studio model delete --project <name>` };
-        const style = findGuiStyle((await readStyles()), projectFlag, origin);
+        const style = findGuiStyle(await readStyles(), projectFlag, origin);
         if (!style) return { exitCode: 1, stderr: `No ${word} project "${projectFlag}".` };
         await delete_gui_style({ id: style.id });
         return reply({ removed: style.id }, `Deleted ${word} project ${style.name} (${style.id}): its list and references. Saved files stay.`);
@@ -3221,7 +3238,7 @@ export default async function plugin(bb: BbPluginApi) {
       model: z.string().min(1),
       object: z.string().optional(),
       prompt: z.string().default(""),
-      parts: z.array(z.object({ color: z.string(), part: z.string() })).optional(),
+      parts: modelPartsSchema.optional(),
       images: z.array(z.string().min(1)).max(2).optional(),
       size: modelTextureSizeSchema.optional(),
       variants: z.number().int().min(1).max(MAX_VARIANTS).optional(),
@@ -3236,6 +3253,7 @@ export default async function plugin(bb: BbPluginApi) {
           model: input.model,
           object: input.object,
           prompt: input.prompt,
+          parts: input.parts,
           images: input.images,
           size: input.size,
           variants: input.variants,

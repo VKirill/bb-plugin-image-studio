@@ -12,6 +12,28 @@ export const DEFAULT_DILATE_PX = 12;
 
 export type TextureUvPart = { color: string; part: string };
 
+export type ModelPartRow = { material: string; part: string };
+export type ModelPartsParam = Record<string, string> | ModelPartRow[];
+
+/** Apply user material→description overrides onto baked parts.json rows. */
+export function mergeModelParts(
+  baked: Array<{ material: string; part: string; color: string }>,
+  user?: ModelPartsParam,
+): TextureUvPart[] {
+  const byMaterial = new Map<string, string>();
+  if (user) {
+    if (Array.isArray(user)) {
+      for (const row of user) byMaterial.set(row.material, row.part);
+    } else {
+      for (const [material, part] of Object.entries(user)) byMaterial.set(material, part);
+    }
+  }
+  return baked.map((row) => ({
+    color: row.color,
+    part: byMaterial.get(row.material) ?? row.part,
+  }));
+}
+
 export function buildTextureUvPrompt(input: {
   parts: TextureUvPart[];
   style: string;

@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { buildTextureUvPrompt, cutAndDilate } from "../src/model.ts";
+import { TEXTURE_UV_SCRIPT } from "../src/blender-scripts.ts";
+import { buildTextureUvPrompt, cutAndDilate, mergeModelParts } from "../src/model.ts";
 import type { Rgba } from "../src/image-io.ts";
 
 function rgba(w: number, h: number, fill: (x: number, y: number) => [number, number, number, number]): Rgba {
@@ -17,6 +19,25 @@ function rgba(w: number, h: number, fill: (x: number, y: number) => [number, num
   }
   return { data, width: w, height: h };
 }
+
+test("server.ts does not reference a server-side Blender script path", () => {
+  const server = readFileSync(new URL("../server.ts", import.meta.url), "utf8");
+  assert.doesNotMatch(server, /blenderScriptPath/);
+  assert.doesNotMatch(server, /pluginDir/);
+});
+
+test("TEXTURE_UV_SCRIPT matches blender/texture_uv.py byte for byte", () => {
+  const disk = readFileSync(new URL("../blender/texture_uv.py", import.meta.url));
+  assert.equal(TEXTURE_UV_SCRIPT, disk.toString("utf8"));
+});
+
+test("mergeModelParts applies material descriptions from a record", () => {
+  const merged = mergeModelParts(
+    [{ material: "fire-mop_baked", part: "fire-mop_baked", color: "textured" }],
+    { "fire-mop_baked": "scorched rag head" },
+  );
+  assert.equal(merged[0]?.part, "scorched rag head");
+});
 
 test("texture-uv prompt lists part colours and forbids outlines", () => {
   const prompt = buildTextureUvPrompt({
