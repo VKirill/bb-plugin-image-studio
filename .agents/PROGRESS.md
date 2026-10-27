@@ -3,7 +3,7 @@
 - Build and reuse people profiles with reference sheets that carry identity across image generations.
 - Create GUI projects with themed prompts, palettes, references, screen concepts, cut elements, and UI kits.
 - Create Characters projects and Roblox game assets, including turnarounds, equipment, textures, and other game art.
-- Texture FBX, GLB, or Blender models in the Texture by model panel, with `image_studio_model` and `bb image-studio model generate` (all tool parameters), including concept projection, Muse repainting, Blender previews, colour palettes for textured parts named through `parts`, and aligned orthographic blueprints (the side view is drawn separately by default, the back is relabelled when the sheet's views are misclassified, with soft-part anchors).
+- Texture FBX, GLB, or Blender models through the Texture by model panel, `image_studio_model`, and `bb image-studio model generate`: concept projection, Muse repainting of UV pieces, Blender previews, palettes for textured parts named via `parts`, and blueprints (one baseline; the side is drawn separately by default, the back is relabelled when the sheet's views are misclassified, soft-part anchors).
 
 ## Blocked
 - none
@@ -12,7 +12,7 @@
 - Run the planned fire-mop and rock-stack acceptance checks for model texturing and blueprint output.
 
 ## Last verify
-- command: `node --test --experimental-strip-types tests/skill-frontmatter.test.ts tests/model-cli.test.ts tests/blueprint-side.test.ts tests/blueprint-classify.test.ts tests/model-palette.test.ts` (19 pass); `node --test --experimental-strip-types tests/model.test.ts tests/model-theme.test.ts tests/blueprint.test.ts tests/model-panel.test.ts` (23 pass); `node_modules/.bin/tsc --noEmit` (exit 0); `grep '"version"' package.json` (0.8.11)
+- command: `node_modules/.bin/tsc --noEmit` (exit 0); `node --test --experimental-strip-types tests/blueprint-side.test.ts tests/blueprint-classify.test.ts tests/blueprint.test.ts tests/skill-frontmatter.test.ts` (18 pass); `grep '"version"' package.json` (0.8.13)
 - result: green; fire-mop and rock-stack runtime acceptance checks are not run here
 - when: 2026-10-27
 
