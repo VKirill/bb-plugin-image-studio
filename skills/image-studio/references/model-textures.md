@@ -51,11 +51,12 @@ Concept art for items still starts in `image_studio_roblox` (`items`, `props`) o
 | `subject` | Object name on the sheet |
 | `soft` | Dangling parts (cloth, rope, hair) — drawn in **light blue** clay; listed in `views.json` with anchors |
 | `rigid` | Named rigid parts for the prompt |
+| `sideSeparate` | Default **true**. When `views` includes `side`, a **second** Muse call draws only the 90° profile (concept + cut front on grey as image 2). Set **false** to keep the side from the main sheet only. |
 | `project` | Optional project override |
 
-**Output:** `image-studio/model/<project>/<run>/blueprint/` — `sheet.png`, `front.png`, `side.png`, …, `views.json` with `canvas`, per-view `box`, `baseline`, `heightPx`, `parts` (`kind`: `rigid` \| `soft`, `anchor` for soft), `sideRegenerated` (true when side was redrawn alone), `warnings`.
+**Output:** `image-studio/model/<project>/<run>/blueprint/` — `sheet.png`, `side-sheet.png` (raw side-only Muse sheet when `sideSeparate`), `front.png`, `side.png`, …, `views.json` with `canvas`, per-view `box`, `baseline`, `heightPx`, `parts` (`kind`: `rigid` \| `soft`, `anchor` for soft), `sideRegenerated` (true when the side came from the separate call), `sheetSideSimilarity` (IoU of front vs side on the main sheet, for diagnostics), `warnings`.
 
-The plugin redraws **side** in a separate Muse call when it copies front.
+By default the plugin always makes **two** Muse calls for blueprints that include side: one multi-view sheet, then a side-only profile aligned to the front height.
 
 ## Rules (texture-uv)
 
@@ -68,12 +69,12 @@ Proven in production tests; the plugin enforces most of this in Blender prepare:
 - **Concept as `images[0]`** always feeds Muse. Turn **`projectConcept` on** only for straight-on concepts (same pose as the mesh) so faces, eyes, lettering and placed patterns are projected before Muse; diagonal concept art will smear if projected.
 - **Never** repaint model render views and project them back onto the UV — silhouette and scale drift.
 - **Model prep (you, in Blender):** after deleting solid details (eye spheres, bolts, etc.), select the **boundary edges** of the hole and **`bmesh.ops.holes_fill`** (or equivalent) before you call `texture-uv`. Unfilled pits bake as dark holes on the guide. **Prepare does not fill holes** — it keeps intentional open mesh (cloth planes, rag edges) as-is and does not repair topology.
-- **Muse:** image roles → `Task:` → `Must not change:` → short bans. No negative prompt, seed, or strength — text only. Describe subject, `conceptNote`, `parts`, and effects in `prompt`; the plugin adds theme/style.
+- **Muse:** image roles → `Task:` → `Game look` (materials/palette only, flat albedo — no coloured light, shadows or outlines) → `Must not change:` → short bans. No negative prompt, seed, or strength — text only. Describe subject, `conceptNote`, `parts`, and effects in `prompt`; the plugin adds the game's theme and art style on the `Game look` line, not inside `Task`.
 
 ## Rules (blueprint)
 
 - Orthographic views, one height, shared baseline; soft parts in light blue on every view.
-- Side is a true 90° profile — separate generation when Muse copies front (`sideRegenerated` in `views.json`).
+- Side is a true 90° profile — by default a separate Muse generation (`sideRegenerated` true; `sideSeparate` to opt out).
 - No perspective, fire, or effects on the sheet — those come later in `texture-uv` or as engine particles.
 
 ## Blender hookup

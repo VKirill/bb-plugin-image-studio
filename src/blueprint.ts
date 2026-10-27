@@ -35,8 +35,18 @@ export type BlueprintViewsJson = {
   canvas: { w: number; h: number; baseline: number };
   parts: BlueprintPart[];
   sideRegenerated: boolean;
+  sheetSideSimilarity?: number;
   warnings: string[];
 };
+
+export type AssembleBlueprintResult = {
+  cut: CutBlueprintResult;
+  sideRegenerated: boolean;
+  sheetSideSimilarity?: number;
+  warnings: string[];
+};
+
+export const SIDE_STILL_COPY_THRESHOLD = 0.85;
 
 export type CutBlueprintResult = {
   sheet: Rgba;
@@ -112,17 +122,56 @@ export function buildBlueprintPrompt(input: {
   ].join("\n");
 }
 
-export function buildSideOnlyPrompt(input: { subject: string; style: BlueprintStyle; softParts: string[] }): string {
+export function buildSideOnlyPrompt(input: {
+  subject: string;
+  style: BlueprintStyle;
+  softParts: string[];
+  withFrontReference?: boolean;
+}): string {
   const soft =
     input.softParts.length > 0
       ? ` Soft dangling parts (${input.softParts.join(", ")}) in light BLUE clay.`
       : "";
-  return [
-    `Image 1 is the DESIGN REFERENCE: ${input.subject}.`,
+  const lines = [`Image 1 is the DESIGN REFERENCE: ${input.subject}.`];
+  if (input.withFrontReference ?? true) {
+    lines.push(
+      "Image 2 is the FRONT VIEW of this blueprint: the side must have the same height, parts and clay style, seen turned 90°.",
+    );
+  }
+  lines.push(
     `Task: draw only the exact 90° side profile of this object, seen edge-on, on a plain light grey background; ${clayStylePhrase(input.style)}.${soft}`,
     "Must not change: the proportions, part count and silhouette of the object in image 1.",
     "No perspective, no shadows, no fire or effects, no text except the label SIDE.",
-  ].join("\n");
+  );
+  return lines.join("\n");
+}
+
+/** Front figure on the sheet's light grey for the side-only Muse reference (image 2). */
+export function frontReferencePlate(sheet: Rgba, frontFigure: Rgba, margin = 16): Rgba {
+  const bg = sampleGreyBg(sheet);
+  const w = frontFigure.width + margin * 2;
+  const h = frontFigure.height + margin * 2;
+  const data = new Uint8Array(w * h * 4);
+  for (let i = 0; i < w * h; i++) {
+    const p = i * 4;
+    data[p] = bg.r;
+    data[p + 1] = bg.g;
+    data[p + 2] = bg.b;
+    data[p + 3] = 255;
+  }
+  const { data: src, width: sw, height: sh } = frontFigure;
+  for (let y = 0; y < sh; y++) {
+    for (let x = 0; x < sw; x++) {
+      const a = src[(y * sw + x) * 4 + 3]!;
+      if (a === 0) continue;
+      const dx = margin + x;
+      const dy = margin + y;
+      const dst = (dy * w + dx) * 4;
+      const sp = (y * sw + x) * 4;
+      data.set(src.subarray(sp, sp + 4), dst);
+    }
+  }
+  return { data, width: w, height: h };
 }
 
 function sampleGreyBg(image: Rgba, tolerance = 28): { r: number; g: number; b: number } {
@@ -599,6 +648,7 @@ export function viewsJsonFromCut(
   parts: BlueprintPart[],
   sideRegenerated: boolean,
   extraWarnings: string[] = [],
+  sheetSideSimilarity?: number,
 ): BlueprintViewsJson {
   return {
     views: cut.views.map((v) => ({
@@ -611,8 +661,39 @@ export function viewsJsonFromCut(
     canvas: cut.canvas,
     parts,
     sideRegenerated,
+    sheetSideSimilarity,
     warnings: [...cut.warnings, ...extraWarnings],
   };
+}
+
+export function assembleBlueprint(
+  sheetCut: CutBlueprintResult,
+  sideCut: CutBlueprintResult | null,
+  options?: { sideSeparate?: boolean },
+): AssembleBlueprintResult {
+  const sideSeparate = options?.sideSeparate ?? true;
+  const hasSide = sheetCut.rawViews.some((v) => v.name === "side");
+  const frontView = sheetCut.views.find((v) => v.name === "front");
+  const sideView = sheetCut.views.find((v) => v.name === "side");
+  let sheetSideSimilarity: number | undefined;
+  if (frontView && sideView) {
+    sheetSideSimilarity = silhouetteSimilarity(frontView.image, sideView.image);
+  }
+  const warnings: string[] = [];
+  if (!hasSide || !sideSeparate || !sideCut) {
+    return { cut: sheetCut, sideRegenerated: false, sheetSideSimilarity, warnings };
+  }
+  const sideRaw = sideCut.rawViews.find((v) => v.name === "side")?.image ?? sideCut.rawViews[0]?.image;
+  if (!sideRaw) {
+    warnings.push("side regeneration: could not cut the new side sheet");
+    return { cut: sheetCut, sideRegenerated: false, sheetSideSimilarity, warnings };
+  }
+  const cut = replaceSideView(sheetCut, sideRaw);
+  const newSide = cut.views.find((v) => v.name === "side");
+  if (frontView && newSide && silhouetteSimilarity(frontView.image, newSide.image) > SIDE_STILL_COPY_THRESHOLD) {
+    warnings.push("side may still copy the front");
+  }
+  return { cut, sideRegenerated: true, sheetSideSimilarity, warnings };
 }
 
 export function replaceSideView(cut: CutBlueprintResult, sideRaw: Rgba): CutBlueprintResult {

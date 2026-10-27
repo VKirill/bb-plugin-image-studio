@@ -92,6 +92,7 @@ export function ModelPanel({
   const [bpStyle, setBpStyle] = useState<BlueprintStyle>("clay+wire");
   const [softText, setSoftText] = useState("");
   const [rigidText, setRigidText] = useState("");
+  const [sideSeparate, setSideSeparate] = useState(true);
 
   useEffect(() => {
     if ((!styleId || !styles.some((item) => item.id === styleId)) && !creating) setStyleId(styles[0]?.id ?? "");
@@ -167,6 +168,7 @@ export function ModelPanel({
         style: mode === "blueprint" ? bpStyle : undefined,
         soft: mode === "blueprint" ? splitList(softText) : undefined,
         rigid: mode === "blueprint" ? splitList(rigidText) : undefined,
+        sideSeparate: mode === "blueprint" ? sideSeparate : undefined,
       })
       .then((result) => {
         if (result.errors.length > 0) onError(result.errors.join(" | "));
@@ -509,6 +511,14 @@ export function ModelPanel({
               aria-label={t("modelRigidParts", {}, locale)}
               onChange={(event) => setRigidText(event.target.value)}
             />
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={sideSeparate}
+                onChange={(event) => setSideSeparate(event.target.checked)}
+              />
+              {t("modelSideSeparate", {}, locale)}
+            </label>
           </>
         )}
 
