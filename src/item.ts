@@ -1,0 +1,348 @@
+import { z } from "zod";
+import { slugify } from "./gui.ts";
+
+export const ITEM_STEPS = [
+  "concept",
+  "blueprint",
+  "model",
+  "uv-guide",
+  "texture",
+  "preview",
+  "export",
+] as const;
+export type ItemStep = (typeof ITEM_STEPS)[number];
+
+export const ITEM_STEP_STATUSES = ["empty", "running", "done"] as const;
+export type ItemStepStatus = (typeof ITEM_STEP_STATUSES)[number];
+
+export const ITEM_SELECTED_BY = ["agent", "user", "cli"] as const;
+export type ItemSelectedBy = (typeof ITEM_SELECTED_BY)[number];
+
+export const ITEM_ENTRY_SOURCES = ["generated", "attached"] as const;
+export type ItemEntrySource = (typeof ITEM_ENTRY_SOURCES)[number];
+
+export const itemEntrySchema = z.object({
+  id: z.string().min(1),
+  source: z.enum(ITEM_ENTRY_SOURCES),
+  createdAt: z.string(),
+  files: z.record(z.string(), z.string()),
+  prompt: z.string().optional(),
+  model: z.string().optional(),
+  gateway: z.string().optional(),
+  priceUsd: z.number().nullable().optional(),
+  runFolder: z.string().optional(),
+  note: z.string().optional(),
+});
+export type ItemEntry = z.infer<typeof itemEntrySchema>;
+
+export const itemStepSchema = z.object({
+  status: z.enum(ITEM_STEP_STATUSES),
+  selected: z.string().nullable(),
+  selectedBy: z.enum(ITEM_SELECTED_BY).nullable(),
+  entries: z.array(itemEntrySchema),
+});
+export type ItemStepState = z.infer<typeof itemStepSchema>;
+
+export const itemSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1),
+  project: z.string().min(1),
+  gameId: z.string().nullable(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  steps: z.record(z.enum(ITEM_STEPS), itemStepSchema),
+});
+export type Item = z.infer<typeof itemSchema>;
+
+export const itemIndexRowSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  updatedAt: z.string(),
+  steps: z.record(z.enum(ITEM_STEPS), z.enum(ITEM_STEP_STATUSES)),
+  thumbnails: z.record(z.string(), z.string()).default({}),
+});
+export type ItemIndexRow = z.infer<typeof itemIndexRowSchema>;
+
+export function emptyItemSteps(): Record<ItemStep, ItemStepState> {
+  const steps = {} as Record<ItemStep, ItemStepState>;
+  for (const step of ITEM_STEPS) {
+    steps[step] = { status: "empty", selected: null, selectedBy: null, entries: [] };
+  }
+  return steps;
+}
+
+export function createItem(input: {
+  id: string;
+  name?: string;
+  project: string;
+  gameId?: string | null;
+  now?: string;
+}): Item {
+  const now = input.now ?? new Date().toISOString();
+  const slug = slugify(input.id, "item");
+  return itemSchema.parse({
+    id: slug,
+    name: input.name?.trim() || slug,
+    project: input.project,
+    gameId: input.gameId ?? null,
+    createdAt: now,
+    updatedAt: now,
+    steps: emptyItemSteps(),
+  });
+}
+
+export function stepStatus(item: Item, step: ItemStep): ItemStepStatus {
+  return item.steps[step].status;
+}
+
+export function addEntry(
+  item: Item,
+  step: ItemStep,
+  entry: ItemEntry,
+  options?: { select?: boolean; selectedBy?: ItemSelectedBy | null },
+): Item {
+  const state = item.steps[step];
+  const entries = [...state.entries, entry];
+  let selected = state.selected;
+  let selectedBy = state.selectedBy;
+  let status = state.status;
+  if (options?.select) {
+    selected = entry.id;
+    selectedBy = options.selectedBy ?? "cli";
+    status = "done";
+  } else if (
+    step !== "texture" &&
+    step !== "preview" &&
+    entries.length > 0 &&
+    status === "empty"
+  ) {
+    status = "done";
+  }
+  const now = new Date().toISOString();
+  return itemSchema.parse({
+    ...item,
+    updatedAt: now,
+    steps: {
+      ...item.steps,
+      [step]: { ...state, entries, selected, selectedBy, status },
+    },
+  });
+}
+
+export function selectEntry(item: Item, step: ItemStep, entryId: string, by: ItemSelectedBy): Item {
+  const state = item.steps[step];
+  if (!state.entries.some((e) => e.id === entryId)) {
+    throw new Error(`No entry "${entryId}" on step ${step}.`);
+  }
+  const now = new Date().toISOString();
+  return itemSchema.parse({
+    ...item,
+    updatedAt: now,
+    steps: {
+      ...item.steps,
+      [step]: { ...state, selected: entryId, selectedBy: by, status: "done" },
+    },
+  });
+}
+
+export function setStepRunning(item: Item, step: ItemStep): Item {
+  const now = new Date().toISOString();
+  return itemSchema.parse({
+    ...item,
+    updatedAt: now,
+    steps: {
+      ...item.steps,
+      [step]: { ...item.steps[step], status: "running" },
+    },
+  });
+}
+
+export function nextStep(item: Item): ItemStep | null {
+  for (const step of ITEM_STEPS) {
+    if (item.steps[step].status !== "done") return step;
+  }
+  return null;
+}
+
+export function itemSummary(item: Item): string {
+  const lines = [`Item ${item.name} (${item.id}) — project ${item.project}`];
+  for (const step of ITEM_STEPS) {
+    const s = item.steps[step];
+    const mark = s.status === "done" ? "✓" : s.status === "running" ? "…" : "—";
+    const pick = s.selected ? ` selected ${s.selected}` : s.entries.length ? ` ${s.entries.length} entr${s.entries.length === 1 ? "y" : "ies"}` : "";
+    lines.push(`  ${mark} ${step}${pick}`);
+  }
+  const next = nextStep(item);
+  if (next) {
+    lines.push(`Continue with step "${next}".`);
+    if (next === "concept") lines.push("Attach or generate a concept image.");
+    else if (next === "blueprint") lines.push("Attach a blueprint run or generate blueprint from the concept.");
+    else if (next === "model") lines.push("Attach an .fbx/.glb/.blend model file.");
+    else if (next === "uv-guide") lines.push("Run texture-uv or attach a run with guide/mask/parts.");
+    else if (next === "texture") lines.push("Run texture-uv or attach texture takes; select a take when ready.");
+    else if (next === "preview") lines.push("Preview comes from texture takes.");
+    else if (next === "export") lines.push("Export is not in this plugin version yet.");
+  } else {
+    lines.push("All steps are done.");
+  }
+  return lines.join("\n");
+}
+
+export function priceFor(model: string, gateway: string, resolution?: string): number | null {
+  const m = model.trim().toLowerCase();
+  const g = gateway.trim().toLowerCase();
+  if ((m === "muse-image" || m === "muse") && g === "fal") return 0.01;
+  if (m === "nano-banana-2.1" && g === "kie" && (resolution === undefined || resolution === "1K")) return 0.02;
+  return null;
+}
+
+export function itemJsonRelPath(modelProjectSlug: string, itemId: string): string {
+  return joinPosix("image-studio", "model", modelProjectSlug, "items", itemId, "item.json");
+}
+
+export function itemRunRelPath(modelProjectSlug: string, itemId: string, step: string, runId: string): string {
+  return joinPosix("image-studio", "model", modelProjectSlug, "items", itemId, `${step}-${runId}`);
+}
+
+function joinPosix(...parts: string[]): string {
+  return parts.join("/").replace(/\/+/g, "/");
+}
+
+export function itemIndexFromItem(item: Item): ItemIndexRow {
+  const steps = {} as Record<ItemStep, ItemStepStatus>;
+  const thumbnails: Record<string, string> = {};
+  for (const step of ITEM_STEPS) {
+    steps[step] = item.steps[step].status;
+    const selected = item.steps[step].selected;
+    const entry = selected ? item.steps[step].entries.find((e) => e.id === selected) : item.steps[step].entries[0];
+    if (entry) {
+      const thumb =
+        entry.files.preview ??
+        entry.files.concept ??
+        entry.files.sheet ??
+        entry.files.guide ??
+        entry.files.color ??
+        Object.values(entry.files)[0];
+      if (thumb) thumbnails[step] = thumb;
+    }
+  }
+  return itemIndexRowSchema.parse({
+    id: item.id,
+    name: item.name,
+    updatedAt: item.updatedAt,
+    steps,
+    thumbnails,
+  });
+}
+
+export function selectedEntryFiles(item: Item, step: ItemStep): Record<string, string> | null {
+  const state = item.steps[step];
+  const id = state.selected ?? state.entries[0]?.id;
+  if (!id) return null;
+  const entry = state.entries.find((e) => e.id === id);
+  return entry?.files ?? null;
+}
+
+export function resolveTextureUvInputsFromItem(
+  item: Item,
+  overrides: { modelPath?: string; conceptImage?: string },
+): { modelPath: string; conceptImage?: string } {
+  const modelPath =
+    overrides.modelPath ??
+    selectedEntryFiles(item, "model")?.model ??
+    selectedEntryFiles(item, "model")?.file ??
+    Object.values(selectedEntryFiles(item, "model") ?? {})[0];
+  if (!modelPath) {
+    throw new Error(`Item "${item.id}" has no selected model on step model. Attach or select a model first.`);
+  }
+  const conceptFiles = selectedEntryFiles(item, "concept");
+  const conceptImage =
+    overrides.conceptImage ??
+    conceptFiles?.concept ??
+    conceptFiles?.image ??
+    Object.values(conceptFiles ?? {})[0];
+  return { modelPath, conceptImage };
+}
+
+export function resolveBlueprintConceptFromItem(item: Item, overrideConcept?: string): string {
+  const concept =
+    overrideConcept ??
+    selectedEntryFiles(item, "concept")?.concept ??
+    selectedEntryFiles(item, "concept")?.image ??
+    Object.values(selectedEntryFiles(item, "concept") ?? {})[0];
+  if (!concept) {
+    throw new Error(`Item "${item.id}" has no selected concept on step concept. Attach or select a concept first.`);
+  }
+  return concept;
+}
+
+export type ItemCliAction = "create" | "list" | "show" | "attach" | "select";
+
+export type ItemCliParsed =
+  | { action: "create"; item: string; name?: string }
+  | { action: "list" }
+  | { action: "show"; item: string; json?: boolean }
+  | {
+      action: "attach";
+      item: string;
+      step: ItemStep;
+      file?: string;
+      image?: string;
+      run?: string;
+      select?: boolean;
+    }
+  | { action: "select"; item: string; step: ItemStep; entry: string };
+
+export function parseItemCli(argv: readonly string[]): ItemCliParsed {
+  const itemIdx = argv.indexOf("item");
+  if (itemIdx < 0) throw new Error("Expected model item subcommand.");
+  const sub = argv[itemIdx + 1];
+  if (!sub) throw new Error("model item needs create|list|show|attach|select.");
+  const flag = (name: string) => {
+    const i = argv.indexOf(name);
+    return i >= 0 ? argv[i + 1] : undefined;
+  };
+  if (sub === "create") {
+    const item = flag("--item");
+    if (!item) throw new Error("item create requires --item <id>.");
+    return { action: "create", item, name: flag("--name") };
+  }
+  if (sub === "list") return { action: "list" };
+  if (sub === "show") {
+    const item = flag("--item");
+    if (!item) throw new Error("item show requires --item <id>.");
+    return { action: "show", item, json: argv.includes("--json") };
+  }
+  if (sub === "select") {
+    const item = flag("--item");
+    const step = flag("--step") as ItemStep | undefined;
+    const entry = flag("--entry");
+    if (!item || !step || !entry) throw new Error("item select requires --item, --step, and --entry.");
+    if (!ITEM_STEPS.includes(step)) throw new Error(`--step must be one of ${ITEM_STEPS.join(", ")}.`);
+    return { action: "select", item, step, entry };
+  }
+  if (sub === "attach") {
+    const item = flag("--item");
+    const step = flag("--step") as ItemStep | undefined;
+    if (!item || !step) throw new Error("item attach requires --item and --step.");
+    if (!ITEM_STEPS.includes(step)) throw new Error(`--step must be one of ${ITEM_STEPS.join(", ")}.`);
+    const file = flag("--file");
+    const image = flag("--image");
+    const run = flag("--run");
+    if (!file && !image && !run) throw new Error("item attach needs --file, --image, or --run.");
+    return {
+      action: "attach",
+      item,
+      step,
+      file,
+      image,
+      run,
+      select: argv.includes("--select"),
+    };
+  }
+  throw new Error(`Unknown model item subcommand "${sub}".`);
+}
+
+export function newItemEntryId(prefix = "entry"): string {
+  return `${prefix}-${Math.random().toString(36).slice(2, 10)}`;
+}

@@ -390,6 +390,7 @@ export const MODEL_CLI_REST_SKIP_FLAGS = [
   "--style",
   "--prompt",
   "--guide-fix",
+  "--item",
   "--json",
 ] as const;
 
@@ -432,7 +433,8 @@ export function parseModelPartsCli(text: string): ModelPartRow[] {
 
 export type ModelCliTextureUv = {
   mode: "texture-uv";
-  modelPath: string;
+  itemId?: string;
+  modelPath?: string;
   prompt: string;
   object?: string;
   size: ModelTextureSize;
@@ -449,7 +451,8 @@ export type ModelCliTextureUv = {
 
 export type ModelCliBlueprint = {
   mode: "blueprint";
-  conceptImage: string;
+  itemId?: string;
+  conceptImage?: string;
   prompt: string;
   views?: string[];
   sheetStyle?: string;
@@ -470,13 +473,14 @@ export function parseModelGenerateCli(argv: readonly string[]): ModelCliTextureU
   }
   const mode = modeRaw as ModelMode;
   const projectStyleId = cliFlag(argv, "--project") ?? cliFlag(argv, "--style");
+  const itemId = cliFlag(argv, "--item");
   const images = cliFlags(argv, "--image");
   const skip = new Set<string>(MODEL_CLI_REST_SKIP_FLAGS);
   const promptTail = modelCliRestAfter(argv, "generate", skip);
 
   if (mode === "blueprint") {
     const conceptImage = images[0] ?? cliFlag(argv, "--image");
-    if (!conceptImage) throw new Error("Blueprint mode requires --image <concept>.");
+    if (!conceptImage && !itemId) throw new Error("Blueprint mode requires --image <concept> or --item.");
     const viewsFlag = cliFlag(argv, "--views");
     const views = viewsFlag ? viewsFlag.split(",").map((part) => part.trim()).filter(Boolean) : undefined;
     const softFlag = cliFlag(argv, "--soft");
@@ -487,6 +491,7 @@ export function parseModelGenerateCli(argv: readonly string[]): ModelCliTextureU
     const sideSeparateRaw = cliFlag(argv, "--side-separate");
     return {
       mode: "blueprint",
+      itemId,
       conceptImage,
       prompt,
       views,
@@ -504,7 +509,8 @@ export function parseModelGenerateCli(argv: readonly string[]): ModelCliTextureU
 
   const modelPath = cliFlag(argv, "--file") ?? cliFlag(argv, "--model");
   const prompt = cliFlag(argv, "--prompt") ?? promptTail.replace(/^model\s*/, "");
-  if (!modelPath || !prompt) throw new Error("texture-uv requires --file/--model and --prompt.");
+  if (!prompt) throw new Error("texture-uv requires --prompt.");
+  if (!modelPath && !itemId) throw new Error("texture-uv requires --file/--model or --item.");
   const sizeRaw = cliFlag(argv, "--size");
   const size = sizeRaw ? (Number(sizeRaw) as ModelTextureSize) : 1024;
   if (!MODEL_TEXTURE_SIZES.includes(size)) throw new Error("--size must be 1024 or 2048.");
@@ -528,6 +534,7 @@ export function parseModelGenerateCli(argv: readonly string[]): ModelCliTextureU
   }
   return {
     mode: "texture-uv",
+    itemId,
     modelPath,
     prompt,
     object: cliFlag(argv, "--object"),

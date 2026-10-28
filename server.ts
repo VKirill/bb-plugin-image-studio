@@ -156,6 +156,32 @@ import {
   type TextureUvPartKind,
 } from "./src/model.ts";
 import {
+  createItem,
+  itemSchema,
+  itemSummary,
+  parseItemCli,
+  resolveBlueprintConceptFromItem,
+  resolveTextureUvInputsFromItem,
+  selectEntry,
+  itemIndexFromItem,
+  itemRunRelPath,
+  type Item,
+  addEntry,
+} from "./src/item.ts";
+import {
+  attachConceptEntry,
+  attachModelFileEntry,
+  attachRunFolderEntry,
+  filesFromBlueprintRunFolder,
+  filesFromTextureRunFolder,
+  filesFromTextureTakeFolder,
+  itemIndexKvKey,
+  parseItemIndex,
+  recordBlueprintGenerated,
+  recordTextureUvGenerated,
+  upsertItemIndex,
+} from "./src/model-server.ts";
+import {
   assembleBlueprint,
   blueprintAspect,
   buildBackOnlyPrompt,
@@ -235,13 +261,14 @@ const imageStudioModelParamsSchema = z
     gateway: z.enum(["kie", "fal"]).optional(),
     guideFix: z.enum(["on", "off"]).optional(),
     project: z.string().optional(),
+    item: z.string().optional(),
   })
   .superRefine((input, ctx) => {
-    if (input.mode === "texture-uv" && !input.model?.trim()) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "model is required for texture-uv", path: ["model"] });
+    if (input.mode === "texture-uv" && !input.model?.trim() && !input.item?.trim()) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "model or item is required for texture-uv", path: ["model"] });
     }
-    if (input.mode === "blueprint" && !input.images?.[0]) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "images[0] concept is required for blueprint", path: ["images"] });
+    if (input.mode === "blueprint" && !input.images?.[0] && !input.item?.trim()) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "images[0] concept or item is required for blueprint", path: ["images"] });
     }
   });
 /** One-time move of the GUI and Characters projects into Roblox games. */
@@ -1022,6 +1049,8 @@ export default async function plugin(bb: BbPluginApi) {
     pollMs?: number;
     /** What the gallery shows as the prompt, when `prompt` is a composed one. */
     recordPrompt?: string;
+    /** Model item id when this generation belongs to an item run. */
+    itemId?: string;
     gui?: {
       styleId: string | null;
       styleName: string | null;
@@ -1325,6 +1354,7 @@ export default async function plugin(bb: BbPluginApi) {
             ...(guiOut?.files?.length ? { guiFiles: guiOut.files } : {}),
           }
         : {}),
+      ...(input.itemId ? { itemId: input.itemId } : {}),
     };
     try {
       await writePending(id, { kind: "generation", record });
@@ -1435,6 +1465,60 @@ export default async function plugin(bb: BbPluginApi) {
       const list = (await readModelTakes(styleId)).filter((item) => item.id !== record.id);
       await bb.storage.kv.set(modelTakeKvKey(styleId), [record, ...list].slice(0, MODEL_TAKE_MAX));
     });
+  }
+
+  const itemLock = new Mutex();
+  async function readItemIndex(styleId: string) {
+    const raw = await bb.storage.kv.get<unknown>(itemIndexKvKey(styleId));
+    return parseItemIndex(raw);
+  }
+  async function writeItemIndex(styleId: string, rows: ReturnType<typeof parseItemIndex>): Promise<void> {
+    await bb.storage.kv.set(itemIndexKvKey(styleId), rows);
+  }
+  async function readItemJson(cwd: string, hostId: string, style: GuiStyle, itemId: string): Promise<Item | null> {
+    const rel = join("image-studio", "model", slugify(style.name, "model"), "items", slugify(itemId, "item"), "item.json");
+    try {
+      const bytes = await readHostBytes(rel, cwd, hostId);
+      const parsed = itemSchema.safeParse(JSON.parse(bytes.toString("utf8")));
+      return parsed.success ? parsed.data : null;
+    } catch {
+      return null;
+    }
+  }
+  async function writeItemJson(cwd: string, hostId: string, style: GuiStyle, item: Item): Promise<void> {
+    const slug = slugify(item.id, "item");
+    const rel = join("image-studio", "model", slugify(style.name, "model"), "items", slug, "item.json");
+    await writeHostBytes(rel, cwd, hostId, Buffer.from(JSON.stringify(item, null, 2)));
+    const rows = await readItemIndex(style.id);
+    await writeItemIndex(style.id, upsertItemIndex(rows, itemIndexFromItem(item)));
+  }
+  async function ensureItem(
+    cwd: string,
+    hostId: string,
+    style: GuiStyle,
+    itemId: string,
+    gameId: string | null,
+  ): Promise<Item> {
+    const existing = await readItemJson(cwd, hostId, style, itemId);
+    if (existing) return existing;
+    const item = createItem({
+      id: itemId,
+      project: style.id,
+      gameId,
+    });
+    await writeItemJson(cwd, hostId, style, item);
+    return item;
+  }
+  async function saveItem(cwd: string, hostId: string, style: GuiStyle, item: Item): Promise<Item> {
+    return itemLock.run(async () => {
+      await writeItemJson(cwd, hostId, style, item);
+      return item;
+    });
+  }
+  async function loadItemForShow(cwd: string, hostId: string, style: GuiStyle, itemId: string): Promise<Item> {
+    const item = await readItemJson(cwd, hostId, style, itemId);
+    if (!item) throw new Error(`No item "${itemId}" in project ${style.name}.`);
+    return item;
   }
 
   async function addGuiRefFile(styleId: string, role: "concept" | "art", bytes: Buffer, name: string): Promise<GuiStyle> {
@@ -2030,6 +2114,7 @@ export default async function plugin(bb: BbPluginApi) {
     hostId?: string;
     originLabel?: string;
     gameId?: string;
+    itemId?: string;
   }): Promise<{ takes: ModelTakeManifest[]; records: ModelTakeRecord[]; errors: string[]; style: GuiStyle; paletteHint: string }> {
     if (!input.cwd || !input.hostId) {
       throw new Error("Texture-by-model needs a project folder on a host with Blender installed.");
@@ -2060,7 +2145,10 @@ export default async function plugin(bb: BbPluginApi) {
     const records: ModelTakeRecord[] = [];
     let paletteHint = "";
     const run = randomUUID().slice(0, 8);
-    const runRel = join("image-studio", "model", slugify(style.name, "model"), run);
+    const projectSlug = slugify(style.name, "model");
+    const runRel = input.itemId
+      ? itemRunRelPath(projectSlug, slugify(input.itemId, "item"), "texture-uv", run)
+      : join("image-studio", "model", projectSlug, run);
     const runAbs = join(input.cwd, runRel);
     let conceptProjUri: string | undefined;
 
@@ -2207,6 +2295,28 @@ export default async function plugin(bb: BbPluginApi) {
     } catch (error) {
       errors.push(`prepare: ${describe(error)}`);
     }
+    if (input.itemId && takes.length > 0) {
+      try {
+        const game = await gameOf(style);
+        let item = await ensureItem(input.cwd, input.hostId, style, input.itemId, game?.id ?? null);
+        const takeRows = takes.map((take) => ({
+          takeFolder: dirname(take.files.color),
+          color: take.files.color,
+          preview: take.files.preview,
+          manifest: join(dirname(take.files.color), "manifest.json"),
+        }));
+        item = recordTextureUvGenerated(
+          item,
+          runRel,
+          takeRows,
+          { guide: join(runRel, "guide.png"), mask: join(runRel, "mask.png"), parts: join(runRel, "parts.json") },
+          { prompt: input.prompt.trim(), model: MODEL_MUSE, gateway: "fal", priceUsd: 0.01 },
+        );
+        await saveItem(input.cwd, input.hostId, style, item);
+      } catch (error) {
+        errors.push(`item: ${describe(error)}`);
+      }
+    }
     return { takes, records, errors, style, paletteHint };
   }
 
@@ -2244,6 +2354,7 @@ export default async function plugin(bb: BbPluginApi) {
     hostId?: string;
     originLabel?: string;
     gameId?: string;
+    itemId?: string;
   }): Promise<{ blueprint: ModelBlueprintManifest | null; record: ModelTakeRecord | null; errors: string[]; style: GuiStyle }> {
     if (!input.cwd || !input.hostId) {
       throw new Error("Model blueprint needs a project folder on a host.");
@@ -2266,7 +2377,10 @@ export default async function plugin(bb: BbPluginApi) {
     if (!conceptUri) throw new Error("Could not read the concept image.");
     const subject = input.subject?.trim() || "this object";
     const run = randomUUID().slice(0, 8);
-    const blueprintRel = join("image-studio", "model", slugify(style.name, "model"), run, "blueprint");
+    const projectSlug = slugify(style.name, "model");
+    const blueprintRel = input.itemId
+      ? join(itemRunRelPath(projectSlug, slugify(input.itemId, "item"), "blueprint", run), "blueprint")
+      : join("image-studio", "model", projectSlug, run, "blueprint");
     const errors: string[] = [];
 
     const rawModelChoice = input.blueprintModel?.trim() || "nano-banana-2.1";
@@ -2450,6 +2564,21 @@ export default async function plugin(bb: BbPluginApi) {
         sideRegenerated: viewsJson.sideRegenerated,
       };
       await addModelTake(style.id, record);
+      if (input.itemId) {
+        try {
+          const game = await gameOf(style);
+          let item = await ensureItem(input.cwd, input.hostId, style, input.itemId, game?.id ?? null);
+          item = recordBlueprintGenerated(item, dirname(blueprintRel), blueprint.files, {
+            prompt: subject,
+            model: selectedModel,
+            gateway: input.gateway ?? (isMuse ? "fal" : "kie"),
+            priceUsd: null,
+          });
+          await saveItem(input.cwd, input.hostId, style, item);
+        } catch (error) {
+          errors.push(`item: ${describe(error)}`);
+        }
+      }
       return { blueprint, record, errors, style };
     } catch (error) {
       errors.push(describe(error));
@@ -3693,11 +3822,90 @@ export default async function plugin(bb: BbPluginApi) {
         await delete_gui_style({ id: style.id });
         return reply({ removed: style.id }, `Deleted ${word} project ${style.name} (${style.id}): its list and references. Saved files stay.`);
       }
+      case "item": {
+        const source = await projectSource(projectId);
+        const cwd = ctx.cwd ?? source.cwd;
+        const hostId = source.hostId;
+        if (!cwd || !hostId) return { exitCode: 1, stderr: "Model item needs a project folder on a host." };
+        let cmd: ReturnType<typeof parseItemCli>;
+        try {
+          cmd = parseItemCli(argv);
+        } catch (error) {
+          return { exitCode: 1, stderr: describe(error) };
+        }
+        const folderProject = modelCliProjectOrigin(cwd, projectId);
+        const style = await resolveGuiProject({
+          styleId: projectFlag,
+          origin: cwd,
+          projectId,
+          name: folderProject.projectName,
+          section: "model",
+        });
+        const game = await gameOf(style);
+        switch (cmd.action) {
+          case "list": {
+            const rows = await readItemIndex(style.id);
+            return reply(
+              rows,
+              rows.length === 0
+                ? "No items in this model project yet."
+                : rows.map((row) => `${row.name} (${row.id})`).join("\n"),
+            );
+          }
+          case "create": {
+            let item = await ensureItem(cwd, hostId, style, cmd.item, game?.id ?? null);
+            if (cmd.name) {
+              item = itemSchema.parse({ ...item, name: cmd.name, updatedAt: new Date().toISOString() });
+              await saveItem(cwd, hostId, style, item);
+            }
+            return reply(item, `Created item ${item.name} (${item.id}).`);
+          }
+          case "show": {
+            const item = await loadItemForShow(cwd, hostId, style, cmd.item);
+            const text = itemSummary(item);
+            return cmd.json ? reply(item, text) : { exitCode: 0, stdout: text };
+          }
+          case "select": {
+            let item = await loadItemForShow(cwd, hostId, style, cmd.item);
+            item = selectEntry(item, cmd.step, cmd.entry, "cli");
+            await saveItem(cwd, hostId, style, item);
+            return reply(item, itemSummary(item));
+          }
+          case "attach": {
+          let item = await ensureItem(cwd, hostId, style, cmd.item, game?.id ?? null);
+          let entry;
+          if (cmd.step === "concept") {
+            const ref = cmd.image ?? cmd.file;
+            if (!ref) return { exitCode: 1, stderr: "concept attach needs --image or --file." };
+            entry = attachConceptEntry(ref, "attached");
+          } else if (cmd.step === "model") {
+            if (!cmd.file) return { exitCode: 1, stderr: "model attach needs --file." };
+            entry = attachModelFileEntry(cmd.file);
+          } else if (cmd.run) {
+            const files =
+              cmd.step === "blueprint"
+                ? filesFromBlueprintRunFolder(cmd.run)
+                : cmd.step === "uv-guide"
+                  ? filesFromTextureRunFolder(cmd.run)
+                  : cmd.step === "texture" || cmd.step === "preview"
+                    ? filesFromTextureTakeFolder(cmd.run)
+                    : filesFromTextureRunFolder(cmd.run);
+            entry = attachRunFolderEntry(cmd.step, cmd.run, files);
+          } else {
+            return { exitCode: 1, stderr: "attach needs --file, --image, or --run for this step." };
+          }
+          item = addEntry(item, cmd.step, entry, { select: cmd.select, selectedBy: "cli" });
+          await saveItem(cwd, hostId, style, item);
+          return reply(item, itemSummary(item));
+          }
+        }
+        return { exitCode: 1, stderr: usage };
+      }
       case "generate": {
         const source = await projectSource(projectId);
         const cwd = ctx.cwd ?? source.cwd;
-        if (!cwd) return { exitCode: 1, stderr: "Model generate needs a project folder on a host." };
         const hostId = source.hostId;
+        if (!cwd || !hostId) return { exitCode: 1, stderr: "Model generate needs a project folder on a host." };
         let parsed: ReturnType<typeof parseModelGenerateCli>;
         try {
           parsed = parseModelGenerateCli(argv);
@@ -3706,12 +3914,31 @@ export default async function plugin(bb: BbPluginApi) {
         }
         const styleId = parsed.projectStyleId ?? projectFlag;
         const folderProject = modelCliProjectOrigin(cwd, projectId);
+        const origin = cwd ?? projectId ?? "unscoped";
         if (parsed.mode === "blueprint") {
+          let conceptImage = parsed.conceptImage;
+          if (parsed.itemId && !conceptImage) {
+            try {
+              const style = await resolveGuiProject({
+                styleId,
+                origin,
+                projectId,
+                name: folderProject.projectName,
+                section: "model",
+              });
+              const game = await gameOf(style);
+              const item = await ensureItem(cwd, hostId, style, parsed.itemId, game?.id ?? null);
+              conceptImage = resolveBlueprintConceptFromItem(item);
+            } catch (error) {
+              return { exitCode: 1, stderr: describe(error) };
+            }
+          }
+          if (!conceptImage) return { exitCode: 1, stderr: "Blueprint mode requires --image <concept> or --item with a concept step." };
           const views = parsed.views ? defaultBlueprintViews(parsed.views) : undefined;
           const run = await runModelBlueprint({
             projectId,
             styleId,
-            images: [parsed.conceptImage],
+            images: [conceptImage],
             views,
             style: parsed.sheetStyle,
             subject: parsed.subject,
@@ -3724,11 +3951,36 @@ export default async function plugin(bb: BbPluginApi) {
             cwd,
             hostId,
             originLabel: folderProject.projectName,
+            itemId: parsed.itemId,
           });
           const text = blueprintSummary(run);
           return !run.blueprint ? { exitCode: 1, stderr: text || "Nothing was generated." } : reply(run, text);
         }
-        const modelFile = isAbsolute(parsed.modelPath) ? parsed.modelPath : join(cwd, parsed.modelPath);
+        let modelPath = parsed.modelPath;
+        let images = [...(parsed.images ?? [])];
+        if (parsed.itemId) {
+          try {
+            const style = await resolveGuiProject({
+              styleId,
+              origin,
+              projectId,
+              name: folderProject.projectName,
+              section: "model",
+            });
+            const game = await gameOf(style);
+            const item = await ensureItem(cwd, hostId, style, parsed.itemId, game?.id ?? null);
+            const resolved = resolveTextureUvInputsFromItem(item, {
+              modelPath,
+              conceptImage: images[0],
+            });
+            modelPath = resolved.modelPath;
+            if (resolved.conceptImage) images = [resolved.conceptImage, ...images.slice(1)];
+          } catch (error) {
+            return { exitCode: 1, stderr: describe(error) };
+          }
+        }
+        if (!modelPath) return { exitCode: 1, stderr: "texture-uv requires --file/--model or --item with a model step." };
+        const modelFile = isAbsolute(modelPath) ? modelPath : join(cwd, modelPath);
         const run = await runModelTextureUv({
           projectId,
           styleId,
@@ -3737,7 +3989,7 @@ export default async function plugin(bb: BbPluginApi) {
           object: parsed.object,
           prompt: parsed.prompt,
           parts: parsed.parts,
-          images: parsed.images,
+          images,
           size: parsed.size,
           variants: parsed.variants,
           subject: parsed.subject,
@@ -3748,6 +4000,7 @@ export default async function plugin(bb: BbPluginApi) {
           cwd,
           hostId,
           originLabel: folderProject.projectName,
+          itemId: parsed.itemId,
         });
         const text = modelSummary(run);
         return run.takes.length === 0 ? { exitCode: 1, stderr: text || "Nothing was generated." } : reply(run, text);
@@ -3843,6 +4096,108 @@ export default async function plugin(bb: BbPluginApi) {
   });
 
   bb.agents.registerTool({
+    name: "image_studio_item",
+    description:
+      "Manage a model-section item (concept → blueprint → model → uv-guide → texture → preview): create, list, show status, attach files or runs by reference, select an entry.",
+    instructions:
+      "Use image_studio_item to drive the item pipeline. action create|list|show|attach|select. item is the slug id. attach: step concept|blueprint|model|uv-guide|texture|preview; file for model paths; image for concept paths or gallery ids; run for an existing model run folder. show returns itemSummary text describing the next step.",
+    presentation: {
+      label: { pending: "Updating item", completed: "Updated item" },
+      icon: { glyph: "Palette" },
+    },
+    parameters: z.object({
+      action: z.enum(["create", "list", "show", "attach", "select"]),
+      item: z.string().optional(),
+      step: z.enum(["concept", "blueprint", "model", "uv-guide", "texture", "preview", "export"]).optional(),
+      file: z.string().optional(),
+      image: z.string().optional(),
+      run: z.string().optional(),
+      entry: z.string().optional(),
+      name: z.string().optional(),
+      select: z.boolean().optional(),
+      project: z.string().optional(),
+    }),
+    async execute(input, ctx) {
+      try {
+        const folder = await threadFolder(ctx.threadId, ctx.projectId || null);
+        if (!folder.cwd || !folder.hostId) {
+          return { content: [{ type: "text", text: "Items need a project folder on a host." }], isError: true };
+        }
+        const style = await resolveGuiProject({
+          styleId: input.project,
+          origin: folder.cwd,
+          projectId: ctx.projectId || null,
+          section: "model",
+        });
+        const game = await gameOf(style);
+        if (input.action === "list") {
+          const rows = await readItemIndex(style.id);
+          const text =
+            rows.length === 0 ? "No items in this model project yet." : rows.map((row) => `${row.name} (${row.id})`).join("\n");
+          return text;
+        }
+        if (!input.item) {
+          return { content: [{ type: "text", text: "item id is required." }], isError: true };
+        }
+        if (input.action === "create") {
+          let item = await ensureItem(folder.cwd, folder.hostId, style, input.item, game?.id ?? null);
+          if (input.name) {
+            item = itemSchema.parse({ ...item, name: input.name, updatedAt: new Date().toISOString() });
+            await saveItem(folder.cwd, folder.hostId, style, item);
+          }
+          return itemSummary(item);
+        }
+        if (input.action === "show") {
+          const item = await loadItemForShow(folder.cwd, folder.hostId, style, input.item);
+          return itemSummary(item);
+        }
+        if (input.action === "select") {
+          if (!input.step || !input.entry) {
+            return { content: [{ type: "text", text: "select needs step and entry." }], isError: true };
+          }
+          let item = await loadItemForShow(folder.cwd, folder.hostId, style, input.item);
+          item = selectEntry(item, input.step, input.entry, "agent");
+          await saveItem(folder.cwd, folder.hostId, style, item);
+          return itemSummary(item);
+        }
+        if (input.action === "attach") {
+          if (!input.step) {
+            return { content: [{ type: "text", text: "attach needs step." }], isError: true };
+          }
+          let item = await ensureItem(folder.cwd, folder.hostId, style, input.item, game?.id ?? null);
+          let entry;
+          if (input.step === "concept") {
+            const ref = input.image ?? input.file;
+            if (!ref) return { content: [{ type: "text", text: "concept attach needs image or file." }], isError: true };
+            entry = attachConceptEntry(ref, "attached");
+          } else if (input.step === "model") {
+            if (!input.file) return { content: [{ type: "text", text: "model attach needs file." }], isError: true };
+            entry = attachModelFileEntry(input.file);
+          } else if (input.run) {
+            const files =
+              input.step === "blueprint"
+                ? filesFromBlueprintRunFolder(input.run)
+                : input.step === "uv-guide"
+                  ? filesFromTextureRunFolder(input.run)
+                  : input.step === "texture" || input.step === "preview"
+                    ? filesFromTextureTakeFolder(input.run)
+                    : filesFromTextureRunFolder(input.run);
+            entry = attachRunFolderEntry(input.step, input.run, files);
+          } else {
+            return { content: [{ type: "text", text: "attach needs file, image, or run." }], isError: true };
+          }
+          item = addEntry(item, input.step, entry, { select: input.select, selectedBy: "agent" });
+          await saveItem(folder.cwd, folder.hostId, style, item);
+          return itemSummary(item);
+        }
+        return { content: [{ type: "text", text: "Unknown action." }], isError: true };
+      } catch (error) {
+        return { content: [{ type: "text", text: describe(error) }], isError: true };
+      }
+    },
+  });
+
+  bb.agents.registerTool({
     name: "image_studio_model",
     description:
       "Game model textures and modeling blueprints (Muse Image). Mode texture-uv: Blender bakes a colour guide on the project host, Muse repaints each UV island, the result is applied back with a before/after preview. Mode blueprint: orthographic clay wireframe views cut from one sheet for a 3D artist (decorative reference, not a mesh). Runs at once, no Send form.",
@@ -3857,10 +4212,22 @@ export default async function plugin(bb: BbPluginApi) {
       try {
         const folder = await threadFolder(ctx.threadId, ctx.projectId || null);
         if (input.mode === "blueprint") {
+          let images = input.images ?? [];
+          if (input.item && !images[0] && folder.cwd && folder.hostId) {
+            const style = await resolveGuiProject({
+              styleId: input.project,
+              origin: folder.cwd,
+              projectId: ctx.projectId || null,
+              section: "model",
+            });
+            const game = await gameOf(style);
+            const item = await ensureItem(folder.cwd, folder.hostId, style, input.item, game?.id ?? null);
+            images = [resolveBlueprintConceptFromItem(item)];
+          }
           const run = await runModelBlueprint({
             projectId: ctx.projectId || null,
             styleId: input.project,
-            images: input.images ?? [],
+            images,
             views: input.views,
             style: input.style,
             subject: input.subject,
@@ -3870,20 +4237,39 @@ export default async function plugin(bb: BbPluginApi) {
             blueprintModel: input.blueprintModel,
             resolution: input.resolution,
             gateway: input.gateway,
+            itemId: input.item,
             ...folder,
           });
           const text = blueprintSummary(run);
           return !run.blueprint ? { content: [{ type: "text", text: text || "Nothing was generated." }], isError: true } : text;
         }
+        let modelPath = input.model;
+        let images = input.images ?? [];
+        if (input.item && folder.cwd && folder.hostId) {
+          const style = await resolveGuiProject({
+            styleId: input.project,
+            origin: folder.cwd,
+            projectId: ctx.projectId || null,
+            section: "model",
+          });
+          const game = await gameOf(style);
+          const item = await ensureItem(folder.cwd, folder.hostId, style, input.item, game?.id ?? null);
+          const resolved = resolveTextureUvInputsFromItem(item, { modelPath, conceptImage: images[0] });
+          modelPath = resolved.modelPath;
+          if (resolved.conceptImage) images = [resolved.conceptImage, ...images.slice(1)];
+        }
+        if (!modelPath?.trim()) {
+          return { content: [{ type: "text", text: "texture-uv needs model or item with a model step." }], isError: true };
+        }
         const run = await runModelTextureUv({
           projectId: ctx.projectId || null,
           styleId: input.project,
           mode: input.mode,
-          model: input.model!,
+          model: modelPath,
           object: input.object,
           prompt: input.prompt,
           parts: input.parts,
-          images: input.images,
+          images,
           size: input.size,
           variants: input.variants,
           subject: input.subject,
@@ -3891,6 +4277,7 @@ export default async function plugin(bb: BbPluginApi) {
           projectConcept: input.projectConcept,
           conceptView: input.conceptView,
           guideFix: input.guideFix,
+          itemId: input.item,
           ...folder,
         });
         const text = modelSummary(run);
@@ -4093,7 +4480,7 @@ export default async function plugin(bb: BbPluginApi) {
   });
 
   bb.agents.configure(() => ({
-    tools: ["image_studio_generate", "image_studio_gui", "image_studio_character", "image_studio_roblox", "image_studio_model"],
+    tools: ["image_studio_generate", "image_studio_gui", "image_studio_character", "image_studio_roblox", "image_studio_item", "image_studio_model"],
     skills: ["image-studio"],
   }));
 

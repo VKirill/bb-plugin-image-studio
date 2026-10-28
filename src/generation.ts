@@ -73,5 +73,7 @@ export const generationSchema = z.object({
   guiCharacter: z.string().optional(),
   /** Roblox section: the finished files made from the picture (icon.png, SkyboxFt.png…), paths as saved. */
   guiFiles: z.array(z.string()).optional(),
+  /** Model item run that produced this gallery image, when applicable. */
+  itemId: z.string().optional(),
 });
 export type Generation = z.infer<typeof generationSchema>;
