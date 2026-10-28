@@ -1,0 +1,144 @@
+{
+  "schemaVersion": 1,
+  "status": "accepted",
+  "lanePilotRunId": "lprun_7ab1f614e5bf4e9cac43bc49529371b0",
+  "lanePilotTaskId": "item-skill",
+  "attemptId": "lpattempt_ece646d5e1b645cc9f5ae8b269004e3e",
+  "pmThreadId": "thr_h9t9t78xrx",
+  "writerThreadId": "thr_5pq4qj76mq",
+  "ownsPaths": [
+    "skills/image-studio/references/model-textures.md",
+    "skills/image-studio/SKILL.md"
+  ],
+  "readFirst": [
+    {
+      "path": ".agents/plans/2026-10-28-model-items.md",
+      "windows": []
+    },
+    {
+      "path": "skills/image-studio/references/model-textures.md",
+      "windows": []
+    },
+    {
+      "path": "skills/image-studio/SKILL.md",
+      "windows": []
+    },
+    {
+      "path": "src/item.ts",
+      "windows": []
+    },
+    {
+      "path": "server.ts",
+      "windows": []
+    }
+  ],
+  "output": "Updated the **Item pipeline** in `model-textures.md` to document `image_studio_item`, CLI `model item …`, `item.json` (path, steps, `selected` / `selectedBy`, resume via `show` / `nextStep`), and the full flow: create → attach concept → blueprint with `--item` → Blender model attach → texture-uv with item defaults (Muse/fal, `guideFix` on, parts palette) → `select` texture entry → `export` with `fbxScale` 0.01 and `export.json`. Added one sentence in `SKILL.md` pointing to the item pipeline (frontmatter unchanged).\n\n**Changed paths:** `skills/image-studio/references/model-textures.md`, `skills/image-studio/SKILL.md`\n\n```plan-fact\n[\n  {\"item\":1,\"status\":\"done\",\"evidence\":[\"skills/image-studio/references/model-textures.md:165-248\",\"cmd:grep -q 'image_studio_item' skills/image-studio/references/model-textures.md && grep -q 'item.json' skills/image-studio/references/model-textures.md && grep -q 'fbxScale' skills/image-studio/references/model-textures.md\"]},\n  {\"item\":2,\"status\":\"done\",\"evidence\":[\"skills/image-studio/SKILL.md:16\",\"cmd:node --test --experimental-strip-types tests/skill-frontmatter.test.ts\"]}\n]\n```\n\nAPPROACH: Read `src/item.ts` and `server.ts` tool registration for exact step names, CLI flags (`--entry` not `--take`), and export schema; rewrote only the Item pipeline section and one SKILL.md body line.\n\nLESSON: Item docs must use `--entry` for texture take selection and `item show`'s `Continue with step` wording — the plan's `--take` flag does not exist in code.",
+  "verification": [
+    {
+      "command": "grep -q 'image_studio_item' skills/image-studio/references/model-textures.md && grep -q 'item.json' skills/image-studio/references/model-textures.md && grep -q 'fbxScale' skills/image-studio/references/model-textures.md && node --test --experimental-strip-types tests/skill-frontmatter.test.ts",
+      "exitCode": 0,
+      "stdout": "✔ every skills/**/SKILL.md: valid frontmatter, name matches folder, description <= 1024 (1.283042ms)\r\n✔ description length guard rejects text over 1024 (0.106083ms)\r\n✔ frontmatter guard rejects 0.8.7-style colon-space in an unquoted description (0.066542ms)\r\n✔ quoted description allows former colon-space wording (0.077583ms)\r\n✔ image-studio description line has no unquoted colon-space (Lane Pilot awk verify) (0.120458ms)\r\nℹ tests 5\r\nℹ suites 0\r\nℹ pass 5\r\nℹ fail 0\r\nℹ cancelled 0\r\nℹ skipped 0\r\nℹ todo 0\r\nℹ duration_ms 162.2\r\n",
+      "stderr": "",
+      "sandboxBackend": "macos-seatbelt",
+      "policySha256": "b1e3b6cd695b80db2cc991d6306b5131adc2173e8da8c2bea6724d6a7a589d7f",
+      "workspacePath": "/Users/vechkasov/.lane-pilot/worktrees/lpattempt_ece646d5e1b645cc9f5ae8b269004e3e/bb-plugin-image-studio"
+    }
+  ],
+  "runV2": {
+    "schemaVersion": 1,
+    "pools": {
+      "provider": 15,
+      "verification": 2
+    },
+    "score": 2,
+    "risk": "low",
+    "sourceRisk": "low",
+    "scoreAdapter": "task-risk-v1"
+  },
+  "reasoning": [
+    {
+      "planSha256": "7e38cef506404944c1c8b35a152c87db292247898c1d8d82a08a302b4b4e01db",
+      "sentPlanSha256": "7e38cef506404944c1c8b35a152c87db292247898c1d8d82a08a302b4b4e01db",
+      "sourceLength": 113,
+      "sentLength": 113,
+      "jevStatus": "error",
+      "jevDecision": null,
+      "requestedReasoningLevel": "medium",
+      "effectiveReasoningLevel": "medium",
+      "fallbackReason": "jev_error;http_403",
+      "retryEffort": {
+        "enabled": true,
+        "retryIndex": 0,
+        "before": "medium",
+        "after": "medium",
+        "changed": false
+      },
+      "providerId": "acp-cursor",
+      "model": "composer-2.5",
+      "serviceTier": "default",
+      "requestedServiceTier": "default",
+      "runId": "lprun_7ab1f614e5bf4e9cac43bc49529371b0",
+      "attemptId": "lpattempt_ece646d5e1b645cc9f5ae8b269004e3e",
+      "threadId": "thr_5pq4qj76mq",
+      "effortMode": "automatic",
+      "selectionSource": {
+        "providerId": "acp-cursor",
+        "model": "composer-2.5",
+        "reasoningLevel": "medium",
+        "serviceTier": "default",
+        "reasoningLevelSource": "explicit"
+      },
+      "dispatchContext": {
+        "memoryText": "Area «skills/image-studio»: earlier accepted tasks, newest first. Their decisions are in main; keep them unless this task changes them.\n- 2026-10-27T19:31 model-skill-desc-limit: Skill description over 1024 chars: BB drops the image-studio skill (configure failed); shorten it, version 0.8.7. After installing 0.8.6 BB reports `agent configure failed: configure() selected unknown skill id \"image-studio\"`: the SKILL.md frontmatter description grew to 1095 characters (v0.8.4 had 823) and skill descriptions are limited to 1024, so the skill is dropped. Rewrite the description to at most 950 characters keeping every trigger group (pictures/photos/posters, people profiles, game GUI, game characters for 3D, Roblox game art, texture a 3D model by its UV / modeling blueprint from a concept, 18+ with Qwen/Wan) — compress the model list (e.g. 'Nano Banana, Muse Image, GPT Image, FLUX.2, Seedr\n- 2026-10-27T19:08 model-skill-holes: Skill: drop the false claim that prepare fills holes. skills/image-studio/references/model-textures.md says 'prepare runs hole fill on open boundaries' but blender/texture_uv.py does no hole filling (and must not: open cloth or rag planes are intentional). Rewrite that bullet: the agent closes holes itself in Blender (bmesh.ops.holes_fill on the boundary edges of the removed detail) before calling texture-uv; the plugin does not change the mesh. Check the rest of the file for other claims the code does not back (grep the named functions/params in server.ts, src/model.ts, src/blueprint.ts, blender/texture_uv.py) and fix them the same way.\n- 2026-10-27T18:53 model-skill-v2: Skill: references/model-textures.md (texture-uv with concept projection, blueprint, item pipeline) + a short section in SKILL.md and its description. Write skills/image-studio/references/model-textures.md in the style of references/roblox.md and characters.md (English, short imperative lines, real parameter names from the image_studio_model registration in server.ts and the CLI help), add a short **Texture by model / blueprint** paragraph to SKILL.md pointing to it, and the trigger words to SKILL.md's description (texture a 3D model by its UV, hand-painted texture on a model, modeling blueprint / orthographic views from a concept). Cover: (1) when to use texture-uv (a finished model, painted texture that sits on its pieces) vs image_studio_\nFiles of this area: package.json, skills/image-studio/SKILL.md, tests/skill-frontmatter.test.ts, skills/image-studio/references/model-textures.md\n\n- `skills/image-studio/references/model-textures.md` instructs agents to close holes themselves with `bmesh.ops.holes_fill` on boundary edges after removing solid detail, before calling texture-uv. `prepare` does not fill holes; open cloth or rag geometry can remain intentional.\n- image_studio_model mode 'blueprint' is implemented in src/blueprint.ts as pure TypeScript image work (sharp may be missing) and wired in server.ts runModelBlueprint for both the tool and the CLI.\n- src/blender-scripts.ts is generated from blender/texture_uv.py and must stay byte-identical to it: edit the Python file and regenerate the TS copy.",
+        "memoryPicked": [
+          "89f47a1d51fedaa6c36dc117a76ba9b66fe7118a2e5b1abe1afdf41a239582a1",
+          "f2cea6e761516600d9a13912d7ad81efdb7b31db0b2013858646a16e6e2ac4dc",
+          "9ecbb8b9cc06b9ab094e1802cf34285eba103f5e073ed87dd958bfa1059a2df9"
+        ],
+        "rulesText": "- When a feature adds or uses a new helper on the native-step helpers object, wire it in host/plugin.ts at every place the helpers are built and add a test against the real host wiring, not only a stubbed helper.\n- In the Pokecut theme never override the desktop sidebar panel's top (BB places it below the macOS chrome row); stretch it with bottom: 0; height: auto. Desktop sidebar markup has data-side on the outer group div, so target [data-side=\"left\"] > [data-sidebar=\"panel\"], not [data-sidebar=\"panel\"][data-side=\"left\"] (phone-only).",
+        "rulesPicked": {
+          "total": 18,
+          "picked": [
+            "rule_1a13871bdc9b0fa7",
+            "rule_ee601b9a83575e96"
+          ]
+        },
+        "executionPacket": "Read these before editing; they are the context for this task:\n- .agents/plans/2026-10-28-model-items.md L1-L78 (sha256 3935d6e7)\n- skills/image-studio/references/model-textures.md L1-L176 (sha256 deb88a4a)\n- skills/image-studio/SKILL.md L1-L54 (sha256 a78cb832)",
+        "executionPacketSha256": "d5637601f00f9bd41579a99e44455d5abfae90d7538e50fc9fdbde87b98801eb",
+        "pmReadContext": "",
+        "agent": "Lane Pilot writer",
+        "promptChars": 12428,
+        "helperMode": "roles",
+        "helperRequired": false,
+        "skillPick": {
+          "enabled": true,
+          "skills": [
+            "image-studio"
+          ],
+          "picked": [],
+          "craft": [],
+          "projectFolder": [
+            "image-studio"
+          ],
+          "hints": [],
+          "sources": {
+            "image-studio": "/Users/vechkasov/.bb/plugins/cache/git/github.com/VKirill/bb-plugin-image-studio/6c2bf2a7a64dfd6a2e0b92865b0dbbc00f60927f/skills/image-studio"
+          },
+          "reason": null,
+          "materialized": []
+        },
+        "writerKey": "acp-cursor/composer-2.5",
+        "harness": {
+          "id": "hrn_bb82a6fb4d778cee",
+          "arm": null,
+          "alwaysOnChars": 0,
+          "skills": [],
+          "checks": [],
+          "materialize": null
+        }
+      }
+    }
+  ],
+  "emergencyFallback": null,
+  "turns": 1
+}

@@ -164,12 +164,78 @@ Before you ship a textured model:
 
 ## Item pipeline
 
-End-to-end flow for a game prop or weapon:
+An **item** ties one prop's concept, blueprint runs, Blender mesh, UV guide, Muse takes, and engine export. Drive it with **`image_studio_item`** (preferred) or **`bb image-studio model item …`** in a hidden thread. Pass **`item`** / **`--item <id>`** on **`image_studio_model`** (`blueprint`, `texture-uv`) so new runs land on the item and the plugin fills steps for you. Without `item`, each run stays a loose folder under `image-studio/model/<project>/<run>/` as before.
 
-1. **Concept** — `image_studio_roblox` (`items` / `props`) or `image_studio_character` equipment; get approval.
-2. **Blueprint** — `image_studio_model` `blueprint` from the approved concept: front/side/back one height, soft parts in blue + `views.json` anchors.
-3. **Model** — build in live Blender (MCP): rigid and soft meshes separate; soft parts get **bone chains** from anchors; views as ortho backdrops.
-4. **Unwrap** — large islands, top up → **`texture-uv`**: plugin prepare builds **guide** (part colours × light; concept projected when `images[0]` + `projectConcept`) → Muse with guide + concept → `color.png`, `preview.png` → fix and re-run if needed.
-5. **Engine** — bake/export Color, Normal, Roughness; import mesh + bones; **particles** for fire/glow.
+### `item.json`
 
-Again: Muse paints the **texture atlas**, not the mesh. The blueprint grid does not define topology — it is a visual ruler. The mesh is yours in Blender; the final art is `color.png` on the finished UV.
+Source of truth: **`image-studio/model/<project>/items/<item-id>/item.json`** in the game folder (read it directly; the panel index is a cache). New generations with `--item` write under **`items/<item-id>/<step>-<runId>/`** (e.g. `blueprint-255ac411`, `texture-2f72e94f/take-1/`). Older runs stay where they are — **attach** them by path with `--run`, do not move files.
+
+**Steps** (in order): `concept` → `blueprint` → `model` → `uv-guide` → `texture` → `preview` → `export`.
+
+Each step has **`status`** (`empty` / `running` / `done`), **`entries[]`** (generated runs or attached files: `files`, optional `prompt`, `model`, `gateway`, `priceUsd`, `runFolder`, `source`: `generated` | `attached`), and the chosen row **`selected`** + **`selectedBy`** (`agent` | `user` | `cli`).
+
+**Resume:** `image_studio_item` `action: show` or `bb image-studio model item show --item <id>` prints **`itemSummary`** — per-step ✓/…/—, then **`Continue with step "<next>"`** (same logic as `nextStep` in code). Read `item.json` when you need entry ids or file paths.
+
+### Step-by-step
+
+1. **Create the item** — `action: create` / `bb image-studio model item create --item <slug> [--name "Fire mop"]`. Slug becomes the folder name under `items/`.
+
+2. **Concept** — Approve art in `image_studio_roblox` (`items` / `props`) or `image_studio_character` (`equipment`), then attach: `attach` `step: concept` with **`image`** (project path or Roblox/character **gallery id**) or **`file`**. CLI: `bb image-studio model item attach --item <id> --step concept --image <path|gallery-id> [--select]`.
+
+3. **Blueprint** — `image_studio_model` `mode: blueprint` with **`item`** (concept comes from the item when `images` is omitted). Defaults: **`blueprintModel`** `nano-banana-2.1`, **`resolution`** `1K`, **`gateway`** `kie` (~10 min queue; long poll). Or attach an existing run: `--step blueprint --run image-studio/model/<project>/<old-run>`.
+
+   ```json
+   { "mode": "blueprint", "item": "fire-mop", "views": ["front", "side", "back"], "style": "clay+wire", "subject": "fire mop", "soft": ["rags"] }
+   ```
+
+   ```bash
+   bb image-studio model generate --mode blueprint --item fire-mop \
+     --views front,side,back --sheet-style clay+wire --soft "rags" --subject "fire mop" --json
+   ```
+
+4. **Model in Blender** — Live Blender (MCP): load blueprint `front.png` / `side.png` / … from the selected blueprint entry; scale from `views.json` `baseline` and `heightPx`. **Rigid** parts as separate meshes; **soft** parts separate with **bone chains** parented at each soft part's **`anchor`** in `views.json`. Close holes on removed solid detail (`bmesh.ops.holes_fill` on boundary edges) before texturing. Export/save the untextured mesh into the game (e.g. `assets/3d/…`) and attach: `attach` `step: model` **`file`**, or CLI `bb image-studio model item attach --item <id> --step model --file assets/3d/fire-mop.fbx --select`.
+
+5. **Texture-uv** — `image_studio_model` `mode: texture-uv` with **`item`**: model path and concept image are taken from the item's selected **`model`** and **`concept`** steps when you omit `model` / `images[0]`. **Muse** runs on **fal**; keep **`guideFix`** **`on`** (default). Name parts via **`parts`** / palette keys (`#c9c9cd=grey metal clamp`, `light grey=clamp metal`) so Muse knows what to paint on each guide colour.
+
+   ```json
+   {
+     "mode": "texture-uv",
+     "item": "fire-mop",
+     "prompt": "charred cloth only at the BOTTOM end of each rag; soot on the metal band",
+     "parts": { "Material.002": "cotton rags", "Material.001": "wooden handle" },
+     "conceptNote": "stylized fire mop with layered rags",
+     "projectConcept": true,
+     "conceptView": "front",
+     "size": 2048,
+     "variants": 2,
+     "guideFix": "on"
+   }
+   ```
+
+   ```bash
+   bb image-studio model generate --mode texture-uv --item fire-mop \
+     --prompt "charred rag ends; warm wood grain on handle" \
+     --parts "fire-mop_baked=rag head; wood=handle" \
+     --project-concept true --concept-view front --size 2048 --variants 2 --guide-fix on --json
+   ```
+
+   The run records **`uv-guide`** (guide/mask/parts) and one **`texture`** + **`preview`** entry per Muse take under `items/<id>/texture-<run>/take-<n>/`.
+
+6. **Pick a take** — Open `take-<n>/preview.png` (before/after, two sides). **`image_studio_item`** `action: select`, `step: texture`, **`entry`** = the texture entry id from `item.json` (or from `show`). CLI: `bb image-studio model item select --item <id> --step texture --entry <entry-id>`. Preview step follows the same selected take.
+
+7. **Export** — `image_studio_item` `action: export` or `bb image-studio model item export --item <id> [--scale <n>]`. Writes under **`items/<id>/export/`**: **`color.png`**, **`normal.png`** (from color, roblox-texture style), textured **`model.fbx`** + **`model.blend`**, and **`export.json`**. **`fbxScale`** comes from the model project's **`fbxScale`** (default **`0.01`** for Roblox studs). **`export.json`** lists files, **`fbxScale`**, **`uvLayer`** (`ImageStudioUV`), and Roblox mapping — **MeshPart** mesh path plus **SurfaceAppearance** `ColorMap` / `NormalMap` (and roughness/metal maps when present).
+
+### Tool quick reference
+
+| Action | MCP `image_studio_item` | CLI |
+|---|---|---|
+| Create | `action: create`, `item` | `model item create --item <id>` |
+| List | `action: list` | `model item list` |
+| Status / resume | `action: show`, `item` | `model item show --item <id> [--json]` |
+| Attach file or run | `action: attach`, `step`, `file` / `image` / `run` | `model item attach --item <id> --step <step> …` |
+| Select take | `action: select`, `step`, `entry` | `model item select --item <id> --step texture --entry <id>` |
+| Engine export | `action: export`, optional `scale` | `model item export --item <id> [--scale]` |
+
+`image_studio_model` also accepts optional **`item`** on `blueprint` and `texture-uv` (same id as above).
+
+Again: Muse paints the **texture atlas**, not the mesh. The blueprint grid does not define topology — it is a visual ruler. The mesh is yours in Blender; the shipped art is the selected take's **`color.png`** on **`ImageStudioUV`**, then **`export`** for the engine.
