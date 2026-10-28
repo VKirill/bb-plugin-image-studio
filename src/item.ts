@@ -181,7 +181,7 @@ export function itemSummary(item: Item): string {
     else if (next === "uv-guide") lines.push("Run texture-uv or attach a run with guide/mask/parts.");
     else if (next === "texture") lines.push("Run texture-uv or attach texture takes; select a take when ready.");
     else if (next === "preview") lines.push("Preview comes from texture takes.");
-    else if (next === "export") lines.push("Export is not in this plugin version yet.");
+    else if (next === "export") lines.push("Run item export when a texture take is selected.");
   } else {
     lines.push("All steps are done.");
   }
@@ -202,6 +202,107 @@ export function itemJsonRelPath(modelProjectSlug: string, itemId: string): strin
 
 export function itemRunRelPath(modelProjectSlug: string, itemId: string, step: string, runId: string): string {
   return joinPosix("image-studio", "model", modelProjectSlug, "items", itemId, `${step}-${runId}`);
+}
+
+export function itemExportRelDir(modelProjectSlug: string, itemId: string): string {
+  return joinPosix("image-studio", "model", modelProjectSlug, "items", itemId, "export");
+}
+
+export const itemExportFilesSchema = z.object({
+  fbx: z.string(),
+  blend: z.string(),
+  color: z.string(),
+  normal: z.string(),
+  roughness: z.string().optional(),
+  metal: z.string().optional(),
+});
+
+export const itemExportJsonSchema = z.object({
+  item: z.string(),
+  files: itemExportFilesSchema,
+  fbxScale: z.number().positive(),
+  uvLayer: z.string(),
+  roblox: z.object({
+    meshPart: z.string(),
+    surfaceAppearance: z.object({
+      ColorMap: z.string(),
+      NormalMap: z.string(),
+      RoughnessMap: z.string().optional(),
+      MetalnessMap: z.string().optional(),
+    }),
+  }),
+  notes: z.array(z.string()).default([]),
+});
+export type ItemExportJson = z.infer<typeof itemExportJsonSchema>;
+
+export function buildItemExportJson(input: {
+  itemId: string;
+  files: z.infer<typeof itemExportFilesSchema>;
+  fbxScale: number;
+  uvLayer: string;
+  notes?: string[];
+}): ItemExportJson {
+  const notes = [...(input.notes ?? [])];
+  if (input.files.roughness) notes.push("roughness map uses the source model UV, not ImageStudioUV");
+  if (input.files.metal) notes.push("metalness map uses the source model UV, not ImageStudioUV");
+  return itemExportJsonSchema.parse({
+    item: input.itemId,
+    files: input.files,
+    fbxScale: input.fbxScale,
+    uvLayer: input.uvLayer,
+    roblox: {
+      meshPart: input.files.fbx,
+      surfaceAppearance: {
+        ColorMap: input.files.color,
+        NormalMap: input.files.normal,
+        ...(input.files.roughness ? { RoughnessMap: input.files.roughness } : {}),
+        ...(input.files.metal ? { MetalnessMap: input.files.metal } : {}),
+      },
+    },
+    notes,
+  });
+}
+
+export function requireSelectedTextureEntry(item: Item): ItemEntry {
+  const state = item.steps.texture;
+  const id = state.selected;
+  if (!id) {
+    throw new Error(`Item "${item.id}" has no selected texture entry on step texture. Select a take first.`);
+  }
+  const entry = state.entries.find((e) => e.id === id);
+  if (!entry) {
+    throw new Error(`Item "${item.id}" selected texture entry "${id}" is missing.`);
+  }
+  const color = entry.files.color ?? Object.values(entry.files)[0];
+  if (!color) {
+    throw new Error(`Item "${item.id}" texture entry "${id}" has no color file.`);
+  }
+  return entry;
+}
+
+export function textureTakeDirFromEntry(entry: ItemEntry): string {
+  if (entry.runFolder) return entry.runFolder.replace(/\\/g, "/");
+  const color = entry.files.color;
+  if (!color) throw new Error("Texture entry has no run folder or color path.");
+  const normalized = color.replace(/\\/g, "/");
+  const slash = normalized.lastIndexOf("/");
+  return slash >= 0 ? normalized.slice(0, slash) : normalized;
+}
+
+export function recordExportGenerated(
+  item: Item,
+  exportDir: string,
+  files: Record<string, string>,
+  selectedBy: ItemSelectedBy = "cli",
+): Item {
+  const entry: ItemEntry = {
+    id: newItemEntryId("export"),
+    source: "generated",
+    createdAt: new Date().toISOString(),
+    runFolder: exportDir,
+    files,
+  };
+  return addEntry(item, "export", entry, { select: true, selectedBy });
 }
 
 function joinPosix(...parts: string[]): string {
@@ -276,12 +377,13 @@ export function resolveBlueprintConceptFromItem(item: Item, overrideConcept?: st
   return concept;
 }
 
-export type ItemCliAction = "create" | "list" | "show" | "attach" | "select";
+export type ItemCliAction = "create" | "list" | "show" | "attach" | "select" | "export";
 
 export type ItemCliParsed =
   | { action: "create"; item: string; name?: string }
   | { action: "list" }
   | { action: "show"; item: string; json?: boolean }
+  | { action: "export"; item: string; scale?: string }
   | {
       action: "attach";
       item: string;
@@ -297,7 +399,7 @@ export function parseItemCli(argv: readonly string[]): ItemCliParsed {
   const itemIdx = argv.indexOf("item");
   if (itemIdx < 0) throw new Error("Expected model item subcommand.");
   const sub = argv[itemIdx + 1];
-  if (!sub) throw new Error("model item needs create|list|show|attach|select.");
+  if (!sub) throw new Error("model item needs create|list|show|attach|select|export.");
   const flag = (name: string) => {
     const i = argv.indexOf(name);
     return i >= 0 ? argv[i + 1] : undefined;
@@ -320,6 +422,11 @@ export function parseItemCli(argv: readonly string[]): ItemCliParsed {
     if (!item || !step || !entry) throw new Error("item select requires --item, --step, and --entry.");
     if (!ITEM_STEPS.includes(step)) throw new Error(`--step must be one of ${ITEM_STEPS.join(", ")}.`);
     return { action: "select", item, step, entry };
+  }
+  if (sub === "export") {
+    const item = flag("--item");
+    if (!item) throw new Error("item export requires --item <id>.");
+    return { action: "export", item, scale: flag("--scale") };
   }
   if (sub === "attach") {
     const item = flag("--item");

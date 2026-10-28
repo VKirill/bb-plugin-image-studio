@@ -54,10 +54,19 @@ export const guiStyleSchema = z.object({
     .default({ background: "", button: "", outline: "", highlight: "", text: "" }),
   notes: z.string().default(""),
   refs: z.array(guiRefSchema).default([]),
+  /** Model-section projects: FBX export global_scale for Roblox (studs). */
+  fbxScale: z.number().positive().optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
 export type GuiStyle = z.infer<typeof guiStyleSchema>;
+
+export const DEFAULT_MODEL_FBX_SCALE = 0.01;
+
+export function modelFbxScale(style: GuiStyle): number {
+  if (style.section !== "model") return 1;
+  return style.fbxScale ?? DEFAULT_MODEL_FBX_SCALE;
+}
 
 export function parseGuiStyles(raw: unknown): GuiStyle[] {
   if (!Array.isArray(raw)) return [];
