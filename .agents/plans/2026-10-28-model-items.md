@@ -2,7 +2,7 @@
 title: Image Studio — «предмет» (item) в разделе «Текстура по модели»
 date: 2026-10-28
 source: запрос Кирилла через тред LAVA BONK (thr_vgdyg342s5)
-status: approved 2026-10-28
+status: implemented 2026-10-28 (accepted Lane Pilot tasks shipped; runtime acceptance pending)
 depends_on: 0.8.16 (model-guide-fix2, model-blueprint-nb21)
 ---
 
@@ -75,3 +75,18 @@ items/plunger-scepter/item.json
 
 - **Export:** FBX без вшитых текстур плюс отдельные PNG-карты (`color`, `normal`; `roughness`/`metal`, если есть), а также `.blend` как исходник. Масштаб FBX — настройка проекта `fbxScale`, по умолчанию `0.01` для Roblox (`global_scale 0.01`: Roblox читает сантиметры FBX как studs). `export.json`: пути файлов, масштаб, куда что в Roblox (MeshPart + SurfaceAppearance.ColorMap/NormalMap/RoughnessMap/MetalnessMap).
 - **Concept:** только прикрепление — файлом или id из галереи разделов roblox/character.
+
+## Status (2026-10-28)
+| task | version | status | run |
+|---|---|---|---|
+| item-core | 0.9.0 | done | lprun_7ab1f614e5bf4e9cac43bc49529371b0 |
+| item-export | 0.9.1 | done | lprun_7ab1f614e5bf4e9cac43bc49529371b0 |
+| item-panel | 0.9.2 | done | lprun_7ab1f614e5bf4e9cac43bc49529371b0 |
+| item-fixes | 0.9.3 | done | lprun_7ab1f614e5bf4e9cac43bc49529371b0 |
+| item-skill | — | done | lprun_7ab1f614e5bf4e9cac43bc49529371b0 |
+
+Acceptance items 1–4 above are not yet run: the plunger-scepter item has not been assembled from the existing files on the host, and the panel and gallery badge have not been checked in BB.
+
+## History
+### 2026-10-28
+- Accepted Lane Pilot run `lprun_7ab1f614e5bf4e9cac43bc49529371b0` completed item-core, item-export, item-panel, item-fixes and item-skill. The item-fixes repair path is `item detach` followed by `item select`; the skill's troubleshooting lines describe it.
