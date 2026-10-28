@@ -129,7 +129,82 @@ export function addEntry(
   });
 }
 
-export function selectEntry(item: Item, step: ItemStep, entryId: string, by: ItemSelectedBy): Item {
+export function isTextureTakeFolderName(name: string): boolean {
+  return /^take-\d+$/i.test(name.trim());
+}
+
+export function takeNameFromFolder(folder: string): string {
+  const normalized = folder.replace(/\\/g, "/").replace(/\/$/, "");
+  const slash = normalized.lastIndexOf("/");
+  return slash >= 0 ? normalized.slice(slash + 1) : normalized;
+}
+
+/** Resolve take folder paths under a texture-uv run root (or a single take folder). */
+export function resolveTakeFolderPaths(runFolder: string, listedChildNames: readonly string[]): string[] {
+  const base = runFolder.replace(/\\/g, "/").replace(/\/$/, "");
+  const baseName = takeNameFromFolder(base);
+  if (isTextureTakeFolderName(baseName)) return [base];
+  const takes = listedChildNames
+    .filter((name) => isTextureTakeFolderName(name))
+    .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
+    .map((name) => joinPosix(base, name));
+  return takes;
+}
+
+export function buildAttachEntriesForTextureUvRun(
+  runFolder: string,
+  step: "texture" | "preview",
+  takeFolderPaths: readonly string[],
+): ItemEntry[] {
+  if (takeFolderPaths.length === 0) {
+    const need = step === "texture" ? "color.png" : "preview.png";
+    throw new Error(`No take folders with ${need} under "${runFolder}".`);
+  }
+  return takeFolderPaths.map((takeFolder) => {
+    const takeName = takeNameFromFolder(takeFolder);
+    const files: Record<string, string> =
+      step === "texture"
+        ? { color: joinPosix(takeFolder, "color.png"), manifest: joinPosix(takeFolder, "manifest.json") }
+        : { preview: joinPosix(takeFolder, "preview.png") };
+    return {
+      id: takeName,
+      source: "attached",
+      createdAt: new Date().toISOString(),
+      runFolder: takeFolder,
+      files,
+    };
+  });
+}
+
+function previewEntryForTextureTake(item: Item, takeFolder: string, takeName: string): ItemEntry | undefined {
+  return item.steps.preview.entries.find(
+    (e) => e.runFolder === takeFolder || e.id === takeName || e.files.preview === joinPosix(takeFolder, "preview.png"),
+  );
+}
+
+export function previewSatisfiedForSelectedTexture(item: Item): boolean {
+  const texId = item.steps.texture.selected;
+  if (!texId) return false;
+  const tex = item.steps.texture.entries.find((e) => e.id === texId);
+  if (!tex) return false;
+  const takeFolder = textureTakeDirFromEntry(tex);
+  const takeName = takeNameFromFolder(takeFolder);
+  const previewId = item.steps.preview.selected;
+  if (previewId) {
+    const selected = item.steps.preview.entries.find((e) => e.id === previewId);
+    if (selected && (selected.runFolder === takeFolder || selected.id === takeName)) return true;
+  }
+  return Boolean(previewEntryForTextureTake(item, takeFolder, takeName));
+}
+
+export function stepIsDone(item: Item, step: ItemStep): boolean {
+  const state = item.steps[step];
+  if (state.status === "done") return true;
+  if (step === "preview" && previewSatisfiedForSelectedTexture(item)) return true;
+  return false;
+}
+
+function selectStepOnly(item: Item, step: ItemStep, entryId: string, by: ItemSelectedBy): Item {
   const state = item.steps[step];
   if (!state.entries.some((e) => e.id === entryId)) {
     throw new Error(`No entry "${entryId}" on step ${step}.`);
@@ -143,6 +218,66 @@ export function selectEntry(item: Item, step: ItemStep, entryId: string, by: Ite
       [step]: { ...state, selected: entryId, selectedBy: by, status: "done" },
     },
   });
+}
+
+function selectTextureTake(item: Item, entryId: string, by: ItemSelectedBy): Item {
+  let next = selectStepOnly(item, "texture", entryId, by);
+  const tex = next.steps.texture.entries.find((e) => e.id === entryId);
+  if (!tex) return next;
+  const takeFolder = textureTakeDirFromEntry(tex);
+  const takeName = takeNameFromFolder(takeFolder);
+  let preview = previewEntryForTextureTake(next, takeFolder, takeName);
+  if (!preview) {
+    preview = {
+      id: takeName,
+      source: "attached",
+      createdAt: new Date().toISOString(),
+      runFolder: takeFolder,
+      files: { preview: joinPosix(takeFolder, "preview.png") },
+    };
+    next = addEntry(next, "preview", preview, { select: false });
+  }
+  return selectStepOnly(next, "preview", preview.id, by);
+}
+
+export function selectEntry(item: Item, step: ItemStep, entryId: string, by: ItemSelectedBy): Item {
+  if (step === "texture") return selectTextureTake(item, entryId, by);
+  return selectStepOnly(item, step, entryId, by);
+}
+
+export function detachEntry(item: Item, step: ItemStep, entryId: string): Item {
+  const state = item.steps[step];
+  if (!state.entries.some((e) => e.id === entryId)) {
+    throw new Error(`No entry "${entryId}" on step ${step}.`);
+  }
+  const removed = state.entries.find((e) => e.id === entryId);
+  const entries = state.entries.filter((e) => e.id !== entryId);
+  let selected = state.selected === entryId ? null : state.selected;
+  let selectedBy = selected ? state.selectedBy : null;
+  let status: ItemStepStatus = entries.length === 0 ? "empty" : selected ? "done" : "empty";
+  if (entries.length > 0 && !selected && step !== "texture" && step !== "preview") {
+    status = state.status === "running" ? "running" : "empty";
+  }
+  const now = new Date().toISOString();
+  let steps = {
+    ...item.steps,
+    [step]: { ...state, entries, selected, selectedBy, status },
+  };
+  if (step === "texture" && removed && state.selected === entryId) {
+    const takeFolder = removed.runFolder ?? textureTakeDirFromEntry(removed);
+    const takeName = takeNameFromFolder(takeFolder);
+    const previewState = steps.preview;
+    if (
+      previewState.selected &&
+      previewState.entries.find((e) => e.id === previewState.selected)?.runFolder === takeFolder
+    ) {
+      steps = {
+        ...steps,
+        preview: { ...previewState, selected: null, selectedBy: null, status: previewState.entries.length ? "empty" : "empty" },
+      };
+    }
+  }
+  return itemSchema.parse({ ...item, updatedAt: now, steps });
 }
 
 export function setStepRunning(item: Item, step: ItemStep): Item {
@@ -159,7 +294,7 @@ export function setStepRunning(item: Item, step: ItemStep): Item {
 
 export function nextStep(item: Item): ItemStep | null {
   for (const step of ITEM_STEPS) {
-    if (item.steps[step].status !== "done") return step;
+    if (!stepIsDone(item, step)) return step;
   }
   return null;
 }
@@ -377,7 +512,7 @@ export function resolveBlueprintConceptFromItem(item: Item, overrideConcept?: st
   return concept;
 }
 
-export type ItemCliAction = "create" | "list" | "show" | "attach" | "select" | "export";
+export type ItemCliAction = "create" | "list" | "show" | "attach" | "select" | "detach" | "export";
 
 export type ItemCliParsed =
   | { action: "create"; item: string; name?: string }
@@ -393,13 +528,14 @@ export type ItemCliParsed =
       run?: string;
       select?: boolean;
     }
-  | { action: "select"; item: string; step: ItemStep; entry: string };
+  | { action: "select"; item: string; step: ItemStep; entry: string }
+  | { action: "detach"; item: string; step: ItemStep; entry: string };
 
 export function parseItemCli(argv: readonly string[]): ItemCliParsed {
   const itemIdx = argv.indexOf("item");
   if (itemIdx < 0) throw new Error("Expected model item subcommand.");
   const sub = argv[itemIdx + 1];
-  if (!sub) throw new Error("model item needs create|list|show|attach|select|export.");
+  if (!sub) throw new Error("model item needs create|list|show|attach|select|detach|export.");
   const flag = (name: string) => {
     const i = argv.indexOf(name);
     return i >= 0 ? argv[i + 1] : undefined;
@@ -422,6 +558,14 @@ export function parseItemCli(argv: readonly string[]): ItemCliParsed {
     if (!item || !step || !entry) throw new Error("item select requires --item, --step, and --entry.");
     if (!ITEM_STEPS.includes(step)) throw new Error(`--step must be one of ${ITEM_STEPS.join(", ")}.`);
     return { action: "select", item, step, entry };
+  }
+  if (sub === "detach") {
+    const item = flag("--item");
+    const step = flag("--step") as ItemStep | undefined;
+    const entry = flag("--entry");
+    if (!item || !step || !entry) throw new Error("item detach requires --item, --step, and --entry.");
+    if (!ITEM_STEPS.includes(step)) throw new Error(`--step must be one of ${ITEM_STEPS.join(", ")}.`);
+    return { action: "detach", item, step, entry };
   }
   if (sub === "export") {
     const item = flag("--item");

@@ -164,6 +164,9 @@ import {
   resolveBlueprintConceptFromItem,
   resolveTextureUvInputsFromItem,
   selectEntry,
+  detachEntry,
+  buildAttachEntriesForTextureUvRun,
+  isTextureTakeFolderName,
   itemIndexFromItem,
   itemRunRelPath,
   itemExportRelDir,
@@ -182,7 +185,6 @@ import {
   attachRunFolderEntry,
   filesFromBlueprintRunFolder,
   filesFromTextureRunFolder,
-  filesFromTextureTakeFolder,
   itemIndexKvKey,
   parseItemIndex,
   recordBlueprintGenerated,
@@ -1559,6 +1561,36 @@ export default async function plugin(bb: BbPluginApi) {
       return normalized;
     }
     return normalized.replace(/^\.\//, "");
+  }
+
+  async function discoverTextureTakeFolders(
+    runFolder: string,
+    step: "texture" | "preview",
+    cwd: string,
+    hostId: string,
+  ): Promise<string[]> {
+    const rel = hostRelPath(cwd, runFolder);
+    const baseName = rel.split("/").pop() ?? "";
+    if (isTextureTakeFolderName(baseName)) return [rel];
+    const found: string[] = [];
+    for (let n = 1; n <= 8; n++) {
+      const takeRel = join(rel, `take-${n}`);
+      const file = join(takeRel, step === "texture" ? "color.png" : "preview.png");
+      try {
+        await readHostBytes(file, cwd, hostId);
+        found.push(takeRel);
+      } catch {
+        break;
+      }
+    }
+    if (found.length > 0) return found;
+    const rootFile = join(rel, step === "texture" ? "color.png" : "preview.png");
+    try {
+      await readHostBytes(rootFile, cwd, hostId);
+      return [rel];
+    } catch {
+      return [];
+    }
   }
 
   async function runItemExport(input: {
@@ -4071,32 +4103,60 @@ export default async function plugin(bb: BbPluginApi) {
             });
             return reply(run.doc, run.summary);
           }
-          case "attach": {
-          let item = await ensureItem(cwd, hostId, style, cmd.item, game?.id ?? null);
-          let entry;
-          if (cmd.step === "concept") {
-            const ref = cmd.image ?? cmd.file;
-            if (!ref) return { exitCode: 1, stderr: "concept attach needs --image or --file." };
-            entry = attachConceptEntry(ref, "attached");
-          } else if (cmd.step === "model") {
-            if (!cmd.file) return { exitCode: 1, stderr: "model attach needs --file." };
-            entry = attachModelFileEntry(cmd.file);
-          } else if (cmd.run) {
-            const files =
-              cmd.step === "blueprint"
-                ? filesFromBlueprintRunFolder(cmd.run)
-                : cmd.step === "uv-guide"
-                  ? filesFromTextureRunFolder(cmd.run)
-                  : cmd.step === "texture" || cmd.step === "preview"
-                    ? filesFromTextureTakeFolder(cmd.run)
-                    : filesFromTextureRunFolder(cmd.run);
-            entry = attachRunFolderEntry(cmd.step, cmd.run, files);
-          } else {
-            return { exitCode: 1, stderr: "attach needs --file, --image, or --run for this step." };
+          case "detach": {
+            let item = await loadItemForShow(cwd, hostId, style, cmd.item);
+            try {
+              item = detachEntry(item, cmd.step, cmd.entry);
+            } catch (error) {
+              return { exitCode: 1, stderr: describe(error) };
+            }
+            await saveItem(cwd, hostId, style, item);
+            return reply(item, itemSummary(item));
           }
-          item = addEntry(item, cmd.step, entry, { select: cmd.select, selectedBy: "cli" });
-          await saveItem(cwd, hostId, style, item);
-          return reply(item, itemSummary(item));
+          case "attach": {
+            let item = await ensureItem(cwd, hostId, style, cmd.item, game?.id ?? null);
+            if (cmd.step === "concept") {
+              const ref = cmd.image ?? cmd.file;
+              if (!ref) return { exitCode: 1, stderr: "concept attach needs --image or --file." };
+              item = addEntry(item, cmd.step, attachConceptEntry(ref, "attached"), {
+                select: cmd.select,
+                selectedBy: "cli",
+              });
+            } else if (cmd.step === "model") {
+              if (!cmd.file) return { exitCode: 1, stderr: "model attach needs --file." };
+              item = addEntry(item, cmd.step, attachModelFileEntry(cmd.file), { select: cmd.select, selectedBy: "cli" });
+            } else if (cmd.run) {
+              if (cmd.step === "texture" || cmd.step === "preview") {
+                let entries;
+                try {
+                  const takes = await discoverTextureTakeFolders(cmd.run, cmd.step, cwd, hostId);
+                  entries = buildAttachEntriesForTextureUvRun(cmd.run, cmd.step, takes);
+                } catch (error) {
+                  return { exitCode: 1, stderr: describe(error) };
+                }
+                for (const entry of entries) {
+                  item = addEntry(item, cmd.step, entry, {
+                    select: Boolean(cmd.select && entries.length === 1),
+                    selectedBy: "cli",
+                  });
+                }
+              } else {
+                const files =
+                  cmd.step === "blueprint"
+                    ? filesFromBlueprintRunFolder(cmd.run)
+                    : cmd.step === "uv-guide"
+                      ? filesFromTextureRunFolder(cmd.run)
+                      : filesFromTextureRunFolder(cmd.run);
+                item = addEntry(item, cmd.step, attachRunFolderEntry(cmd.step, cmd.run, files), {
+                  select: cmd.select,
+                  selectedBy: "cli",
+                });
+              }
+            } else {
+              return { exitCode: 1, stderr: "attach needs --file, --image, or --run for this step." };
+            }
+            await saveItem(cwd, hostId, style, item);
+            return reply(item, itemSummary(item));
           }
         }
         return { exitCode: 1, stderr: usage };
@@ -4300,13 +4360,13 @@ export default async function plugin(bb: BbPluginApi) {
     description:
       "Manage a model-section item (concept → blueprint → model → uv-guide → texture → preview): create, list, show status, attach files or runs by reference, select an entry.",
     instructions:
-      "Use image_studio_item to drive the item pipeline. action create|list|show|attach|select. item is the slug id. attach: step concept|blueprint|model|uv-guide|texture|preview; file for model paths; image for concept paths or gallery ids; run for an existing model run folder. show returns itemSummary text describing the next step.",
+      "Use image_studio_item to drive the item pipeline. action create|list|show|attach|select|detach|export. item is the slug id. attach: step concept|blueprint|model|uv-guide|texture|preview; file for model paths; image for concept paths or gallery ids; run for an existing model run folder (texture/preview run roots expand to one entry per take-N). detach: step and entry remove a bad attach without deleting files. show returns itemSummary text describing the next step.",
     presentation: {
       label: { pending: "Updating item", completed: "Updated item" },
       icon: { glyph: "Palette" },
     },
     parameters: z.object({
-      action: z.enum(["create", "list", "show", "attach", "select", "export"]),
+      action: z.enum(["create", "list", "show", "attach", "select", "detach", "export"]),
       scale: z.string().optional(),
       item: z.string().optional(),
       step: z.enum(["concept", "blueprint", "model", "uv-guide", "texture", "preview", "export"]).optional(),
@@ -4361,6 +4421,19 @@ export default async function plugin(bb: BbPluginApi) {
           await saveItem(folder.cwd, folder.hostId, style, item);
           return itemSummary(item);
         }
+        if (input.action === "detach") {
+          if (!input.step || !input.entry) {
+            return { content: [{ type: "text", text: "detach needs step and entry." }], isError: true };
+          }
+          let item = await loadItemForShow(folder.cwd, folder.hostId, style, input.item);
+          try {
+            item = detachEntry(item, input.step, input.entry);
+          } catch (error) {
+            return { content: [{ type: "text", text: describe(error) }], isError: true };
+          }
+          await saveItem(folder.cwd, folder.hostId, style, item);
+          return itemSummary(item);
+        }
         if (input.action === "export") {
           const scaleOverride = input.scale !== undefined ? Number(input.scale) : undefined;
           const run = await runItemExport({
@@ -4378,28 +4451,46 @@ export default async function plugin(bb: BbPluginApi) {
             return { content: [{ type: "text", text: "attach needs step." }], isError: true };
           }
           let item = await ensureItem(folder.cwd, folder.hostId, style, input.item, game?.id ?? null);
-          let entry;
           if (input.step === "concept") {
             const ref = input.image ?? input.file;
             if (!ref) return { content: [{ type: "text", text: "concept attach needs image or file." }], isError: true };
-            entry = attachConceptEntry(ref, "attached");
+            item = addEntry(item, input.step, attachConceptEntry(ref, "attached"), {
+              select: input.select,
+              selectedBy: "agent",
+            });
           } else if (input.step === "model") {
             if (!input.file) return { content: [{ type: "text", text: "model attach needs file." }], isError: true };
-            entry = attachModelFileEntry(input.file);
+            item = addEntry(item, input.step, attachModelFileEntry(input.file), { select: input.select, selectedBy: "agent" });
           } else if (input.run) {
-            const files =
-              input.step === "blueprint"
-                ? filesFromBlueprintRunFolder(input.run)
-                : input.step === "uv-guide"
-                  ? filesFromTextureRunFolder(input.run)
-                  : input.step === "texture" || input.step === "preview"
-                    ? filesFromTextureTakeFolder(input.run)
+            if (input.step === "texture" || input.step === "preview") {
+              let entries;
+              try {
+                const takes = await discoverTextureTakeFolders(input.run, input.step, folder.cwd, folder.hostId);
+                entries = buildAttachEntriesForTextureUvRun(input.run, input.step, takes);
+              } catch (error) {
+                return { content: [{ type: "text", text: describe(error) }], isError: true };
+              }
+              for (const entry of entries) {
+                item = addEntry(item, input.step, entry, {
+                  select: Boolean(input.select && entries.length === 1),
+                  selectedBy: "agent",
+                });
+              }
+            } else {
+              const files =
+                input.step === "blueprint"
+                  ? filesFromBlueprintRunFolder(input.run)
+                  : input.step === "uv-guide"
+                    ? filesFromTextureRunFolder(input.run)
                     : filesFromTextureRunFolder(input.run);
-            entry = attachRunFolderEntry(input.step, input.run, files);
+              item = addEntry(item, input.step, attachRunFolderEntry(input.step, input.run, files), {
+                select: input.select,
+                selectedBy: "agent",
+              });
+            }
           } else {
             return { content: [{ type: "text", text: "attach needs file, image, or run." }], isError: true };
           }
-          item = addEntry(item, input.step, entry, { select: input.select, selectedBy: "agent" });
           await saveItem(folder.cwd, folder.hostId, style, item);
           return itemSummary(item);
         }

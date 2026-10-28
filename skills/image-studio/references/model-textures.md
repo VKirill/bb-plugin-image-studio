@@ -234,8 +234,14 @@ Each step has **`status`** (`empty` / `running` / `done`), **`entries[]`** (gene
 | Status / resume | `action: show`, `item` | `model item show --item <id> [--json]` |
 | Attach file or run | `action: attach`, `step`, `file` / `image` / `run` | `model item attach --item <id> --step <step> …` |
 | Select take | `action: select`, `step`, `entry` | `model item select --item <id> --step texture --entry <id>` |
+| Remove bad entry | `action: detach`, `step`, `entry` | `model item detach --item <id> --step <step> --entry <id>` |
 | Engine export | `action: export`, optional `scale` | `model item export --item <id> [--scale]` |
 
 `image_studio_model` also accepts optional **`item`** on `blueprint` and `texture-uv` (same id as above).
+
+### Troubleshooting
+
+- **Texture attach points at missing `color.png` on the run root** — Muse takes live in **`take-1/`**, **`take-2/`**, … Attach the **texture-uv run folder** (not a single take) with `--step texture --run <run>`; the plugin adds one entry per take. If you attached the wrong path and got a dead entry, run **`model item detach --item <id> --step texture --entry <id>`** (or `image_studio_item` `action: detach`), then **`select`** the correct take entry (preview follows the same take).
+- **`show` still says preview after export** — Select the texture take you want (`select` on step `texture`); preview is satisfied from that take. Re-run **`export`** if needed; when export is done, `show` should report the item complete.
 
 Again: Muse paints the **texture atlas**, not the mesh. The blueprint grid does not define topology — it is a visual ruler. The mesh is yours in Blender; the shipped art is the selected take's **`color.png`** on **`ImageStudioUV`**, then **`export`** for the engine.
