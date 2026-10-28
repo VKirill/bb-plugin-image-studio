@@ -1,6 +1,6 @@
 {
   "name": "bb-plugin-image-studio",
-  "version": "0.9.1",
+  "version": "0.9.2",
   "type": "module",
   "engines": {
     "bb": ">=0.43",
