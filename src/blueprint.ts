@@ -108,6 +108,23 @@ function clayStylePhrase(style: BlueprintStyle): string {
     : "flat grey clay with a visible black quad wireframe";
 }
 
+export const BLUEPRINT_MODELS = ["nano-banana-2.1", "nano-banana-2-lite", "muse-image"] as const;
+export type BlueprintModel = (typeof BLUEPRINT_MODELS)[number];
+export const DEFAULT_BLUEPRINT_MODEL: BlueprintModel = "nano-banana-2.1";
+
+export function viewInstruction(name: BlueprintViewName): string {
+  switch (name) {
+    case "front":
+      return "FRONT: the object exactly as seen in image 1 but straight-on.";
+    case "side":
+      return "SIDE: the object rotated 90 degrees around its vertical axis — a true profile: parts that stick out sideways in FRONT now point toward or away from the viewer, so the whole object looks much narrower than in FRONT.";
+    case "back":
+      return "BACK: the object rotated 180 degrees — mirror of FRONT; details on the front face are hidden.";
+    case "top":
+      return "TOP: seen from straight above.";
+  }
+}
+
 export function buildBlueprintPrompt(input: {
   subject: string;
   viewNames: readonly BlueprintViewName[];
@@ -116,15 +133,17 @@ export function buildBlueprintPrompt(input: {
 }): string {
   const n = input.viewNames.length;
   const labels = viewLabelsLine(input.viewNames);
-  const taskLabels = viewLabelsTaskLine(input.viewNames);
   const soft =
     input.softParts.length > 0
       ? ` Soft dangling parts (${input.softParts.join(", ")}) in light BLUE clay.`
       : "";
+  const viewLines = input.viewNames.map((name) => viewInstruction(name));
   return [
     `Image 1 is the DESIGN REFERENCE: ${input.subject}.`,
-    `Task: draw a technical modeling blueprint of exactly this object for a 3D artist — ${n} orthographic views side by side on a plain light grey background: ${taskLabels}; same scale and height, aligned on one baseline; ${clayStylePhrase(input.style)}.${soft}`,
-    "Must not change: the proportions, part count and silhouette of the object in image 1.",
+    `Task: draw a technical modeling blueprint of exactly this object for a 3D artist — ${n} orthographic views side by side on a plain light grey background (${labels}), aligned on one baseline:`,
+    ...viewLines,
+    `Style: ${clayStylePhrase(input.style)}.${soft}`,
+    "Must not change: proportions, part count and shapes of the object in image 1.",
     "No perspective, no shadows, no fire or effects, no text except the labels " + labels + ".",
   ].join("\n");
 }
