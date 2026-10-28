@@ -230,6 +230,9 @@ const imageStudioModelParamsSchema = z
     soft: z.array(z.string().min(1)).optional(),
     rigid: z.array(z.string().min(1)).optional(),
     sideSeparate: z.boolean().optional(),
+    blueprintModel: z.enum(["nano-banana-2.1", "nano-banana-2-lite", "muse-image"]).optional(),
+    resolution: z.enum(["1K", "2K"]).optional(),
+    gateway: z.enum(["kie", "fal"]).optional(),
     guideFix: z.enum(["on", "off"]).optional(),
     project: z.string().optional(),
   })
@@ -351,6 +354,9 @@ export const rpcContract = defineRpcContract({
         soft: z.array(z.string().min(1)).optional(),
         rigid: z.array(z.string().min(1)).optional(),
         sideSeparate: z.boolean().optional(),
+        blueprintModel: z.enum(["nano-banana-2.1", "nano-banana-2-lite", "muse-image"]).optional(),
+        resolution: z.enum(["1K", "2K"]).optional(),
+        gateway: z.enum(["kie", "fal"]).optional(),
         guideFix: z.enum(["on", "off"]).optional(),
       })
       .superRefine((input, ctx) => {
@@ -1012,6 +1018,8 @@ export default async function plugin(bb: BbPluginApi) {
     /** GUI jobs: `prompt` is already composed; style references go first as Image 1…N. */
     rawPrompt?: boolean;
     leadUris?: string[];
+    /** Optional per-call poll timeout in milliseconds (kie/fal). */
+    pollMs?: number;
     /** What the gallery shows as the prompt, when `prompt` is a composed one. */
     recordPrompt?: string;
     gui?: {
@@ -2229,6 +2237,9 @@ export default async function plugin(bb: BbPluginApi) {
     soft?: string[];
     rigid?: string[];
     sideSeparate?: boolean;
+    blueprintModel?: string;
+    resolution?: string;
+    gateway?: string;
     cwd?: string;
     hostId?: string;
     originLabel?: string;
@@ -2257,27 +2268,82 @@ export default async function plugin(bb: BbPluginApi) {
     const run = randomUUID().slice(0, 8);
     const blueprintRel = join("image-studio", "model", slugify(style.name, "model"), run, "blueprint");
     const errors: string[] = [];
+
+    const rawModelChoice = input.blueprintModel?.trim() || "nano-banana-2.1";
+    const selectedModel = rawModelChoice === "nano-banana-2-lite" ? "nano-banana-2" : rawModelChoice;
+    const isMuse = selectedModel === "muse-image" || selectedModel === MODEL_MUSE;
+    const resolution = input.resolution ?? (isMuse ? undefined : "1K");
+    const sideSeparate = input.sideSeparate ?? (isMuse ? true : false);
+
     try {
       const prompt = buildBlueprintPrompt({ subject, viewNames, style: clayStyle, softParts });
-      const rendered = await renderImage({
-        projectId: input.projectId,
-        prompt,
-        rawPrompt: true,
-        recordPrompt: prompt,
-        model: MODEL_MUSE,
-        gateway: "fal",
-        aspectRatio: blueprintAspect(viewNames.length),
-        leadUris: [conceptUri],
-        cwd: input.cwd,
-        hostId: input.hostId,
-      });
+      let rendered: Rendered;
+      if (input.gateway) {
+        rendered = await renderImage({
+          projectId: input.projectId,
+          prompt,
+          rawPrompt: true,
+          recordPrompt: prompt,
+          model: selectedModel,
+          gateway: input.gateway,
+          resolution,
+          pollMs: 1_200_000,
+          aspectRatio: blueprintAspect(viewNames.length),
+          leadUris: [conceptUri],
+          cwd: input.cwd,
+          hostId: input.hostId,
+        });
+      } else if (isMuse) {
+        rendered = await renderImage({
+          projectId: input.projectId,
+          prompt,
+          rawPrompt: true,
+          recordPrompt: prompt,
+          model: selectedModel,
+          gateway: "fal",
+          aspectRatio: blueprintAspect(viewNames.length),
+          leadUris: [conceptUri],
+          cwd: input.cwd,
+          hostId: input.hostId,
+        });
+      } else {
+        try {
+          rendered = await renderImage({
+            projectId: input.projectId,
+            prompt,
+            rawPrompt: true,
+            recordPrompt: prompt,
+            model: selectedModel,
+            gateway: "kie",
+            resolution,
+            pollMs: 1_200_000,
+            aspectRatio: blueprintAspect(viewNames.length),
+            leadUris: [conceptUri],
+            cwd: input.cwd,
+            hostId: input.hostId,
+          });
+        } catch (kieError) {
+          rendered = await renderImage({
+            projectId: input.projectId,
+            prompt,
+            rawPrompt: true,
+            recordPrompt: prompt,
+            model: selectedModel,
+            gateway: "fal",
+            resolution,
+            aspectRatio: blueprintAspect(viewNames.length),
+            leadUris: [conceptUri],
+            cwd: input.cwd,
+            hostId: input.hostId,
+          });
+        }
+      }
       const sheetRgba = await decodeRgba(rendered.original);
       await writeHostBytes(join(blueprintRel, "sheet.png"), input.cwd, input.hostId, rendered.original);
       let sheetCut = cutBlueprint(sheetRgba, viewNames);
       const classification = classifyViews(sheetCut.views);
       if (classification.relabeled) sheetCut = swapBlueprintBackSide(sheetCut);
       const wantsSide = viewNames.includes("side");
-      const sideSeparate = input.sideSeparate ?? true;
       const frontRaw = sheetCut.rawViews.find((v) => v.name === "front")?.image;
       let sideCut: ReturnType<typeof cutBlueprint> | null = null;
       let extraSheetBytes: Buffer | null = null;
@@ -2925,6 +2991,9 @@ export default async function plugin(bb: BbPluginApi) {
         soft: input.soft,
         rigid: input.rigid,
         sideSeparate: input.sideSeparate,
+        blueprintModel: input.blueprintModel,
+        resolution: input.resolution,
+        gateway: input.gateway,
         cwd,
         hostId,
         originLabel: folderProject.projectName,
@@ -3649,6 +3718,9 @@ export default async function plugin(bb: BbPluginApi) {
             soft: parsed.soft,
             rigid: parsed.rigid,
             sideSeparate: parsed.sideSeparate,
+            blueprintModel: parsed.blueprintModel,
+            resolution: parsed.resolution,
+            gateway: parsed.gateway,
             cwd,
             hostId,
             originLabel: folderProject.projectName,
@@ -3795,6 +3867,9 @@ export default async function plugin(bb: BbPluginApi) {
             soft: input.soft,
             rigid: input.rigid,
             sideSeparate: input.sideSeparate,
+            blueprintModel: input.blueprintModel,
+            resolution: input.resolution,
+            gateway: input.gateway,
             ...folder,
           });
           const text = blueprintSummary(run);

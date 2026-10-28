@@ -383,6 +383,9 @@ export const MODEL_CLI_REST_SKIP_FLAGS = [
   "--rigid",
   "--sheet-style",
   "--side-separate",
+  "--blueprint-model",
+  "--resolution",
+  "--gateway",
   "--project",
   "--style",
   "--prompt",
@@ -454,6 +457,9 @@ export type ModelCliBlueprint = {
   soft?: string[];
   rigid?: string[];
   sideSeparate?: boolean;
+  blueprintModel?: string;
+  resolution?: string;
+  gateway?: string;
   projectStyleId?: string;
 };
 
@@ -489,6 +495,9 @@ export function parseModelGenerateCli(argv: readonly string[]): ModelCliTextureU
       soft,
       rigid,
       sideSeparate: sideSeparateRaw === undefined ? undefined : parseOptionalBoolFlag(sideSeparateRaw),
+      blueprintModel: cliFlag(argv, "--blueprint-model"),
+      resolution: cliFlag(argv, "--resolution"),
+      gateway: cliFlag(argv, "--gateway"),
       projectStyleId,
     };
   }

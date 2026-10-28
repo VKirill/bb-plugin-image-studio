@@ -52,7 +52,10 @@ Concept art for items still starts in `image_studio_roblox` (`items`, `props`) o
 | `subject` | Object name on the sheet |
 | `soft` | Dangling parts (cloth, rope, hair) — drawn in **light blue** clay; listed in `views.json` with anchors |
 | `rigid` | Named rigid parts for the prompt |
-| `sideSeparate` | Default **true**. When `views` includes `side`, a **second** Muse call draws only the 90° profile (concept + cut front on grey as image 2). Set **false** to keep the side from the main sheet only. |
+| `sideSeparate` | Default **false** for nano-banana-2.1 (one sheet per item), **true** for Muse. When true and `views` includes `side`, a second call draws the 90° profile. |
+| `blueprintModel` | Model for blueprint: `nano-banana-2.1` (default), `nano-banana-2-lite`, or `muse-image`. CLI `--blueprint-model`. |
+| `resolution` | `1K` (default) or `2K`. CLI `--resolution`. |
+| `gateway` | `kie` (cheapest: first by default, ~10 min queue, 20+ min poll timeout) or `fal` (fallback or direct override). CLI `--gateway`. |
 | `project` | Optional project override |
 
 **Output:** `image-studio/model/<project>/<run>/blueprint/` — `sheet.png`, `side-sheet.png` (raw side-only Muse sheet when `sideSeparate`), `front.png`, `side.png`, …, `views.json` with `canvas`, per-view `box`, `baseline`, `heightPx`, `parts` (`kind`: `rigid` \| `soft`, `anchor` for soft), `sideRegenerated` (true when the side came from the separate call), `sheetSideSimilarity` (IoU of front vs side on the main sheet, for diagnostics), `warnings`.
@@ -74,8 +77,9 @@ Proven in production tests; the plugin enforces most of this in Blender prepare:
 
 ## Rules (blueprint)
 
+- Model: **Nano Banana 2.1** by default (1K default; cheapest via kie first with a 20+ min poll timeout, fal as fallback).
+- One sheet per item: `sideSeparate` defaults to false on Nano Banana 2.1.
 - Orthographic views, one height, shared baseline; soft parts in light blue on every view.
-- Side is a true 90° profile — by default a separate Muse generation (`sideRegenerated` true; `sideSeparate` to opt out).
 - No perspective, fire, or effects on the sheet — those come later in `texture-uv` or as engine particles.
 
 ## Blender hookup

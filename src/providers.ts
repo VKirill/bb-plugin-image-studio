@@ -36,6 +36,8 @@ export type ProviderJob = {
   /** Optional: repeat or vary a result. Sent to Qwen on kie and to fal models. */
   seed?: number;
   kieRefField?: "image_input" | "input_urls" | "image_urls";
+  /** Optional per-call poll timeout in milliseconds (defaults to 180_000). */
+  pollMs?: number;
 };
 
 type JsonObject = Record<string, unknown>;
@@ -230,8 +232,9 @@ export async function kieGenerate(
   const taskId = String(createdData.taskId || "");
   if (!taskId) throw new Error("kie.ai did not return a task id");
 
+  const pollTimeoutMs = job.pollMs ?? 180_000;
   const started = Date.now();
-  while (Date.now() - started < 180_000) {
+  while (Date.now() - started < pollTimeoutMs) {
     await sleep(2500, signal);
     const status = await retryWhile(
       () =>
@@ -350,8 +353,9 @@ export async function falGenerate(
   });
   const started = Date.now();
   let completed = false;
-  while (Date.now() - started < pollMs) {
-    const remain = pollMs - (Date.now() - started);
+  const timeoutMs = job.pollMs ?? pollMs;
+  while (Date.now() - started < timeoutMs) {
+    const remain = timeoutMs - (Date.now() - started);
     if (remain <= 0) break;
     await sleep(Math.min(2000, remain), signal);
     const status = await retryWhile(

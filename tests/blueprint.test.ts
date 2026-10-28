@@ -105,7 +105,7 @@ test("buildBlueprintPrompt and buildSideOnlyPrompt follow TZ 3.2 structure", () 
   assert.match(sheet, /light BLUE clay/);
   assert.match(sheet, /Must not change:/);
   assert.match(sheet, /No perspective/);
-  assert.match(sheet, /SIDE \(exact 90° profile, not a copy of the front\)/);
+  assert.match(sheet, /SIDE: the object rotated 90 degrees/);
   assert.match(sheet, /No perspective, no shadows, no fire or effects, no text except the labels FRONT, SIDE, BACK/);
 
   const side = buildSideOnlyPrompt({ subject: "fire mop", style: "clean line", softParts: [] });

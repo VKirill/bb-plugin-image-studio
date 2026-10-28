@@ -1,0 +1,15 @@
+{
+  "schema_version": 2,
+  "task_id": "model-blueprint-nb21",
+  "task_sha256": "2b4f4f780cf469f3110ca5186441e55faa0dd5db979c8f94862b3ef6dc7d5397",
+  "attempt": 1,
+  "provider_exit": 0,
+  "report": "complete",
+  "report_sha256": "b81990bc497e3b46fc944c65e89aa982a7348fad67213e334586a2347eb02c87",
+  "owns_check": "passed",
+  "verification": "passed",
+  "review": "not_required",
+  "accepted": true,
+  "accepted_at": "2026-10-28T00:06:54.886Z",
+  "model": "router9/ag/gemini-3.8-flash-low"
+}
