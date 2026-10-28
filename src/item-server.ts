@@ -53,3 +53,5 @@ export function buildStepStrip(
     };
   });
 }
+
+export { buildAttachEntriesForTextureUvRun, resolveTakeFolderPaths } from "./item.ts";

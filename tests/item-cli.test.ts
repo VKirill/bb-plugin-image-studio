@@ -25,6 +25,12 @@ test("parseItemCli parses create|list|show|attach|select", () => {
     step: "texture",
     entry: "e1",
   });
+  assert.deepEqual(parseItemCli(["model", "item", "detach", "--item", "a", "--step", "texture", "--entry", "e1"]), {
+    action: "detach",
+    item: "a",
+    step: "texture",
+    entry: "e1",
+  });
 });
 
 test("parseModelGenerateCli accepts texture-uv with --item and no --file", () => {
