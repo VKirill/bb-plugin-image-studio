@@ -74,6 +74,7 @@ type GenerationItem = {
   guiParts?: number;
   guiMissing?: string[];
   guiDir?: string | null;
+  itemId?: string;
 };
 
 function EmptyState({ children }: { children: ReactNode }) {
@@ -925,6 +926,7 @@ function StudioPage({ initialView = "gallery" }: { initialView?: Tab }) {
   const primedChoice = useRef(false);
   const [busy, setBusy] = useState(false);
   const [viewerIndex, setViewerIndex] = useState<number | null>(null);
+  const [modelTargetItemId, setModelTargetItemId] = useState<string | null>(null);
 
   const locale = useMemo(() => resolveLocale(settings?.uiLocale ?? "auto"), [settings?.uiLocale]);
 
@@ -1181,7 +1183,7 @@ function StudioPage({ initialView = "gallery" }: { initialView?: Tab }) {
                     const label =
                       item.width && item.height ? aspectLabel(item.width, item.height) : null;
                     return (
-                    <li key={item.id} className="mb-2 break-inside-avoid">
+                    <li key={item.id} className="relative mb-2 break-inside-avoid">
                       <button
                         type="button"
                         className="relative block w-full overflow-hidden rounded-md bg-muted text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -1211,6 +1213,19 @@ function StudioPage({ initialView = "gallery" }: { initialView?: Tab }) {
                           </span>
                         ) : null}
                       </button>
+                      {item.itemId ? (
+                        <button
+                          type="button"
+                          className="absolute right-1 top-1 z-10 rounded bg-background/90 px-1.5 py-0.5 text-[10px] font-medium text-foreground shadow hover:bg-background"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setModelTargetItemId(item.itemId!);
+                            setTab("model");
+                          }}
+                        >
+                          {t("modelItemBadge", { id: item.itemId }, locale)}
+                        </button>
+                      ) : null}
                     </li>
                     );
                   })}
@@ -1326,6 +1341,7 @@ function StudioPage({ initialView = "gallery" }: { initialView?: Tab }) {
               styles={stylesForAppTab(guiStyles, "model")}
               version={guiVersion}
               locale={locale}
+              initialItemId={modelTargetItemId}
               onError={report}
               onChanged={load}
             />

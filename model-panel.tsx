@@ -18,6 +18,12 @@ import {
 } from "./src/model";
 import { BLUEPRINT_VIEW_NAMES, type BlueprintStyle, type BlueprintViewName } from "./src/blueprint";
 import type { RpcApi } from "./src/rpc-api";
+import { ITEM_STEPS, type ItemStep } from "./src/item";
+import {
+  buildStepStrip,
+  type ItemIndexRowWithThumbs,
+  type ItemWithThumbs,
+} from "./src/item-server";
 
 const TEXTAREA_CLASS =
   "min-h-[4.5rem] w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring";
@@ -56,6 +62,7 @@ export function ModelPanel({
   styles,
   version,
   locale,
+  initialItemId,
   onError,
   onChanged,
 }: {
@@ -64,10 +71,15 @@ export function ModelPanel({
   styles: GuiStyle[];
   version: number;
   locale: Locale;
+  initialItemId?: string | null;
   onError: (cause: unknown) => void;
   onChanged: () => void;
 }) {
   const [styleId, setStyleId] = useState(styles[0]?.id ?? "");
+  const [subTab, setSubTab] = useState<"runs" | "items">(initialItemId ? "items" : "runs");
+  const [items, setItems] = useState<ItemIndexRowWithThumbs[]>([]);
+  const [selectedItemId, setSelectedItemId] = useState<string | null>(initialItemId ?? null);
+  const [activeItem, setActiveItem] = useState<ItemWithThumbs | null>(null);
   const [creating, setCreating] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const style = styles.find((item) => item.id === styleId) ?? null;
@@ -103,16 +115,40 @@ export function ModelPanel({
   }, [styleId, style?.updatedAt, creating]);
 
   useEffect(() => {
+    if (initialItemId) {
+      setSubTab("items");
+      setSelectedItemId(initialItemId);
+    }
+  }, [initialItemId]);
+
+  useEffect(() => {
     if (!styleId) {
       setTakes([]);
+      setItems([]);
+      setActiveItem(null);
       return;
     }
     let live = true;
     api.model_takes({ styleId }).then((list) => live && setTakes(list), onError);
+    api.model_items({ styleId }).then((list) => live && setItems(list), onError);
     return () => {
       live = false;
     };
   }, [api, styleId, version, onError]);
+
+  useEffect(() => {
+    if (!styleId || !selectedItemId) {
+      setActiveItem(null);
+      return;
+    }
+    let live = true;
+    api
+      .model_item({ styleId, item: selectedItemId })
+      .then((it) => live && setActiveItem(it), onError);
+    return () => {
+      live = false;
+    };
+  }, [api, styleId, selectedItemId, version, onError]);
 
   const saveDraft = async () => {
     const saved = await api.save_gui_style({
@@ -219,6 +255,28 @@ export function ModelPanel({
             ) : null}
           </div>
 
+          <div className="flex gap-2 border-b border-border pb-2" role="tablist">
+            <Button
+              type="button"
+              size="sm"
+              variant={subTab === "runs" ? "secondary" : "ghost"}
+              onClick={() => {
+                setSubTab("runs");
+                setSelectedItemId(null);
+              }}
+            >
+              {t("modelSubTabRuns", {}, locale)}
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant={subTab === "items" ? "secondary" : "ghost"}
+              onClick={() => setSubTab("items")}
+            >
+              {t("modelSubTabItems", {}, locale)}
+            </Button>
+          </div>
+
           {styles.length === 0 && !creating ? (
             <p className="rounded-lg border border-dashed border-border px-4 py-3 text-sm text-muted-foreground">
               {t("modelNoStyles", {}, locale)}
@@ -280,7 +338,210 @@ export function ModelPanel({
           ) : null}
 
           {style && !creating ? (
-            takes.length === 0 ? (
+            subTab === "items" ? (
+              selectedItemId && activeItem ? (
+                <div className="flex flex-col gap-4">
+                  <div className="flex items-center gap-2">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={() => setSelectedItemId(null)}
+                    >
+                      <Icon name="ArrowLeft" className="mr-1 size-4" />
+                      {t("modelItemBack", {}, locale)}
+                    </Button>
+                    <h2 className="text-lg font-medium">{activeItem.name}</h2>
+                    <span className="text-xs text-muted-foreground">({activeItem.id})</span>
+                  </div>
+
+                  <div className="flex flex-col gap-4">
+                    {ITEM_STEPS.map((stepKey) => {
+                      const stepState = activeItem.steps[stepKey];
+                      const stepThumbs = activeItem.thumbnails[stepKey] ?? {};
+                      return (
+                        <div key={stepKey} className="rounded-lg border border-border p-3">
+                          <div className="mb-2 flex items-center justify-between text-sm">
+                            <div className="flex items-center gap-2">
+                              <span className="font-medium">
+                                {t(
+                                  stepKey === "concept"
+                                    ? "modelItemStepConcept"
+                                    : stepKey === "blueprint"
+                                      ? "modelItemStepBlueprint"
+                                      : stepKey === "model"
+                                        ? "modelItemStepModel"
+                                        : stepKey === "uv-guide"
+                                          ? "modelItemStepUvGuide"
+                                          : stepKey === "texture"
+                                            ? "modelItemStepTexture"
+                                            : stepKey === "preview"
+                                              ? "modelItemStepPreview"
+                                              : "modelItemStepExport",
+                                  {},
+                                  locale,
+                                )}
+                              </span>
+                              <span className="text-xs text-muted-foreground">
+                                ({stepState.status === "done" ? "✓" : stepState.status === "running" ? "…" : "—"})
+                              </span>
+                            </div>
+                            <span className="text-xs text-muted-foreground">
+                              {stepState.entries.length} {t("modelItemEntries", {}, locale)}
+                            </span>
+                          </div>
+
+                          {stepState.entries.length === 0 ? (
+                            <p className="text-xs text-muted-foreground">{t("modelItemNoEntries", {}, locale)}</p>
+                          ) : (
+                            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 md:grid-cols-6">
+                              {stepState.entries.map((entry) => {
+                                const isSelected = stepState.selected === entry.id;
+                                const thumb = stepThumbs[entry.id];
+                                return (
+                                  <div
+                                    key={entry.id}
+                                    className={`relative flex flex-col overflow-hidden rounded-md border p-1 ${
+                                      isSelected
+                                        ? "border-primary ring-2 ring-primary"
+                                        : "border-border hover:border-muted-foreground"
+                                    }`}
+                                  >
+                                    <button
+                                      type="button"
+                                      className="relative block aspect-square w-full overflow-hidden rounded bg-muted text-left"
+                                      onClick={() => {
+                                        if (stepKey === "texture" || stepKey === "model" || stepKey === "concept") {
+                                          api
+                                            .model_item_select({
+                                              styleId,
+                                              item: activeItem.id,
+                                              step: stepKey,
+                                              entry: entry.id,
+                                            })
+                                            .then((updated) => setActiveItem(updated), onError);
+                                        }
+                                      }}
+                                    >
+                                      {thumb ? (
+                                        <img
+                                          src={`data:${thumb.mimeType};base64,${thumb.base64}`}
+                                          alt={entry.id}
+                                          className="h-full w-full object-cover"
+                                        />
+                                      ) : (
+                                        <div className="flex h-full w-full items-center justify-center p-1 text-[10px] text-muted-foreground">
+                                          {entry.id}
+                                        </div>
+                                      )}
+                                      {isSelected ? (
+                                        <span className="absolute bottom-1 right-1 rounded bg-primary px-1 text-[9px] text-primary-foreground">
+                                          ✓
+                                        </span>
+                                      ) : null}
+                                    </button>
+                                    <div className="mt-1 flex items-center justify-between text-[10px]">
+                                      <span className="truncate text-muted-foreground">{entry.source}</span>
+                                      {stepKey === "texture" && !isSelected ? (
+                                        <button
+                                          type="button"
+                                          className="text-primary underline hover:opacity-80"
+                                          onClick={() => {
+                                            api
+                                              .model_item_select({
+                                                styleId,
+                                                item: activeItem.id,
+                                                step: "texture",
+                                                entry: entry.id,
+                                              })
+                                              .then((updated) => setActiveItem(updated), onError);
+                                          }}
+                                        >
+                                          {t("modelItemSelectTake", {}, locale)}
+                                        </button>
+                                      ) : null}
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : items.length === 0 ? (
+                <p className="text-sm text-muted-foreground">{t("modelItemsEmpty", {}, locale)}</p>
+              ) : (
+                <ul className="flex flex-col gap-3">
+                  {items.map((it) => {
+                    const strip = buildStepStrip(it.steps, it.thumbs);
+                    return (
+                      <li
+                        key={it.id}
+                        className="cursor-pointer rounded-lg border border-border p-3 hover:bg-muted/30"
+                        onClick={() => setSelectedItemId(it.id)}
+                      >
+                        <div className="mb-2 flex items-center justify-between text-sm">
+                          <div className="flex items-center gap-2">
+                            <span className="font-medium">{it.name}</span>
+                            <span className="text-xs text-muted-foreground">({it.id})</span>
+                          </div>
+                          <span className="text-xs text-muted-foreground">
+                            {new Date(it.updatedAt).toLocaleString(locale)}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-2 overflow-x-auto py-1">
+                          {strip.map((stepInfo) => (
+                            <div
+                              key={stepInfo.step}
+                              className="flex flex-col items-center gap-1 rounded border border-border bg-background p-1.5 min-w-[4rem]"
+                            >
+                              <div className="relative aspect-square size-12 overflow-hidden rounded bg-muted">
+                                {stepInfo.thumb ? (
+                                  <img
+                                    src={`data:${stepInfo.thumb.mimeType};base64,${stepInfo.thumb.base64}`}
+                                    alt={stepInfo.step}
+                                    className="h-full w-full object-cover"
+                                  />
+                                ) : (
+                                  <div className="flex h-full w-full items-center justify-center text-xs text-muted-foreground">
+                                    {stepInfo.mark}
+                                  </div>
+                                )}
+                                <span className="absolute bottom-0.5 right-0.5 rounded bg-background/80 px-1 text-[9px] font-bold">
+                                  {stepInfo.mark}
+                                </span>
+                              </div>
+                              <span className="text-[10px] text-muted-foreground">
+                                {t(
+                                  stepInfo.step === "concept"
+                                    ? "modelItemStepConcept"
+                                    : stepInfo.step === "blueprint"
+                                      ? "modelItemStepBlueprint"
+                                      : stepInfo.step === "model"
+                                        ? "modelItemStepModel"
+                                        : stepInfo.step === "uv-guide"
+                                          ? "modelItemStepUvGuide"
+                                          : stepInfo.step === "texture"
+                                            ? "modelItemStepTexture"
+                                            : stepInfo.step === "preview"
+                                              ? "modelItemStepPreview"
+                                              : "modelItemStepExport",
+                                  {},
+                                  locale,
+                                )}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )
+            ) : takes.length === 0 ? (
               <p className="text-sm text-muted-foreground">{t("modelNoTakes", {}, locale)}</p>
             ) : (
               <ul className="flex flex-col gap-4">

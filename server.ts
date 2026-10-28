@@ -174,6 +174,7 @@ import {
   type ItemSelectedBy,
   addEntry,
   recordExportGenerated,
+  ITEM_STEPS,
 } from "./src/item.ts";
 import {
   attachConceptEntry,
@@ -188,6 +189,10 @@ import {
   recordTextureUvGenerated,
   upsertItemIndex,
 } from "./src/model-server.ts";
+import {
+  itemIndexRowWithThumbsSchema,
+  itemWithThumbsSchema,
+} from "./src/item-server.ts";
 import {
   assembleBlueprint,
   blueprintAspect,
@@ -366,6 +371,23 @@ export const rpcContract = defineRpcContract({
   model_takes: {
     input: z.object({ styleId: z.string() }),
     output: z.array(modelTakeWithThumbsSchema),
+  },
+  model_items: {
+    input: z.object({ styleId: z.string() }),
+    output: z.array(itemIndexRowWithThumbsSchema),
+  },
+  model_item: {
+    input: z.object({ styleId: z.string(), item: z.string() }),
+    output: itemWithThumbsSchema,
+  },
+  model_item_select: {
+    input: z.object({
+      styleId: z.string(),
+      item: z.string(),
+      step: z.enum(ITEM_STEPS),
+      entry: z.string(),
+    }),
+    output: itemWithThumbsSchema,
   },
   model_generate: {
     input: z
@@ -3202,6 +3224,68 @@ export default async function plugin(bb: BbPluginApi) {
     return out;
   };
 
+  const model_items: RpcHandlers["model_items"] = async ({ styleId }) => {
+    const style = (await readGuiStyles()).find((item) => item.id === styleId);
+    if (!style) return [];
+    const cwd = style.origin?.trim() || (style.projectId ? (await projectSource(style.projectId)).cwd : undefined);
+    const hostId = style.projectId ? (await projectSource(style.projectId)).hostId : undefined;
+    const rows = await readItemIndex(style.id);
+    const out: z.infer<typeof itemIndexRowWithThumbsSchema>[] = [];
+    for (const row of rows) {
+      const thumbs: Record<string, { mimeType: string; base64: string }> = {};
+      if (cwd) {
+        for (const [stepKey, path] of Object.entries(row.thumbnails)) {
+          if (!path) continue;
+          const thumb = await hostImageThumb(path, cwd, hostId);
+          if (thumb) thumbs[stepKey] = thumb;
+        }
+      }
+      out.push({ ...row, thumbs });
+    }
+    return out;
+  };
+
+  const model_item: RpcHandlers["model_item"] = async ({ styleId, item: itemId }) => {
+    const style = (await readGuiStyles()).find((entry) => entry.id === styleId);
+    if (!style) throw new Error(`Project ${styleId} not found`);
+    const cwd = style.origin?.trim() || (style.projectId ? (await projectSource(style.projectId)).cwd : undefined);
+    const hostId = style.projectId ? (await projectSource(style.projectId)).hostId : undefined;
+    if (!cwd) throw new Error(`No folder attached to project ${style.name}`);
+    const item = await loadItemForShow(cwd, hostId ?? "", style, itemId);
+    const thumbnails: Record<string, Record<string, { mimeType: string; base64: string }>> = {};
+    for (const [stepKey, stepState] of Object.entries(item.steps)) {
+      thumbnails[stepKey] = {};
+      for (const entry of stepState.entries) {
+        const thumbPath =
+          entry.files.preview ??
+          entry.files.concept ??
+          entry.files.sheet ??
+          entry.files.guide ??
+          entry.files.color ??
+          Object.values(entry.files)[0];
+        if (thumbPath) {
+          const thumb = await hostImageThumb(thumbPath, cwd, hostId);
+          if (thumb) {
+            thumbnails[stepKey][entry.id] = thumb;
+          }
+        }
+      }
+    }
+    return { ...item, thumbnails };
+  };
+
+  const model_item_select: RpcHandlers["model_item_select"] = async ({ styleId, item: itemId, step, entry }) => {
+    const style = (await readGuiStyles()).find((s) => s.id === styleId);
+    if (!style) throw new Error(`Project ${styleId} not found`);
+    const cwd = style.origin?.trim() || (style.projectId ? (await projectSource(style.projectId)).cwd : undefined);
+    const hostId = style.projectId ? (await projectSource(style.projectId)).hostId : undefined;
+    if (!cwd) throw new Error(`No folder attached to project ${style.name}`);
+    let item = await loadItemForShow(cwd, hostId ?? "", style, itemId);
+    item = selectEntry(item, step, entry, "user");
+    await saveItem(cwd, hostId ?? "", style, item);
+    return model_item({ styleId, item: itemId });
+  };
+
   const model_generate: RpcHandlers["model_generate"] = async (input) => {
     const source = await projectSource(input.projectId);
     const cwd = source.cwd;
@@ -3276,6 +3360,9 @@ export default async function plugin(bb: BbPluginApi) {
     gui_generations,
     game_generations,
     model_takes,
+    model_items,
+    model_item,
+    model_item_select,
     model_generate,
   });
 
