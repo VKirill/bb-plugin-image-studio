@@ -1,0 +1,15 @@
+{
+  "schema_version": 2,
+  "task_id": "item-export",
+  "task_sha256": "98aff9d3cbe031f77f76f6b48be28632bf95411d04720343ae35f618d36480a8",
+  "attempt": 2,
+  "provider_exit": 0,
+  "report": "complete",
+  "report_sha256": "95575956bfd76b5aadec0c0ea8f797c0b40f315f3892eed751e9f2e47afce98c",
+  "owns_check": "passed",
+  "verification": "passed",
+  "review": "not_required",
+  "accepted": true,
+  "accepted_at": "2026-10-28T00:33:27.298Z",
+  "model": "composer-2.5"
+}

@@ -69,6 +69,7 @@ import {
   kitJobs,
   originName,
   originProject,
+  modelFbxScale,
   parseElementList,
   screenJob,
   sheetLayout,
@@ -165,8 +166,14 @@ import {
   selectEntry,
   itemIndexFromItem,
   itemRunRelPath,
+  itemExportRelDir,
+  buildItemExportJson,
+  requireSelectedTextureEntry,
+  textureTakeDirFromEntry,
   type Item,
+  type ItemSelectedBy,
   addEntry,
+  recordExportGenerated,
 } from "./src/item.ts";
 import {
   attachConceptEntry,
@@ -318,6 +325,7 @@ export const rpcContract = defineRpcContract({
       tags: z.array(z.string().max(300)).max(12).default([]),
       palette: paletteInputSchema,
       notes: z.string().max(2000).default(""),
+      fbxScale: z.number().positive().optional(),
     }),
     output: guiStyleSchema,
   },
@@ -1519,6 +1527,95 @@ export default async function plugin(bb: BbPluginApi) {
     const item = await readItemJson(cwd, hostId, style, itemId);
     if (!item) throw new Error(`No item "${itemId}" in project ${style.name}.`);
     return item;
+  }
+
+  function hostRelPath(cwd: string, path: string): string {
+    const normalized = path.trim().replace(/\\/g, "/");
+    if (isAbsolute(normalized)) {
+      const base = cwd.replace(/\\/g, "/").replace(/\/$/, "");
+      if (normalized.startsWith(base + "/")) return normalized.slice(base.length + 1);
+      return normalized;
+    }
+    return normalized.replace(/^\.\//, "");
+  }
+
+  async function runItemExport(input: {
+    cwd: string;
+    hostId: string;
+    style: GuiStyle;
+    itemId: string;
+    scaleOverride?: number;
+    selectedBy: ItemSelectedBy;
+  }): Promise<{ exportRel: string; doc: ReturnType<typeof buildItemExportJson>; summary: string }> {
+    const itemSlug = slugify(input.itemId, "item");
+    let item = await loadItemForShow(input.cwd, input.hostId, input.style, input.itemId);
+    const textureEntry = requireSelectedTextureEntry(item);
+    const takeRel = hostRelPath(input.cwd, textureTakeDirFromEntry(textureEntry));
+    const takeAbs = join(input.cwd, takeRel);
+    const scale = input.scaleOverride ?? modelFbxScale(input.style);
+    const projectSlug = slugify(input.style.name, "model");
+    const exportRel = itemExportRelDir(projectSlug, itemSlug);
+    const exportAbs = join(input.cwd, exportRel);
+    await runBlenderOnHost(
+      input.hostId,
+      ["export", takeAbs, exportAbs, "--scale", String(scale), "--uv", "ImageStudioUV", "--name", itemSlug],
+      input.cwd,
+    );
+    const colorSrcRel = hostRelPath(input.cwd, textureEntry.files.color ?? "");
+    const colorBytes = await readHostBytes(colorSrcRel, input.cwd, input.hostId);
+    const normalBytes = await encodePng(normalMap(await decodeRgba(colorBytes)));
+    const colorOut = join(exportRel, `${itemSlug}_color.png`);
+    const normalOut = join(exportRel, `${itemSlug}_normal.png`);
+    await writeHostBytes(colorOut, input.cwd, input.hostId, colorBytes);
+    await writeHostBytes(normalOut, input.cwd, input.hostId, normalBytes);
+    const modelFiles = item.steps.model.selected
+      ? item.steps.model.entries.find((e) => e.id === item.steps.model.selected)?.files
+      : undefined;
+    let roughnessOut: string | undefined;
+    let metalOut: string | undefined;
+    for (const [key, outName] of [
+      ["roughness", `${itemSlug}_roughness.png`],
+      ["metal", `${itemSlug}_metal.png`],
+    ] as const) {
+      const src = modelFiles?.[key] ?? textureEntry.files[key];
+      if (!src) continue;
+      const srcRel = hostRelPath(input.cwd, src);
+      try {
+        const bytes = await readHostBytes(srcRel, input.cwd, input.hostId);
+        const dest = join(exportRel, outName);
+        await writeHostBytes(dest, input.cwd, input.hostId, bytes);
+        if (key === "roughness") roughnessOut = dest;
+        else metalOut = dest;
+      } catch {
+        // optional map missing on disk
+      }
+    }
+    const files = {
+      fbx: join(exportRel, `${itemSlug}.fbx`),
+      blend: join(exportRel, `${itemSlug}.blend`),
+      color: colorOut,
+      normal: normalOut,
+      ...(roughnessOut ? { roughness: roughnessOut } : {}),
+      ...(metalOut ? { metal: metalOut } : {}),
+    };
+    const doc = buildItemExportJson({
+      itemId: itemSlug,
+      files,
+      fbxScale: scale,
+      uvLayer: "ImageStudioUV",
+    });
+    const exportJsonRel = join(exportRel, "export.json");
+    await writeHostBytes(exportJsonRel, input.cwd, input.hostId, Buffer.from(JSON.stringify(doc, null, 2)));
+    item = recordExportGenerated(item, exportRel, { ...files, export: exportJsonRel }, input.selectedBy);
+    await saveItem(input.cwd, input.hostId, input.style, item);
+    const summary = [
+      `Exported ${item.name} (${itemSlug}) at FBX scale ${scale}`,
+      `  ${files.fbx}`,
+      `  ${files.color}`,
+      `  ${files.normal}`,
+      `  ${exportJsonRel}`,
+    ].join("\n");
+    return { exportRel, doc, summary };
   }
 
   async function addGuiRefFile(styleId: string, role: "concept" | "art", bytes: Buffer, name: string): Promise<GuiStyle> {
@@ -2992,6 +3089,7 @@ export default async function plugin(bb: BbPluginApi) {
         const existing = styles.find((item) => item.id === input.id);
         if (!existing) throw new Error("GUI style not found");
         Object.assign(existing, fields, { updatedAt: now });
+        if (input.fbxScale !== undefined) existing.fbxScale = input.fbxScale;
         return existing;
       }
       const created: GuiStyle = {
@@ -3001,6 +3099,7 @@ export default async function plugin(bb: BbPluginApi) {
         section: input.section,
         gameId: "",
         ...fields,
+        fbxScale: input.fbxScale ?? 0.01,
         refs: [],
         createdAt: now,
         updatedAt: now,
@@ -3786,6 +3885,7 @@ export default async function plugin(bb: BbPluginApi) {
         const existing = findGuiStyle(await readStyles(), name, origin);
         const palette = { ...(existing?.palette ?? { background: "", button: "", outline: "", highlight: "", text: "" }) };
         const tags = flag(argv, "--tags");
+        const fbxScaleFlag = flag(argv, "--fbx-scale");
         const saved = await save_gui_style({
           id: existing?.id,
           projectId,
@@ -3796,6 +3896,7 @@ export default async function plugin(bb: BbPluginApi) {
           tags: tags !== undefined ? tags.split(",").map((tag) => tag.trim()).filter(Boolean) : (existing?.tags ?? []),
           palette: paletteInputSchema.parse(palette),
           notes: flag(argv, "--notes") ?? existing?.notes ?? "",
+          ...(fbxScaleFlag !== undefined ? { fbxScale: Number(fbxScaleFlag) } : {}),
         });
         if (existing && !existing.origin) await withGuiStyle(existing.id, (style) => void (style.origin = origin));
         return reply(saved, `${existing ? "Updated" : "Created"} ${word} project ${saved.name} (${saved.id}).`);
@@ -3870,6 +3971,18 @@ export default async function plugin(bb: BbPluginApi) {
             item = selectEntry(item, cmd.step, cmd.entry, "cli");
             await saveItem(cwd, hostId, style, item);
             return reply(item, itemSummary(item));
+          }
+          case "export": {
+            const scaleOverride = cmd.scale !== undefined ? Number(cmd.scale) : undefined;
+            const run = await runItemExport({
+              cwd,
+              hostId,
+              style,
+              itemId: cmd.item,
+              scaleOverride,
+              selectedBy: "cli",
+            });
+            return reply(run.doc, run.summary);
           }
           case "attach": {
           let item = await ensureItem(cwd, hostId, style, cmd.item, game?.id ?? null);
@@ -4106,7 +4219,8 @@ export default async function plugin(bb: BbPluginApi) {
       icon: { glyph: "Palette" },
     },
     parameters: z.object({
-      action: z.enum(["create", "list", "show", "attach", "select"]),
+      action: z.enum(["create", "list", "show", "attach", "select", "export"]),
+      scale: z.string().optional(),
       item: z.string().optional(),
       step: z.enum(["concept", "blueprint", "model", "uv-guide", "texture", "preview", "export"]).optional(),
       file: z.string().optional(),
@@ -4159,6 +4273,18 @@ export default async function plugin(bb: BbPluginApi) {
           item = selectEntry(item, input.step, input.entry, "agent");
           await saveItem(folder.cwd, folder.hostId, style, item);
           return itemSummary(item);
+        }
+        if (input.action === "export") {
+          const scaleOverride = input.scale !== undefined ? Number(input.scale) : undefined;
+          const run = await runItemExport({
+            cwd: folder.cwd,
+            hostId: folder.hostId,
+            style,
+            itemId: input.item,
+            scaleOverride,
+            selectedBy: "agent",
+          });
+          return run.summary;
         }
         if (input.action === "attach") {
           if (!input.step) {

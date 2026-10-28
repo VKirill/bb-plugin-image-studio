@@ -33,6 +33,7 @@ const style = (patch: Partial<GuiStyle> = {}): GuiStyle => ({
   palette: { background: "", button: "", outline: "", highlight: "", text: "" },
   notes: "",
   refs: [],
+  fbxScale: 0.01,
   createdAt: "2026-10-23T00:00:00.000Z",
   updatedAt: "2026-10-23T00:00:00.000Z",
   ...patch,

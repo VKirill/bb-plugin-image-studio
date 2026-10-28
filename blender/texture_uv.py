@@ -1,7 +1,8 @@
-"""Image Studio texture-uv: UV guide bake, Muse repaint target, apply preview.
+"""Image Studio texture-uv: UV guide bake, Muse repaint target, apply preview, Roblox export.
 
   Blender --factory-startup -b -P texture_uv.py -- prepare <model|test> <outDir> [--object NAME] [--size 1024|2048]
   Blender --factory-startup -b -P texture_uv.py -- apply <outDir> <color.png>
+  Blender --factory-startup -b -P texture_uv.py -- export <takeDir|blend> <outDir> --scale <s> --uv ImageStudioUV [--name itemId]
 """
 import json
 import math
@@ -1089,9 +1090,81 @@ def apply():
     bpy.ops.wm.save_as_mainfile(filepath=blend)
 
 
+def parse_export_args(args):
+    src = args[0]
+    out = args[1]
+    scale = 1.0
+    uv_name = UV_LAYER
+    item_name = "item"
+    i = 2
+    while i < len(args):
+        if args[i] == "--scale" and i + 1 < len(args):
+            scale = float(args[i + 1])
+            i += 2
+        elif args[i] == "--uv" and i + 1 < len(args):
+            uv_name = args[i + 1]
+            i += 2
+        elif args[i] == "--name" and i + 1 < len(args):
+            item_name = args[i + 1]
+            i += 2
+        else:
+            i += 1
+    if scale <= 0:
+        raise SystemExit("--scale must be positive")
+    return src, out, scale, uv_name, item_name
+
+
+def export_item():
+    src, out_dir, scale, uv_name, item_name = parse_export_args(ARGS)
+    os.makedirs(out_dir, exist_ok=True)
+    if os.path.isdir(src):
+        blend_path = os.path.join(src, "model.blend")
+    else:
+        blend_path = src
+    if not os.path.isfile(blend_path):
+        raise SystemExit(f"Blend not found: {blend_path}")
+    bpy.ops.wm.open_mainfile(filepath=blend_path)
+    ob = bpy.data.objects.get("model")
+    if not ob or ob.type != "MESH":
+        raise SystemExit('No mesh object "model" in blend')
+    me = ob.data
+    layer = me.uv_layers.get(uv_name)
+    if not layer:
+        raise SystemExit(f'UV layer "{uv_name}" not found')
+    me.uv_layers.active = layer
+    for slot in ob.material_slots:
+        mat = slot.material
+        if mat and mat.use_nodes:
+            ensure_uv_map_node(mat, uv_name)
+    bpy.ops.object.select_all(action="DESELECT")
+    ob.select_set(True)
+    bpy.context.view_layer.objects.active = ob
+    fbx_path = os.path.join(out_dir, f"{item_name}.fbx")
+    bpy.ops.export_scene.fbx(
+        filepath=fbx_path,
+        use_selection=True,
+        global_scale=scale,
+        apply_unit_scale=True,
+        apply_scale_options="FBX_SCALE_ALL",
+        axis_forward="-Z",
+        axis_up="Y",
+        path_mode="STRIP",
+        embed_textures=False,
+        use_mesh_modifiers=True,
+        mesh_smooth_type="FACE",
+        object_types={"MESH"},
+    )
+    blend_out = os.path.join(out_dir, f"{item_name}.blend")
+    bpy.ops.wm.save_as_mainfile(filepath=blend_out)
+
+
 if MODE == "prepare":
     prepare()
 elif MODE == "apply":
     apply()
+elif MODE == "export":
+    export_item()
 else:
-    raise SystemExit("Usage: prepare <model|test> <outDir> | apply <outDir> <color.png>")
+    raise SystemExit(
+        "Usage: prepare <model|test> <outDir> | apply <outDir> <color.png> | export <takeDir|blend> <outDir> --scale <s> --uv <layer> [--name id]"
+    )
