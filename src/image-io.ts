@@ -91,3 +91,34 @@ export async function encodePng(image: Rgba): Promise<Buffer> {
     vimage.delete();
   }
 }
+
+/**
+ * PNG-in-ICO (a favicon.ico holds PNG pictures on every modern browser): a 6-byte ICONDIR (reserved 0, type 1, the
+ * entry count, little-endian u16), then one 16-byte ICONDIRENTRY per picture (width and height as u8, 0 meaning 256;
+ * colour count 0, reserved 0, planes 1, bit count 32, bytes in resource u32, image offset u32), then the PNG blobs in
+ * the same order.
+ */
+export function encodeIco(pngs: Array<{ size: number; png: Buffer }>): Buffer {
+  if (pngs.length === 0) throw new Error("encodeIco needs at least one PNG.");
+  const header = Buffer.alloc(6);
+  header.writeUInt16LE(0, 0);
+  header.writeUInt16LE(1, 2);
+  header.writeUInt16LE(pngs.length, 4);
+  const entries = Buffer.alloc(16 * pngs.length);
+  let offset = header.length + entries.length;
+  const blobs: Buffer[] = [];
+  pngs.forEach((item, index) => {
+    const entry = index * 16;
+    entries.writeUInt8(item.size >= 256 ? 0 : item.size, entry);
+    entries.writeUInt8(item.size >= 256 ? 0 : item.size, entry + 1);
+    entries.writeUInt8(0, entry + 2);
+    entries.writeUInt8(0, entry + 3);
+    entries.writeUInt16LE(1, entry + 4);
+    entries.writeUInt16LE(32, entry + 6);
+    entries.writeUInt32LE(item.png.length, entry + 8);
+    entries.writeUInt32LE(offset, entry + 12);
+    offset += item.png.length;
+    blobs.push(item.png);
+  });
+  return Buffer.concat([header, entries, ...blobs]);
+}

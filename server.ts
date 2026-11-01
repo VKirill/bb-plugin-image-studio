@@ -99,7 +99,7 @@ import { decodeRgba, encodePng, type Rgba } from "./src/image-io.js";
 import {
   DECAL_ASPECTS,
   MAX_VARIANTS,
-  MODE_CATEGORY,
+  MODE_CATEGORY as ROBLOX_MODE_CATEGORY,
   ROBLOX_MODEL,
   ROBLOX_MODES,
   ROBLOX_PRESET_IDS,
@@ -110,6 +110,19 @@ import {
   type RobloxMode,
   type RobloxOutput,
 } from "./src/roblox.js";
+import {
+  MODE_CATEGORY as WEB_MODE_CATEGORY,
+  WEB_MODEL,
+  WEB_MODES,
+  WEB_PRESET_IDS,
+  faviconSet,
+  hexRgb,
+  webJobs,
+  webManifest,
+  type WebJob,
+  type WebMode,
+  type WebOutput,
+} from "./src/web.js";
 import { SKYBOX_FACES, cover, fadeEdges, fitSquare, flattenRound, glowToAlpha, limit, normalMap, opaque, resize, seamless, skyboxFaces, trimAlpha } from "./src/raster.js";
 import { enabledFromSettings, mergeSettings, settingsSchema, type StudioSettings } from "./src/settings.js";
 import {
@@ -238,10 +251,11 @@ const guiModeSchema = z.enum(GUI_MODES);
 const characterModeSchema = z.enum(CHARACTER_MODES);
 const bodySchema = z.enum(BODY_TYPES);
 const robloxModeSchema = z.enum(ROBLOX_MODES);
-const sectionSchema = z.enum(["gui", "characters", "roblox", "model"]);
+const webModeSchema = z.enum(WEB_MODES);
+const sectionSchema = z.enum(["gui", "characters", "roblox", "model", "web"]);
 type Section = z.infer<typeof sectionSchema>;
 /** "GUI project" / "Characters project": the word the CLI and the tools use for a section. */
-const SECTION_WORD: Record<Section, string> = { gui: "GUI", characters: "Characters", roblox: "Roblox", model: "Model" };
+const SECTION_WORD: Record<Section, string> = { gui: "GUI", characters: "Characters", roblox: "Roblox", model: "Model", web: "Web" };
 const modelModeSchema = z.enum(MODEL_MODES);
 const modelTextureSizeSchema = z.union([z.literal(1024), z.literal(2048)]);
 const modelPartsSchema = z.union([
@@ -436,8 +450,8 @@ export const rpcContract = defineRpcContract({
       projectId: z.string().nullable(),
       styleId: z.string().optional(),
       section: sectionSchema.default("gui"),
-      /** GUI: ideas | screen | elements | kit. Characters: ideas | model | turnaround | equipment. Roblox: icon | thumbnail | … */
-      mode: z.enum([...new Set([...GUI_MODES, ...CHARACTER_MODES, ...ROBLOX_MODES])] as [string, ...string[]]),
+      /** GUI: ideas | screen | elements | kit. Characters: ideas | model | turnaround | equipment. Roblox: icon | thumbnail | … Web: ideas | page | mobile | block | logo | favicon | og | hero | cover | illustrations | icons | background | pattern. */
+      mode: z.enum([...new Set([...GUI_MODES, ...CHARACTER_MODES, ...ROBLOX_MODES, ...WEB_MODES])] as [string, ...string[]]),
       /** GUI / Characters of a Roblox game: the game's id (its linked project is used, or created). */
       gameId: z.string().optional(),
       /** Roblox: takes of one picture, flipbook frames (4 or 16), decal frame. */
@@ -1087,16 +1101,16 @@ export default async function plugin(bb: BbPluginApi) {
       styleId: string | null;
       styleName: string | null;
       section?: Section;
-      mode: GuiMode | CharacterMode | RobloxMode;
+      mode: GuiMode | CharacterMode | RobloxMode | WebMode;
       label: string;
       run: string;
       layout?: SheetLayout;
       /** Characters: the character's file name. */
       character?: string;
-      /** Folders under image-studio/ in the project: ["roblox", "<game>", "store"]; else [section, project]. */
+      /** Folders under image-studio/ in the project: ["roblox", "<game>", "store"], ["web", "<site>", "brand"]; else [section, project]. */
       folder?: string[];
-      /** Roblox: what to make from the picture. */
-      output?: RobloxOutput;
+      /** Roblox / Web: what to make from the picture. */
+      output?: RobloxOutput | WebOutput;
     };
   };
 
@@ -1376,7 +1390,8 @@ export default async function plugin(bb: BbPluginApi) {
       ...(input.gui
         ? {
             guiStyleId: input.gui.styleId,
-            guiMode: input.gui.mode,
+            // Web records keep only the label: the shared generation schema (journal, KV reads) has no web modes yet.
+            ...(input.gui.section === "web" ? {} : { guiMode: input.gui.mode as GuiMode | CharacterMode | RobloxMode }),
             guiLabel: input.gui.label,
             guiRun: input.gui.run,
             guiDir: guiOut?.dir ?? null,
@@ -1713,6 +1728,7 @@ export default async function plugin(bb: BbPluginApi) {
   ): Promise<GuiExport> {
     const characters = gui.section === "characters";
     const roblox = gui.section === "roblox";
+    const web = gui.section === "web";
     const folder = `${id}-${slugify(characters ? `${gui.character ?? ""} ${gui.label}` : gui.label, gui.mode)}`;
     const styleFolder = slugify(gui.styleName ?? "", "no-style");
     const sectionFolder = characters ? "characters" : "gui";
@@ -1737,14 +1753,22 @@ export default async function plugin(bb: BbPluginApi) {
     };
     const mime = sniffImageMime(original);
     const ext = mime === "image/png" ? "png" : mime === "image/jpeg" ? "jpg" : "webp";
-    const mainName = gui.layout ? "sheet" : roblox ? "source" : !characters ? "mockup" : gui.mode === "model" ? "front" : "idea";
+    const mainName = gui.layout ? "sheet" : roblox || web ? "source" : !characters ? "mockup" : gui.mode === "model" ? "front" : "idea";
     const mainPath = join(dir, `${mainName}.${ext}`);
     await write(mainPath, original);
     if (roblox && gui.output) {
       try {
-        return await exportRoblox(input, gui, gui.output, original, dir, ext, write);
+        return await exportRoblox(input, gui, gui.output as RobloxOutput, original, dir, ext, write);
       } catch (error) {
         warn(`Roblox export failed: ${describe(error)}`);
+        return { dir, mainPath, missing: [] };
+      }
+    }
+    if (web && gui.output) {
+      try {
+        return await exportWeb(input, gui, gui.output as WebOutput, original, dir, ext, write);
+      } catch (error) {
+        warn(`Web export failed: ${describe(error)}`);
         return { dir, mainPath, missing: [] };
       }
     }
@@ -1925,6 +1949,70 @@ export default async function plugin(bb: BbPluginApi) {
     return { dir, mainPath, missing, files: files.map((file) => join(dir, file.file)), ...(parts !== undefined ? { parts } : {}) };
   }
 
+  /**
+   * The finished web files next to the picture: exact site sizes (og 1200×630, hero 1920×1080), the transparent logo,
+   * illustrations and icons cut from a green sheet into transparent squares, the seamless pattern, the favicon set
+   * (favicon.ico, PNG icons, apple-touch, maskable, site.webmanifest); manifest.json says where each file goes.
+   */
+  async function exportWeb(
+    input: RenderInput,
+    gui: NonNullable<RenderInput["gui"]>,
+    output: WebOutput,
+    original: Buffer,
+    dir: string,
+    ext: string,
+    write: (path: string, bytes: Buffer) => Promise<void>,
+  ): Promise<GuiExport> {
+    const mainPath = join(dir, gui.layout ? `sheet.${ext}` : `source.${ext}`);
+    const image = await decodeRgba(original);
+    const files: Array<{ file: string; width: number; height: number }> = [];
+    const put = async (file: string, picture: Rgba) => {
+      await write(join(dir, file), await encodePng(picture));
+      files.push({ file, width: picture.width, height: picture.height });
+    };
+    let missing: string[] = [];
+    switch (output.kind) {
+      case "cover":
+        await put(output.file, opaque(cover(image, output.width, output.height)));
+        break;
+      case "limit":
+        await put(output.file, limit(output.transparent ? trimAlpha(keyGreen(image)) : opaque(image), output.max));
+        break;
+      case "parts": {
+        const cut = cutSheet(keyGreen(image), gui.layout);
+        missing = cut.missing;
+        for (const part of cut.parts) await put(`parts/${part.name}.png`, fitSquare(part.image, output.size));
+        break;
+      }
+      case "favicon": {
+        for (const file of await faviconSet(image, hexRgb(output.fill), gui.styleName ?? "")) {
+          if ("bytes" in file) {
+            await write(join(dir, file.file), file.bytes);
+            files.push({ file: file.file, width: 48, height: 48 });
+          } else if ("manifest" in file) {
+            await write(join(dir, file.file), Buffer.from(JSON.stringify(file.manifest, null, 2)));
+            files.push({ file: file.file, width: 0, height: 0 });
+          } else {
+            await put(file.file, file.image);
+          }
+        }
+        break;
+      }
+      case "pattern":
+        await put("pattern.png", resize(seamless(opaque(image)), output.size, output.size));
+        break;
+    }
+    const manifest = webManifest({ mode: gui.mode as WebMode, site: gui.styleName ?? "" }, files);
+    await write(join(dir, "manifest.json"), Buffer.from(JSON.stringify(manifest, null, 2)));
+    return {
+      dir,
+      mainPath,
+      missing,
+      files: files.map((file) => join(dir, file.file)),
+      ...(output.kind === "parts" ? { parts: files.length } : {}),
+    };
+  }
+
   /** The jobs of one GUI request. Throws a readable error for an empty or oversized element list. */
   function guiJobs(mode: GuiMode, prompt: string, style: GuiStyle | null, states: boolean): GuiJob[] {
     switch (mode) {
@@ -1974,7 +2062,7 @@ export default async function plugin(bb: BbPluginApi) {
     }
     if (input.styleId) {
       const found = findGuiStyle(inSection(await readGuiStyles()), input.styleId, input.origin);
-      const sectionCli = section === "gui" ? "gui" : section === "roblox" ? "roblox" : section === "model" ? "model" : "character";
+      const sectionCli = section === "gui" ? "gui" : section === "roblox" ? "roblox" : section === "model" ? "model" : section === "web" ? "web" : "character";
       if (!found) throw new Error(`No ${SECTION_WORD[section]} project "${input.styleId}". Run bb image-studio ${sectionCli} projects.`);
       return found;
     }
@@ -1987,8 +2075,8 @@ export default async function plugin(bb: BbPluginApi) {
         input.projectId ?? "unscoped",
         input.name || (input.origin === "unscoped" ? "" : originName(input.origin)) || `${SECTION_WORD[section]} ${inSection(styles).length + 1}`,
       );
-      // A folder that has a Roblox game: its GUI and Characters belong to that game.
-      if (section !== "roblox") created.gameId = originProject(styles.filter((style) => style.section === "roblox"), input.origin)?.id ?? "";
+      // A folder that has a Roblox game: its GUI and Characters belong to that game. Web sites stand alone.
+      if (section !== "roblox" && section !== "web") created.gameId = originProject(styles.filter((style) => style.section === "roblox"), input.origin)?.id ?? "";
       styles.push(created);
       return created;
     });
@@ -2035,7 +2123,7 @@ export default async function plugin(bb: BbPluginApi) {
     projectId: string | null;
     styleId?: string;
     section?: Section;
-    mode: GuiMode | CharacterMode | RobloxMode;
+    mode: GuiMode | CharacterMode | RobloxMode | WebMode;
     prompt: string;
     states: boolean;
     images?: string[];
@@ -2054,9 +2142,9 @@ export default async function plugin(bb: BbPluginApi) {
     variants?: number;
     frames?: number;
     aspect?: string;
-  }): Promise<{ generations: Generation[]; errors: string[]; style: GuiStyle | null; jobs: Array<GuiJob | CharacterJob | RobloxJob> }> {
+  }): Promise<{ generations: Generation[]; errors: string[]; style: GuiStyle | null; jobs: Array<GuiJob | CharacterJob | RobloxJob | WebJob> }> {
     const section = input.section ?? "gui";
-    const modes: readonly string[] = section === "gui" ? GUI_MODES : section === "roblox" ? ROBLOX_MODES : CHARACTER_MODES;
+    const modes: readonly string[] = section === "gui" ? GUI_MODES : section === "roblox" ? ROBLOX_MODES : section === "web" ? WEB_MODES : CHARACTER_MODES;
     if (!modes.includes(input.mode)) throw new Error(`${SECTION_WORD[section]} modes: ${modes.join(", ")}.`);
     const origin = input.cwd ?? input.projectId ?? "unscoped";
     const style = await resolveGuiProject({ styleId: input.styleId, origin, projectId: input.projectId, name: input.originLabel, section, gameId: input.gameId });
@@ -2070,12 +2158,21 @@ export default async function plugin(bb: BbPluginApi) {
     const lead = await guiRefUris(merged.style, merged.owners);
     const extra = input.images ?? [];
     const character = section === "characters" ? characterSlug(input.character ?? "", input.prompt) : undefined;
-    // Everything of a game goes to its folder: image-studio/roblox/<game>/<store|gui|characters|…>/.
+    // Everything of a game goes to its folder: image-studio/roblox/<game>/<store|gui|characters|…>/; a site's to its own.
     const folder = (mode: string) =>
-      game ? ["roblox", slugify(game.name, "game"), section === "roblox" ? MODE_CATEGORY[mode as RobloxMode] : section] : undefined;
-    const cwd = game && isAbsolute(game.origin) ? game.origin : input.cwd;
+      game
+        ? ["roblox", slugify(game.name, "game"), section === "roblox" ? ROBLOX_MODE_CATEGORY[mode as RobloxMode] : section]
+        : section === "web"
+          ? ["web", slugify(style.name, "site"), WEB_MODE_CATEGORY[mode as WebMode]]
+          : undefined;
+    const cwd =
+      game && isAbsolute(game.origin)
+        ? game.origin
+        : section === "web" && isAbsolute(style.origin)
+          ? style.origin
+          : input.cwd;
     // Character prompts number the user's design pictures themselves; GUI prompts get the general line.
-    const jobs: Array<GuiJob | CharacterJob | RobloxJob> =
+    const jobs: Array<GuiJob | CharacterJob | RobloxJob | WebJob> =
       section === "roblox"
         ? robloxJobs(
             {
@@ -2088,6 +2185,17 @@ export default async function plugin(bb: BbPluginApi) {
               designCount: extra.length,
             },
             style,
+          )
+        : section === "web"
+        ? webJobs(
+            {
+              mode: input.mode as WebMode,
+              prompt: input.prompt,
+              variants: input.variants ?? 1,
+              refCount: lead.length,
+              designCount: extra.length,
+            },
+            merged.style,
           )
         : section === "characters"
         ? characterJobs(
@@ -2117,7 +2225,7 @@ export default async function plugin(bb: BbPluginApi) {
           recordPrompt: input.prompt.trim() || (input.equipment ?? "").trim() || (input.accessories ?? "").trim() || job.label,
           leadUris: lead,
           images: extra,
-          model: section === "characters" ? CHARACTER_MODEL : section === "roblox" ? ROBLOX_MODEL : GUI_MODEL,
+          model: section === "characters" ? CHARACTER_MODEL : section === "roblox" ? ROBLOX_MODEL : section === "web" ? WEB_MODEL : GUI_MODEL,
           gateway: "fal",
           aspectRatio: job.aspectRatio,
           cwd,
@@ -2183,7 +2291,7 @@ export default async function plugin(bb: BbPluginApi) {
         [
           `${record.guiLabel}${record.guiCharacter ? ` (${record.guiCharacter})` : ""}: ${record.projectPath ?? record.filename}`,
           record.guiParts !== undefined ? `  ${record.guiParts} ${sub(record)} in ${record.guiDir}/${sub(record)} (manifest.json beside them)` : null,
-          record.guiFiles?.length && record.guiParts === undefined ? `  ${record.guiFiles.join("\n  ")}\n  (manifest.json beside them says where each goes in Roblox)` : null,
+          record.guiFiles?.length && record.guiParts === undefined ? `  ${record.guiFiles.join("\n  ")}\n  (manifest.json beside them says where each file goes)` : null,
           record.guiMissing?.length ? `  not found on the sheet: ${record.guiMissing.join(", ")}` : null,
         ]
           .filter(Boolean)
@@ -3209,7 +3317,7 @@ export default async function plugin(bb: BbPluginApi) {
     const source = await projectSource(input.projectId);
     const run = await runGui({
       ...input,
-      mode: input.mode as GuiMode | CharacterMode | RobloxMode,
+      mode: input.mode as GuiMode | CharacterMode | RobloxMode | WebMode,
       cwd: source.cwd,
       hostId: source.hostId,
       originLabel: source.name,
@@ -3424,6 +3532,10 @@ export default async function plugin(bb: BbPluginApi) {
     "  bb image-studio roblox generate --mode icon|thumbnail|logo|loading|badges|passes|products|items|props|texture|skybox|decal|vfx|flipbook",
     "                                  [--project <game>] [--variants 1-4] [--frames 4|16] [--aspect 1:1|16:9|…] [--image <path>]… --prompt <what> [--json]",
     "                                  (list modes take the list in --prompt or --items: \"VIP; 2x Coins\")",
+    "  bb image-studio web projects|project|ref|delete …   (sites; the same options as gui; --tags minimal,corporate,playful,editorial,brutalist,dark-tech,luxury,flat-illustration,clay-3d)",
+    "  bb image-studio web generate --mode ideas|page|mobile|block|logo|favicon|og|hero|cover|illustrations|icons|background|pattern",
+    "                               [--project <site>] [--variants 1-4] [--image <path>]… --prompt <what> [--json]",
+    "                               (illustrations and icons take the list in --prompt or --items: \"empty state; 404 page\")",
   ].join("\n");
 
   bb.cli.register({
@@ -3474,6 +3586,11 @@ export default async function plugin(bb: BbPluginApi) {
         name: "model",
         summary: "Texture by model UV: bake a UV guide in Blender, repaint with Muse, apply back and save color/guide/mask/preview",
         usage: "bb image-studio model projects|project|ref|generate|delete …",
+      },
+      {
+        name: "web",
+        summary: "Web section: site graphics — landing ideas, page and section mockups, logo, the favicon set, og card, hero, cover, illustrations, icons, background, seamless pattern (Muse Image)",
+        usage: "bb image-studio web projects|project|ref|generate|delete …",
       },
     ],
     async run(argv, ctx) {
@@ -3705,6 +3822,8 @@ export default async function plugin(bb: BbPluginApi) {
           return runGuiCommand(argv, ctx, reply, "characters");
         case "roblox":
           return runGuiCommand(argv, ctx, reply, "roblox");
+        case "web":
+          return runGuiCommand(argv, ctx, reply, "web");
         case "model":
           return runModelCommand(argv, ctx, reply);
         case "generate": {
@@ -3818,13 +3937,14 @@ export default async function plugin(bb: BbPluginApi) {
     reply: (value: unknown, text: string) => { exitCode: number; stdout: string },
     section: Section = "gui",
   ) {
-    const command = section === "gui" ? "gui" : section === "roblox" ? "roblox" : argv.includes("character") ? "character" : "characters";
+    const command = section === "gui" ? "gui" : section === "roblox" ? "roblox" : section === "web" ? "web" : argv.includes("character") ? "character" : "characters";
     const sub = argv[argv.indexOf(command) + 1];
     const projectId = ctx.projectId ?? null;
     const origin = ctx.cwd ?? projectId ?? "unscoped";
     const projectFlag = flag(argv, "--project") ?? flag(argv, "--style");
     const word = SECTION_WORD[section];
-    const presetIds: readonly string[] = section === "gui" ? GUI_PRESET_IDS : section === "roblox" ? ROBLOX_PRESET_IDS : CHARACTER_PRESET_IDS;
+    const presetIds: readonly string[] =
+      section === "gui" ? GUI_PRESET_IDS : section === "roblox" ? ROBLOX_PRESET_IDS : section === "web" ? WEB_PRESET_IDS : CHARACTER_PRESET_IDS;
     // Only this section's projects: a folder has one GUI project and one Characters project.
     const readStyles = async () => (await readGuiStyles()).filter((style) => style.section === section);
     switch (sub) {
@@ -3891,15 +4011,15 @@ export default async function plugin(bb: BbPluginApi) {
         return reply(saved, `Added ${role === "art" ? "an art" : "a concept"} reference to ${saved.name}: ${saved.refs.length} of ${GUI_MAX_REFS}.`);
       }
       case "generate": {
-        const mode = (section === "gui" ? guiModeSchema : section === "roblox" ? robloxModeSchema : characterModeSchema).safeParse(
-          flag(argv, "--mode") ?? (section === "roblox" ? "icon" : "ideas"),
-        );
+        const schema = section === "gui" ? guiModeSchema : section === "roblox" ? robloxModeSchema : section === "web" ? webModeSchema : characterModeSchema;
+        const allModes = section === "gui" ? GUI_MODES : section === "roblox" ? ROBLOX_MODES : section === "web" ? WEB_MODES : CHARACTER_MODES;
+        const mode = schema.safeParse(flag(argv, "--mode") ?? (section === "roblox" ? "icon" : "ideas"));
         const body = bodySchema.safeParse(flag(argv, "--body") ?? "humanoid");
         if (!body.success) return { exitCode: 1, stderr: `--body takes ${BODY_TYPES.join(", ")}.` };
-        if (!mode.success) return { exitCode: 1, stderr: `--mode takes ${(section === "gui" ? GUI_MODES : section === "roblox" ? ROBLOX_MODES : CHARACTER_MODES).join(", ")}.` };
+        if (!mode.success) return { exitCode: 1, stderr: `--mode takes ${allModes.join(", ")}.` };
         const aspect = flag(argv, "--aspect") ?? "1:1";
         if (section === "roblox" && !(DECAL_ASPECTS as readonly string[]).includes(aspect)) return { exitCode: 1, stderr: `--aspect takes ${DECAL_ASPECTS.join(", ")}.` };
-        const prompt = flag(argv, "--items") || flag(argv, "--prompt") || restAfter(argv, "generate").replace(/^(?:gui|roblox|characters?)\s*/, "");
+        const prompt = flag(argv, "--items") || flag(argv, "--prompt") || restAfter(argv, "generate").replace(/^(?:gui|roblox|characters?|web)\s*/, "");
         const run = await runGui({
           projectId,
           styleId: projectFlag,
@@ -3921,7 +4041,7 @@ export default async function plugin(bb: BbPluginApi) {
         return run.generations.length === 0 ? { exitCode: 1, stderr: guiSummary(run) || "Nothing was generated." } : out;
       }
       case "cut": {
-        if (section === "roblox") break;
+        if (section === "roblox" || section === "web") break;
         const sheet = flag(argv, "--sheet");
         if (!sheet) return { exitCode: 1, stderr: usage };
         const path = isAbsolute(sheet) || !ctx.cwd ? sheet : join(ctx.cwd, sheet);
@@ -4641,6 +4761,45 @@ export default async function plugin(bb: BbPluginApi) {
   });
 
   bb.agents.registerTool({
+    name: "image_studio_web",
+    description:
+      "Website graphics through Image Studio's Web section, one site project per folder (Muse Image), fitted to what a site takes. Modes: ideas (4 desktop landing-page directions, 1536×1024), page (a full-length page mockup), mobile (a phone-screen mockup), block (one section at desktop width), logo (a transparent wordmark), favicon (favicon.ico 16/32/48 + favicon-16/32 + icon-192/512 + apple-touch-icon 180 + maskable icon + site.webmanifest, all cut from one mark), og (a 1200×630 social share card), hero (1920×1080 with a calm area for the headline), cover (1600×900 article cover), illustrations (spot illustrations cut into transparent PNGs, at most 6), icons (one series cut into transparent squares, at most 16), background (1920×1080, no text), pattern (a seamless 1024 tile). Every folder gets manifest.json saying where each file goes on the site. Runs at once, no Send form.",
+    instructions:
+      "For site graphics call image_studio_web: page and section mockups (desktop and mobile), the logo, the favicon set, the og share card, hero and cover pictures, spot illustrations, icon series, backgrounds and seamless patterns. Generations go to the site project of this thread's folder (created on first use, named after the folder); pass project only for another site (`bb image-studio web projects`). prompt: what the picture shows (hero, og, cover, background, pattern, the logo's name in quotes); for illustrations and icons the list, one per line or separated by \";\" (\"empty state: no posts; 404: lost astronaut\"). variants 1-4 draws takes of single pictures. Do not describe the style in prompt: the plugin adds the site's theme, palette, style presets and approved references. Report the finished files and manifest.json, which pairs every file with its place on the site (public/favicon.ico, public/og.png…) and the html tag that shows it. Set the look: bb image-studio web project --theme … --tags minimal|corporate|playful|editorial|brutalist|dark-tech|luxury|flat-illustration|clay-3d --palette background=#0A0A12,…; make approved art a reference: bb image-studio web ref --image <path>.",
+    presentation: {
+      label: { pending: "Drawing site graphics", completed: "Drew site graphics" },
+      icon: { glyph: "Palette" },
+    },
+    parameters: z.object({
+      mode: webModeSchema,
+      prompt: z.string().default(""),
+      project: z.string().optional(),
+      variants: z.number().int().min(1).max(MAX_VARIANTS).optional(),
+    }),
+    async execute(input, ctx) {
+      try {
+        const run = await runGui({
+          projectId: ctx.projectId || null,
+          styleId: input.project,
+          section: "web",
+          mode: input.mode,
+          prompt: input.prompt,
+          states: false,
+          variants: input.variants,
+          ...(await threadFolder(ctx.threadId, ctx.projectId || null)),
+        });
+        const text = guiSummary(run);
+        return run.generations.length === 0 ? { content: [{ type: "text", text: text || "Nothing was generated." }], isError: true } : text;
+      } catch (error) {
+        if (isStaleHandleError(error) || error instanceof ReloadingError) {
+          return { content: [{ type: "text", text: "Image Studio was reloaded while this ran and nothing was saved. Call image_studio_web again." }], isError: true };
+        }
+        return { content: [{ type: "text", text: describe(error) }], isError: true };
+      }
+    },
+  });
+
+  bb.agents.registerTool({
     name: "image_studio_generate",
     description:
       "Generate a project photo through Image Studio, or edit existing pictures passed in images (file path, gallery id, or URL). Always call this instead of the CLI when chatting with the user: it opens buttons for model, aspect ratio, and size with the last choice preselected. Nano Banana size defaults to 2K. With a profile, the plugin attaches the reference sheet photos it needs (refs: auto by default). Wait for Send.",
@@ -4784,7 +4943,7 @@ export default async function plugin(bb: BbPluginApi) {
   });
 
   bb.agents.configure(() => ({
-    tools: ["image_studio_generate", "image_studio_gui", "image_studio_character", "image_studio_roblox", "image_studio_item", "image_studio_model"],
+    tools: ["image_studio_generate", "image_studio_gui", "image_studio_character", "image_studio_roblox", "image_studio_web", "image_studio_item", "image_studio_model"],
     skills: ["image-studio"],
   }));
 

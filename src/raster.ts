@@ -144,6 +144,32 @@ export function fitSquare(image: Rgba, size: number, margin = 0.04): Rgba {
 }
 
 /**
+ * The trimmed picture centred on an opaque size×size square filled with `fill`, its longest side fitted to `inner`
+ * pixels: an apple-touch or maskable favicon, where the mark must sit inside its safe box on a solid colour.
+ */
+export function mountOnColor(image: Rgba, size: number, inner: number, fill: readonly [number, number, number]): Rgba {
+  const part = trimAlpha(image);
+  const scale = inner / Math.max(part.width, part.height);
+  const w = Math.max(1, Math.round(part.width * scale));
+  const h = Math.max(1, Math.round(part.height * scale));
+  const scaled = resize(part, w, h);
+  const out = new Uint8Array(size * size * 4);
+  for (let i = 0; i < size * size; i++) out.set([fill[0], fill[1], fill[2], 255], i * 4);
+  const ox = Math.floor((size - w) / 2);
+  const oy = Math.floor((size - h) / 2);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const p = (y * w + x) * 4;
+      const q = ((oy + y) * size + ox + x) * 4;
+      const a = scaled.data[p + 3]! / 255;
+      for (let c = 0; c < 3; c++) out[q + c] = Math.round(scaled.data[p + c]! * a + fill[c]! * (1 - a));
+      out[q + 3] = 255;
+    }
+  }
+  return { data: out, width: size, height: size };
+}
+
+/**
  * Tileable by a looped crossfade: the last `band` of each axis is faded into the first and cut off, so the new last
  * column sits next to the old one and the picture wraps without a seam; nothing is repeated (a shift by half would
  * show the middle twice). `axes` "x" loops only horizontally (a skybox strip). The picture loses `band` of each axis.
