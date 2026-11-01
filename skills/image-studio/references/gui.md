@@ -1,10 +1,10 @@
 # GUI section — game interface through Image Studio
 
-Use for game UI work: menus, windows, HUDs, buttons, frames, bars, slots, UI icons. Always **Muse Image** on fal, labels always **English**, frame size picked by the plugin (16:9 mockups, element sheets by grid shape). Do not pass a model or aspect.
+Use for game UI work: menus, windows, HUDs, buttons, frames, bars, slots, UI icons. Always **Muse Image** on fal, labels always **English**, frame size picked by the plugin (16:9 mockups, element sheets by grid shape). Do not pass a model or aspect. **Website interfaces and site graphics are not GUI work** — site pages, sections, the logo, favicons and og cards go to the Web section: `image_studio_web` / `bb image-studio web …` ([web.md](web.md)).
 
 ## Projects
 
-GUI work is grouped in **GUI projects**, listed in the panel's GUI tab wherever it is opened. A generation without a named project goes to the project bound to the current folder (the thread's folder for the tool, the shell folder for the CLI); the first one creates it, named after the folder. So a game, a site or a section each collects its own history, grouped by request (mode, prompt, time).
+GUI work is grouped in **GUI projects**. Inside a Roblox game the game's own GUI tab lists and generates its linked GUI project; standalone GUI projects are managed from the CLI (`bb image-studio gui projects`). A generation without a named project goes to the project bound to the current folder (the thread's folder for the tool, the shell folder for the CLI); the first one creates it, named after the folder. So a game or a section each collects its own history, grouped by request (mode, prompt, time).
 
 Each project also holds its style: theme ("vampires vs humans, night, glossy cartoon"), presets (`cartoon`, `gothic`, `fantasy`, `scifi`, `horror`, `cozy`, `minimal`, `crystal`, `pixel`), a palette (panels, buttons, outlines, highlights, text as `#RRGGBB`), extra rules, and up to 6 reference pictures (approved mockups = `concept`, game art = `art`). The plugin adds all of that to every GUI prompt, the references as Image 1…N. **Never describe the style in `prompt`.** A project with nothing fixed makes `ideas` explore four preset directions; after the user picks one, make it a reference so everything else follows it.
 

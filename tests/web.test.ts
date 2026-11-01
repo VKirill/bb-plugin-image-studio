@@ -4,6 +4,7 @@ import { test } from "node:test";
 import { sheetAspect, type GuiStyle } from "../src/gui.ts";
 import type { Rgba } from "../src/image-io.ts";
 import { encodeIco } from "../src/image-io.ts";
+import { faviconSet } from "../src/web-favicon.ts";
 import {
   LIST_MODES,
   MAX_LIST,
@@ -13,7 +14,6 @@ import {
   WEB_MODES,
   WEB_MODEL,
   WEB_PRESETS,
-  faviconSet,
   firstPalette,
   hexRgb,
   webJobs,
