@@ -80,7 +80,7 @@ test("web-panel.tsx lists the site's jobs in a gallery", () => {
   assert.match(panel, /onOpen\(ordered, index, thumbs\)/);
 });
 
-test("package.json is version 0.10.1", () => {
+test("package.json is version 0.10.2", () => {
   const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string };
-  assert.equal(pkg.version, "0.10.1");
+  assert.equal(pkg.version, "0.10.2");
 });

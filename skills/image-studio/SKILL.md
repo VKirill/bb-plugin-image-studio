@@ -7,7 +7,7 @@ description: "Generate or edit images in the current BB project through Image St
 
 Read this skill only when the user wants an image.
 
-**Game GUI** (menus, HUD, windows, buttons, frames, UI icons, UI kits): use the GUI section — tool `image_studio_gui` / `bb image-studio gui …`, see [references/gui.md](references/gui.md). Not `image_studio_generate`.
+**Game GUI** (menus, HUD, windows, buttons, frames, UI icons, UI kits): use the GUI section — tool `image_studio_gui` / `bb image-studio gui …`, see [references/gui.md](references/gui.md). Not `image_studio_generate`; site interfaces and site graphics go to `image_studio_web`.
 
 **Game characters for 3D** (a character that becomes a 3D model or gets a skeleton: concept ideas, the A-pose front view for image-to-3D, a front-and-back turnaround, weapons and held items drawn apart): use the Characters section — tool `image_studio_character` / `bb image-studio character …`, see [references/characters.md](references/characters.md). Put held items in `equipment`, never in the description, so they are not drawn on the body. Not `image_studio_generate`.
 

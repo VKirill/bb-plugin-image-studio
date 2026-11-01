@@ -31,7 +31,7 @@ import { ModelPanel } from "./model-panel";
 import { WebPanel } from "./web-panel";
 import { stylesForAppTab } from "./src/model";
 
-type Tab = "settings" | "people" | "gallery" | "roblox" | "web" | "gui" | "characters" | "model";
+type Tab = "settings" | "people" | "gallery" | "roblox" | "web" | "characters" | "model";
 type UiLocale = "auto" | "en" | "ru";
 type PhotoSlotId = SlotId;
 /** The three face slots one multi-file pick fills, in order. */
@@ -1110,11 +1110,10 @@ function StudioPage({ initialView = "gallery" }: { initialView?: Tab }) {
   const falOnlySelected = modelFalOnly(selectedModel);
   const kieOnlySelected = modelKieOnly(selectedModel);
 
-  const navItems: Array<{ id: Tab; icon: "GridView" | "Square" | "Globe" | "Layers" | "Puzzle" | "Palette" | "UserRound" | "Settings"; label: string }> = [
+  const navItems: Array<{ id: Tab; icon: "GridView" | "Square" | "Globe" | "Puzzle" | "Palette" | "UserRound" | "Settings"; label: string }> = [
     { id: "gallery", icon: "GridView", label: t("tabGallery", {}, locale) },
     { id: "roblox", icon: "Square", label: t("tabRoblox", {}, locale) },
     { id: "web", icon: "Globe", label: t("tabWeb", {}, locale) },
-    { id: "gui", icon: "Layers", label: t("tabGui", {}, locale) },
     { id: "characters", icon: "Puzzle", label: t("tabCharacters", {}, locale) },
     { id: "model", icon: "Palette", label: t("tabModel", {}, locale) },
     { id: "people", icon: "UserRound", label: t("tabProfiles", {}, locale) },
@@ -1377,7 +1376,7 @@ function StudioPage({ initialView = "gallery" }: { initialView?: Tab }) {
               />
             ) : null}
           </>
-        ) : tab === "roblox" || tab === "gui" || tab === "characters" ? (
+        ) : tab === "roblox" || tab === "characters" ? (
           <>
             {error ? (
               <p role="alert" className="border-b border-border px-4 py-2 text-sm text-destructive">

@@ -115,7 +115,6 @@ import {
   WEB_MODEL,
   WEB_MODES,
   WEB_PRESET_IDS,
-  faviconSet,
   hexRgb,
   webJobs,
   webManifest,
@@ -123,6 +122,7 @@ import {
   type WebMode,
   type WebOutput,
 } from "./src/web.js";
+import { faviconSet } from "./src/web-favicon.js";
 import { SKYBOX_FACES, cover, fadeEdges, fitSquare, flattenRound, glowToAlpha, limit, normalMap, opaque, resize, seamless, skyboxFaces, trimAlpha } from "./src/raster.js";
 import { enabledFromSettings, mergeSettings, settingsSchema, type StudioSettings } from "./src/settings.js";
 import {
@@ -3569,7 +3569,7 @@ export default async function plugin(bb: BbPluginApi) {
       },
       {
         name: "gui",
-        summary: "GUI section: styles, 4 mockup ideas, screens, element sheets cut into PNGs, UI kits (Muse Image, English labels)",
+        summary: "GUI section: game interface — styles, 4 mockup ideas, screens, element sheets cut into PNGs, UI kits (Muse Image, English labels); site interfaces go to image_studio_web / bb image-studio web",
         usage: "bb image-studio gui projects|project|ref|generate|cut|delete …",
       },
       {
@@ -4392,9 +4392,9 @@ export default async function plugin(bb: BbPluginApi) {
   bb.agents.registerTool({
     name: "image_studio_gui",
     description:
-      "Game and site GUI through Image Studio's GUI section, one GUI project per folder (Muse Image, English labels, picked frame size). Modes: ideas (4 mockups of a screen: 4 style directions for a fresh style, 4 takes inside a fixed one), screen (one mockup), elements (a list of separate elements on one sheet, cut into named transparent PNGs; states: normal/hover/pressed/disabled), kit (the standard UI kit of the style in two sheets, cut). Runs at once, no Send form.",
+      "Game GUI through Image Studio's GUI section, one GUI project per folder (Muse Image, English labels, picked frame size). Modes: ideas (4 mockups of a screen: 4 style directions for a fresh style, 4 takes inside a fixed one), screen (one mockup), elements (a list of separate elements on one sheet, cut into named transparent PNGs; states: normal/hover/pressed/disabled), kit (the standard UI kit of the style in two sheets, cut). For website interfaces and site graphics call image_studio_web instead. Runs at once, no Send form.",
     instructions:
-      "For game or site interface work (GUI, HUD, menus, buttons, frames, UI icons) call image_studio_gui instead of image_studio_generate. Generations go to the GUI project of this thread's folder (created on first use, named after the folder); pass project only to write into another one (`bb image-studio gui projects`). A project with nothing fixed yet makes ideas explore 4 preset directions; once it has presets, palette or references, ideas are 4 takes inside its style. prompt: ideas/screen — what the screen holds (\"settings window: tabs Graphics, Audio; sliders; Save button\"); elements — the list, one per line or separated by \";\" (\"Play button with the label 'PLAY'; gold coin icon\"); kit — optional extra wishes. Do not describe the style in prompt: the plugin adds the style's theme, palette, presets and reference pictures. Report the saved paths and parts folders to the user. To make an approved picture the project's style reference: bb image-studio gui ref --image <path or gallery id>. Set theme/presets/palette: bb image-studio gui project --theme … --tags … --palette ….",
+      "For game interface work (GUI, HUD, menus, buttons, frames, UI icons) call image_studio_gui instead of image_studio_generate; for website interfaces (site pages, sections, site icons) and other site graphics call image_studio_web. Generations go to the GUI project of this thread's folder (created on first use, named after the folder); pass project only to write into another one (`bb image-studio gui projects`). In a Roblox game's folder the game's GUI lands in that game. A project with nothing fixed yet makes ideas explore 4 preset directions; once it has presets, palette or references, ideas are 4 takes inside its style. prompt: ideas/screen — what the screen holds (\"settings window: tabs Graphics, Audio; sliders; Save button\"); elements — the list, one per line or separated by \";\" (\"Play button with the label 'PLAY'; gold coin icon\"); kit — optional extra wishes. Do not describe the style in prompt: the plugin adds the style's theme, palette, presets and reference pictures. Report the saved paths and parts folders to the user. To make an approved picture the project's style reference: bb image-studio gui ref --image <path or gallery id>. Set theme/presets/palette: bb image-studio gui project --theme … --tags … --palette ….",
     presentation: {
       label: { pending: "Generating GUI", completed: "Generated GUI" },
       icon: { glyph: "Palette" },
@@ -4804,7 +4804,7 @@ export default async function plugin(bb: BbPluginApi) {
     description:
       "Generate a project photo through Image Studio, or edit existing pictures passed in images (file path, gallery id, or URL). Always call this instead of the CLI when chatting with the user: it opens buttons for model, aspect ratio, and size with the last choice preselected. Nano Banana size defaults to 2K. With a profile, the plugin attaches the reference sheet photos it needs (refs: auto by default). Wait for Send.",
     instructions:
-      "Not for game or site interfaces (GUI, HUD, buttons, UI kits) and not for game characters, their turnarounds or weapons: those go to image_studio_gui and image_studio_character, which run at once without the Send form, at the sizes their section fixes, and need no confirmation. When the user wants a photo, call image_studio_generate with the scene prompt (and profile name if they named a person). To change an existing picture, pass it in images and write an edit prompt. Do not pass model/aspect/size unless the user named them this turn. Do not describe the person's face or body in prompt: the plugin injects the identity and the reference photos. Pass refs only to force slots (\"all\", or e.g. \"face-front,body-back\"); leave it out for the automatic choice. The result lists the reference slots that were sent. Do not run bb image-studio generate in chat — that skips the picker. Wait until the user presses Send.",
+      "Not for game interfaces (GUI, HUD, buttons, UI kits — image_studio_gui), website interfaces and site graphics (image_studio_web), or game characters, their turnarounds or weapons (image_studio_character): those run at once without the Send form, at the sizes their section fixes, and need no confirmation. When the user wants a photo, call image_studio_generate with the scene prompt (and profile name if they named a person). To change an existing picture, pass it in images and write an edit prompt. Do not pass model/aspect/size unless the user named them this turn. Do not describe the person's face or body in prompt: the plugin injects the identity and the reference photos. Pass refs only to force slots (\"all\", or e.g. \"face-front,body-back\"); leave it out for the automatic choice. The result lists the reference slots that were sent. Do not run bb image-studio generate in chat — that skips the picker. Wait until the user presses Send.",
     presentation: {
       label: { pending: "Waiting to generate a photo", completed: "Generated a photo" },
       icon: { glyph: "Palette" },

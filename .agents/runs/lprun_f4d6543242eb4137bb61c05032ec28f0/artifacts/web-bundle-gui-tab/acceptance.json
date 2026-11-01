@@ -1,0 +1,15 @@
+{
+  "schema_version": 2,
+  "task_id": "web-bundle-gui-tab",
+  "task_sha256": "a9ad9c632b0e998596a0934361177c6ae58af21cf54905f140d658846489d924",
+  "attempt": 3,
+  "provider_exit": 0,
+  "report": "complete",
+  "report_sha256": "668d3a0a5f43d9cc275e8d2910f6eb9dfc6f53f6ee33a7f20737aa7e44c268d1",
+  "owns_check": "passed",
+  "verification": "passed",
+  "review": "passed",
+  "accepted": true,
+  "accepted_at": "2026-11-01T21:15:11.514Z",
+  "model": "swe-2-high"
+}
