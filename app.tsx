@@ -28,9 +28,10 @@ import { rpcApi } from "./src/rpc-api";
 import { fileToBase64 } from "./lib/files";
 import { GuiPanel, type GuiItem } from "./gui-panel";
 import { ModelPanel } from "./model-panel";
+import { WebPanel } from "./web-panel";
 import { stylesForAppTab } from "./src/model";
 
-type Tab = "settings" | "people" | "gallery" | "roblox" | "gui" | "characters" | "model";
+type Tab = "settings" | "people" | "gallery" | "roblox" | "web" | "gui" | "characters" | "model";
 type UiLocale = "auto" | "en" | "ru";
 type PhotoSlotId = SlotId;
 /** The three face slots one multi-file pick fills, in order. */
@@ -1109,9 +1110,10 @@ function StudioPage({ initialView = "gallery" }: { initialView?: Tab }) {
   const falOnlySelected = modelFalOnly(selectedModel);
   const kieOnlySelected = modelKieOnly(selectedModel);
 
-  const navItems: Array<{ id: Tab; icon: "GridView" | "Square" | "Layers" | "Puzzle" | "Palette" | "UserRound" | "Settings"; label: string }> = [
+  const navItems: Array<{ id: Tab; icon: "GridView" | "Square" | "Globe" | "Layers" | "Puzzle" | "Palette" | "UserRound" | "Settings"; label: string }> = [
     { id: "gallery", icon: "GridView", label: t("tabGallery", {}, locale) },
     { id: "roblox", icon: "Square", label: t("tabRoblox", {}, locale) },
+    { id: "web", icon: "Globe", label: t("tabWeb", {}, locale) },
     { id: "gui", icon: "Layers", label: t("tabGui", {}, locale) },
     { id: "characters", icon: "Puzzle", label: t("tabCharacters", {}, locale) },
     { id: "model", icon: "Palette", label: t("tabModel", {}, locale) },
@@ -1345,6 +1347,35 @@ function StudioPage({ initialView = "gallery" }: { initialView?: Tab }) {
               onError={report}
               onChanged={load}
             />
+          </>
+        ) : tab === "web" ? (
+          <>
+            {error ? (
+              <p role="alert" className="border-b border-border px-4 py-2 text-sm text-destructive">
+                {t("error", {}, locale)}: {error}
+              </p>
+            ) : null}
+            <WebPanel
+              api={api}
+              projectId={projectId ?? null}
+              styles={guiStyles.filter((item) => item.section === "web")}
+              version={guiVersion}
+              locale={locale}
+              onError={report}
+              onChanged={load}
+              onOpen={(items, index, thumbs) => setGuiViewer({ items, index, thumbs })}
+            />
+            {guiViewer ? (
+              <PhotoViewer
+                items={guiViewer.items}
+                index={guiViewer.index}
+                thumbs={guiViewer.thumbs}
+                fullPreviews={fullPreviews}
+                locale={locale}
+                onIndex={(index) => setGuiViewer({ ...guiViewer, index })}
+                onClose={() => setGuiViewer(null)}
+              />
+            ) : null}
           </>
         ) : tab === "roblox" || tab === "gui" || tab === "characters" ? (
           <>
