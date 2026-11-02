@@ -274,6 +274,38 @@ export async function kieGenerate(
   throw new Error("kie.ai timed out while generating the image");
 }
 
+/**
+ * A fal failure worth repeating as a whole job (a fresh submit + poll): HTTP 503, or fal's own
+ * "downstream_service_unavailable", or a finished request that came back without an image URL. Anything else —
+ * content policy, validation, timeouts — is thrown at once.
+ */
+function falTransientError(error: unknown): boolean {
+  const status = (error as { status?: unknown } | null)?.status;
+  if (status === 503 || status === "503") return true;
+  const text = formatUnknownError(error);
+  return /\b503\b/.test(text) || text.includes("downstream_service_unavailable") || text.includes("finished without an image URL");
+}
+
+/**
+ * Runs a fal job, retrying transient failures after `delaysMs` (default [3000, 8000]: at most two retries).
+ * `sleep` is injectable so tests run instantly.
+ */
+export async function withFalRetry<T>(
+  run: () => Promise<T>,
+  options: { delaysMs?: number[]; sleep?: (ms: number) => Promise<void> } = {},
+): Promise<T> {
+  const delays = options.delaysMs ?? [3000, 8000];
+  const wait = options.sleep ?? ((ms: number) => sleep(ms));
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await run();
+    } catch (error) {
+      if (attempt >= delays.length || !falTransientError(error)) throw error;
+      await wait(delays[attempt]!);
+    }
+  }
+}
+
 function falHeaders(apiKey: string): Record<string, string> {
   return {
     Authorization: `Key ${apiKey}`,

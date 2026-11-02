@@ -14,6 +14,8 @@ import {
   WEB_MODES,
   WEB_MODEL,
   WEB_PRESETS,
+  faviconBackground,
+  faviconFill,
   firstPalette,
   hexRgb,
   webJobs,
@@ -102,7 +104,7 @@ test("every mode sends the plan's aspect and writes the plan's file and size", (
   const hero = one("hero");
   assert.equal(hero.aspectRatio, "16:9");
   assert.deepEqual(hero.output, { kind: "cover", file: "hero.png", width: 1920, height: 1080 });
-  assert.match(hero.prompt, /calm, uncluttered/);
+  assert.match(hero.prompt, /calm and even/);
   const cover = one("cover");
   assert.equal(cover.aspectRatio, "16:9");
   assert.deepEqual(cover.output, { kind: "cover", file: "cover.png", width: 1600, height: 900 });
@@ -173,6 +175,7 @@ test("the site's look goes into every prompt, references numbered first", () => 
     palette: { background: "#f5efe6", button: "#c0203a", outline: "", highlight: "", text: "" },
   });
   for (const [mode, prompt] of [
+    ["page", "the menu page"],
     ["hero", "a kitchen"],
     ["logo", ""],
     ["icons", "cart; search"],
@@ -180,14 +183,24 @@ test("the site's look goes into every prompt, references numbered first", () => 
   ] as const) {
     const [job] = webJobs(request({ mode, prompt, refCount: 2, designCount: 1 }), styled);
     assert.match(job!.prompt, /Site \(context for the look, not text to write\): a website\. coffee subscription\./, mode);
-    assert.match(job!.prompt, /Style: flat illustration web design/, mode);
-    assert.match(job!.prompt, /Colour palette: background #F5EFE6, buttons #C0203A/, mode);
     assert.match(job!.prompt, /Also: warm cream tones/, mode);
     assert.match(job!.prompt, /Images 1 and 2 show this site's approved art/, mode);
     assert.match(job!.prompt, /Image 3 is an extra reference from the user/, mode);
   }
+  // a page mockup keeps the labelled palette and the preset sentence
+  const page = webJobs(request({ mode: "page", prompt: "the menu page", refCount: 2, designCount: 1 }), styled)[0]!;
+  assert.match(page.prompt, /Style: flat illustration web design/);
+  assert.match(page.prompt, /Colour palette: background #F5EFE6, buttons #C0203A/);
+  // a picture gets the palette as plain colours only, never labelled words
+  const hero = webJobs(request({ mode: "hero", prompt: "a kitchen", refCount: 2, designCount: 1 }), styled)[0]!;
+  assert.match(hero.prompt, /Site colours: #F5EFE6, #C0203A/);
+  assert.doesNotMatch(hero.prompt, /Style:|Colour palette|buttons/);
   assert.equal(firstPalette(styled), "#F5EFE6");
   assert.equal(firstPalette(site()), "#FFFFFF");
+  assert.equal(faviconFill(styled), "#C0203A");
+  assert.equal(faviconBackground(styled), "#F5EFE6");
+  assert.equal(faviconFill(site()), "#FFFFFF");
+  assert.equal(faviconBackground(site()), "#FFFFFF");
   assert.deepEqual(hexRgb("#0a0a12"), [10, 10, 18]);
   assert.deepEqual(hexRgb("nope"), [255, 255, 255]);
 });
@@ -271,6 +284,8 @@ test("favicon set: transparent squares, the ICO header, opaque apple and maskabl
   const webmanifest = byFile.get("site.webmanifest");
   assert.ok(webmanifest && "manifest" in webmanifest);
   assert.deepEqual((webmanifest.manifest as { name: string }).name, "Acme");
+  assert.equal((webmanifest.manifest as { short_name: string }).short_name, "Acme");
+  assert.equal((webmanifest.manifest as { theme_color: string }).theme_color, "#0A141E");
   assert.deepEqual(
     (webmanifest.manifest as { icons: Array<{ src: string; purpose?: string }> }).icons.map((icon) => [icon.src, icon.purpose ?? "any"]),
     [
@@ -300,10 +315,10 @@ test("webManifest pairs every file with its place on the site and the tag that s
   );
   const og = webManifest(one("og"), [{ file: "og.png", width: 1200, height: 630 }]);
   assert.equal(og.files[0]!.place, "public/og.png");
-  assert.equal(og.files[0]!.html, `<meta property="og:image" content="/og.png">`);
+  assert.equal(og.files[0]!.html, `<meta property="og:image" content="https://YOUR-DOMAIN/og.png">`);
   const hero = webManifest(one("hero"), [{ file: "hero.png", width: 1920, height: 1080 }]);
   assert.equal(hero.files[0]!.place, "public/hero.png");
-  assert.equal(hero.files[0]!.html, `<img src="/hero.png">`);
+  assert.equal(hero.files[0]!.html, `<img src="/hero.png" alt="" width="1920" height="1080">`);
   const parts = webManifest(one("icons"), [{ file: "parts/cart.png", width: 512, height: 512 }]);
   assert.equal(parts.files[0]!.place, "public/img/cart.png");
 });

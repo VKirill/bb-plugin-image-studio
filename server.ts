@@ -51,7 +51,7 @@ import { MAX_BATCH, parseBatchLines, type BatchJob } from "./src/batch.js";
 import { generationSchema, type Generation } from "./src/generation.js";
 import { TYPESAFE_BASE_URL, buildJevRequest, jevCues, runJevAttempts, type JevAttempt, type JevCues } from "./src/jev.js";
 import { atomicWrite, createJournal } from "./src/journal.js";
-import { formatUnknownError, falGenerate, kieGenerate } from "./src/providers.js";
+import { formatUnknownError, falGenerate, kieGenerate, withFalRetry } from "./src/providers.js";
 import { encodeWebp, imageSize, sniffImageMime, WEBP_FULL, WEBP_THUMB } from "./src/encode-webp.js";
 import {
   GUI_MAX_REFS,
@@ -115,7 +115,9 @@ import {
   WEB_MODEL,
   WEB_MODES,
   WEB_PRESET_IDS,
+  faviconBackground,
   hexRgb,
+  paletteKey,
   webJobs,
   webManifest,
   type WebJob,
@@ -1243,7 +1245,7 @@ export default async function plugin(bb: BbPluginApi) {
             ...job,
             kieRefField: kie!.refField,
           })
-        : falGenerate(keys.fal!, references.length > 0 ? fal!.edit : fal!.generate, job),
+        : withFalRetry(() => falGenerate(keys.fal!, references.length > 0 ? fal!.edit : fal!.generate, job)),
     );
 
     const imageResponse = await fetch(result.url);
@@ -1985,7 +1987,9 @@ export default async function plugin(bb: BbPluginApi) {
         break;
       }
       case "favicon": {
-        for (const file of await faviconSet(image, hexRgb(output.fill), gui.styleName ?? "")) {
+        const mark = trimAlpha(keyGreen(image));
+        const site = (await readGuiStyles()).find((style) => style.id === gui.styleId) ?? null;
+        for (const file of await faviconSet(mark, hexRgb(output.fill), gui.styleName ?? "", hexRgb(faviconBackground(site)))) {
           if ("bytes" in file) {
             await write(join(dir, file.file), file.bytes);
             files.push({ file: file.file, width: 48, height: 48 });
@@ -3970,8 +3974,9 @@ export default async function plugin(bb: BbPluginApi) {
         const palette = { ...(existing?.palette ?? { background: "", button: "", outline: "", highlight: "", text: "" }) };
         for (const pair of (flag(argv, "--palette") ?? "").split(",").filter(Boolean)) {
           const [key, value] = pair.split("=").map((part) => part.trim());
-          if (!key || !(key in palette)) return { exitCode: 1, stderr: `Unknown palette key "${key}". Use background, button, outline, highlight, text.` };
-          (palette as Record<string, string>)[key] = value ?? "";
+          const target = key ? paletteKey(key) : null;
+          if (!target) return { exitCode: 1, stderr: `Unknown palette key "${key}". Use background, button, outline, highlight, text (accent is an alias of highlight).` };
+          (palette as Record<string, string>)[target] = value ?? "";
         }
         const tags = flag(argv, "--tags");
         const saved = await save_gui_style({

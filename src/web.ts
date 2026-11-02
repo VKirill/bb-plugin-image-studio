@@ -1,8 +1,10 @@
 import {
+  PALETTE_KEYS,
   sheetAspect,
   sheetLayout,
   styleIsFixed,
   type GuiStyle,
+  type PaletteKey,
   type SheetLayout,
 } from "./gui.ts";
 import { parseList, quoted } from "./roblox.ts";
@@ -139,10 +141,14 @@ const GREEN_ITEMS =
 const NO_TEXT = "Text: no letters, words, numbers or logos anywhere in the picture.";
 const QUOTED_TEXT =
   "Text: no title, caption, slogan or description written anywhere (the site line below is context, never text in the picture), except text the request gives in quotes, drawn exactly as written in big bold readable letters; no watermark.";
-const UI_TEXT =
-  "Text: headlines, menu items and buttons are short real English phrases spelled exactly, big and readable (no lorem ipsum); no watermark.";
-const SCREEN =
-  "Presentation: the page itself, flat and straight-on (orthographic), filling the whole frame edge to edge: no perspective or tilt, no browser window, no device frame, no cursor, no hands, no scene around it.";
+/** Page-mockup modes draw the site itself: real short copy, the page bleeding to every edge, the site's own name. */
+const MOCKUP_TEXT =
+  "Text: use only short real phrases (headings at most about 20 characters, no paragraphs); quoted strings exactly as written; every price or number the request gives exactly; nothing invented beyond short labels; no lorem ipsum; no watermark.";
+const EDGE_TO_EDGE =
+  "Layout: the page background reaches all four edges of the picture; no outer margin, no card, no browser chrome, no device frame, no perspective; sections stacked top to bottom in the order the request lists them, each full width; name each section's elements and their position (left/center/right).";
+/** The wordmark a mockup shows: the site project's display name, never an invented brand. */
+const brandLine = (siteName: string): string[] =>
+  siteName ? [`Brand: the brand name shown is exactly "${siteName}"; never invent another brand name.`] : [];
 
 const EXAMPLE: Record<WebMode, string> = {
   ideas: "a landing page for a coffee subscription",
@@ -168,12 +174,30 @@ function imageList(numbers: readonly number[]): string {
   return numbers.length === 1 ? `Image ${numbers[0]}` : `Images ${numbers.slice(0, -1).join(", ")} and ${numbers[numbers.length - 1]}`;
 }
 
-const PALETTE_LABELS: Record<string, string> = { background: "background", button: "buttons", outline: "borders", highlight: "accents", text: "text" };
+const PALETTE_LABELS: Record<string, string> = { background: "background", button: "buttons", outline: "borders", highlight: "accents", accent: "accents", text: "text" };
 
-/** The project's first palette colour, for opaque favicon fills; white when the palette is empty. */
+/** `--palette` keys: `accent` is an alias of `highlight` (a site palette calls the accent colour highlight). */
+export function paletteKey(key: string): PaletteKey | null {
+  const resolved = key.trim().toLowerCase() === "accent" ? "highlight" : key.trim().toLowerCase();
+  return (PALETTE_KEYS as readonly string[]).includes(resolved) ? (resolved as PaletteKey) : null;
+}
+
+/** The project's first palette colour; white when the palette is empty. */
 export function firstPalette(site: GuiStyle | null): string {
   for (const value of site ? Object.values(site.palette) : []) if (value) return value.toUpperCase();
   return "#FFFFFF";
+}
+
+/** The opaque favicon fill: the palette's button colour, else its highlight, else white. */
+export function faviconFill(site: GuiStyle | null): string {
+  const value = site?.palette.button || site?.palette.highlight || "";
+  return value ? value.toUpperCase() : "#FFFFFF";
+}
+
+/** The favicon webmanifest's background: the palette's background colour, else white. */
+export function faviconBackground(site: GuiStyle | null): string {
+  const value = site?.palette.background || "";
+  return value ? value.toUpperCase() : "#FFFFFF";
 }
 
 /** "#1A1026" → [26, 16, 38]; anything else falls back to white. */
@@ -183,16 +207,29 @@ export function hexRgb(hex: string): [number, number, number] {
   return [(int >> 16) & 255, (int >> 8) & 255, int & 255];
 }
 
-/** The site's look, for every asset prompt: theme, style presets, palette, notes, approved art as Image 1…N. */
-export function siteLines(site: GuiStyle | null, refCount: number, designCount: number): string[] {
+/**
+ * The site's look, for every asset prompt: theme, style presets, palette, notes, approved art as Image 1…N.
+ * Page mockups (`picture` false) get the layout-flavoured preset sentences; picture modes get the theme and the
+ * palette as plain colours only — the preset words (grids, fonts, margins) make Muse draw interface into a photo.
+ */
+export function siteLines(site: GuiStyle | null, refCount: number, designCount: number, picture = false): string[] {
   const lines: string[] = [];
   if (site?.theme.trim()) lines.push(`Site (context for the look, not text to write): a website. ${site.theme.trim()}.`);
   else lines.push("Site: a website.");
-  if (site && site.tags.length > 0) lines.push(`Style: ${site.tags.map(presetText).join("; ")}.`);
-  const palette = Object.entries(site?.palette ?? {})
-    .filter(([, value]) => value)
-    .map(([key, value]) => `${PALETTE_LABELS[key] ?? key} ${value.toUpperCase()}`);
-  if (palette.length > 0) lines.push(`Colour palette: ${palette.join(", ")}.`);
+  if (!picture && site && site.tags.length === 1) lines.push(`Style: ${presetText(site.tags[0]!)}.`);
+  if (!picture && site && site.tags.length > 1) {
+    const presets = site.tags.map(presetText);
+    const blend = presets.length === 2 ? `${presets[0]} and ${presets[1]}` : `${presets.slice(0, -1).join(", ")} and ${presets[presets.length - 1]}`;
+    lines.push(`Style: a blend of ${blend}; where they disagree, follow the site theme.`);
+  }
+  const palette = Object.entries(site?.palette ?? {}).filter(([, value]) => value);
+  if (palette.length > 0) {
+    lines.push(
+      picture
+        ? `Site colours: ${palette.map(([, value]) => value.toUpperCase()).join(", ")}.`
+        : `Colour palette: ${palette.map(([key, value]) => `${PALETTE_LABELS[key] ?? key} ${value.toUpperCase()}`).join(", ")}.`,
+    );
+  }
   if (site?.notes.trim()) lines.push(`Also: ${site.notes.trim()}`);
   if (refCount > 0) {
     const numbers = Array.from({ length: refCount }, (_, index) => index + 1);
@@ -215,7 +252,7 @@ function listRows(layout: SheetLayout): string {
 }
 
 function gridRule(layout: SheetLayout, gap: string): string {
-  return `Layout: a strict grid of ${layout.rows} rows and ${layout.cols} columns, exactly the rows above, one item per cell${layout.cells.length < layout.rows * layout.cols ? "; the cells after the last item stay empty" : ""}; every item centred in its own cell, complete and fully visible, never touching another item or the image border, with ${gap} between cells. No captions, numbers or grid lines.`;
+  return `Layout: the sheet is ${layout.rows} rows and ${layout.cols} columns, exactly the rows above, one item per cell${layout.cells.length < layout.rows * layout.cols ? "; the cells after the last item stay empty" : ""}; every item centred in its own cell, complete and fully visible, never touching another item or the image border, with ${gap} between cells. No captions, numbers or guides.`;
 }
 
 const WEB_TAKES = [
@@ -224,12 +261,19 @@ const WEB_TAKES = [
   "Take 4: an unexpected but fitting idea for the same request.",
 ];
 
-/** Four landing-page directions: a set of different pages, not retries of one. */
-const IDEA_TAKES = [
-  "Idea 2 of 4: a different layout: the hero content and sections stacked differently, bolder shapes and stronger colour blocks.",
-  "Idea 3 of 4: a minimal editorial direction: a lot of white space, one huge headline, few sections, refined typography.",
-  "Idea 4 of 4: an unexpected but fitting direction: an unusual composition, motif or colour treatment, still a working landing page.",
+/**
+ * The four landing-page directions differ by layout type, not only colour — one per take, whether the style is
+ * fixed (four takes inside it) or not (four takes under different presets).
+ */
+const IDEA_LAYOUTS = [
+  "a split hero with an image on the right",
+  "a centered hero over a full-bleed photo",
+  "an editorial layout with a big serif headline and asymmetric columns",
+  "a layout led by a product grid",
 ];
+
+/** Modes that draw a page mockup: they keep the layout-flavoured preset sentences; the rest get colours only. */
+const LAYOUT_MODES: readonly WebMode[] = ["ideas", "page", "mobile", "block", "og"];
 
 function single(base: string[], lines: string[], request: WebRequest, siteName: string, aspect: string, label: string, output: WebOutput): WebJob[] {
   const count = Math.max(1, Math.min(MAX_VARIANTS, request.variants));
@@ -247,7 +291,7 @@ function single(base: string[], lines: string[], request: WebRequest, siteName: 
 export function webJobs(request: WebRequest, site: GuiStyle | null): WebJob[] {
   const what = request.prompt.trim();
   const siteName = site?.name ?? "";
-  const lines = siteLines(site, request.refCount, request.designCount);
+  const lines = siteLines(site, request.refCount, request.designCount, !LAYOUT_MODES.includes(request.mode));
   if (LIST_MODES.includes(request.mode)) {
     const count = parseList(what).length;
     if (count === 0) throw new Error(`List the ${request.mode}, one per line or separated by ";", e.g. "${EXAMPLE[request.mode]}".`);
@@ -258,18 +302,18 @@ export function webJobs(request: WebRequest, site: GuiStyle | null): WebJob[] {
   switch (request.mode) {
     case "ideas": {
       const base = [
-        `Deliverable: a desktop landing-page mockup for the site: ${what}.`,
-        "Composition: a real landing page: a slim header with the site name and a short menu, a hero section with one big headline, a sub-line and a single call-to-action button, then two or three content sections; consistent spacing, a clear type scale, one accent colour.",
-        SCREEN,
-        UI_TEXT,
+        `Deliverable: a desktop landing-page mockup for the site, one flat 2D screenshot of a live website, not a poster or concept art: ${what}.`,
+        EDGE_TO_EDGE,
+        MOCKUP_TEXT,
+        ...brandLine(siteName),
       ];
       const directions = styleIsFixed(site)
-        ? [
-            { lines: [] as string[], label: "idea 1" },
-            ...IDEA_TAKES.map((take, index) => ({ lines: [take], label: `idea ${index + 2}` })),
-          ]
-        : WEB_PRESET_IDS.slice(0, 4).map((preset) => ({
-            lines: [`Style direction: ${WEB_PRESETS[preset]}.`],
+        ? IDEA_LAYOUTS.map((layout, index) => ({
+            lines: [index === 0 ? `Layout direction: ${layout}.` : `Idea ${index + 1} of 4: layout direction ${layout}.`],
+            label: `idea ${index + 1}`,
+          }))
+        : WEB_PRESET_IDS.slice(0, 4).map((preset, index) => ({
+            lines: [`Layout direction: ${IDEA_LAYOUTS[index]}.`, `Style direction: ${WEB_PRESETS[preset]}.`],
             label: `idea ${WEB_PRESET_IDS.indexOf(preset) + 1}: ${preset}`,
           }));
       return directions.map((direction) => ({
@@ -284,10 +328,10 @@ export function webJobs(request: WebRequest, site: GuiStyle | null): WebJob[] {
     case "page":
       return single(
         [
-          `Deliverable: a full-length mockup of one website page (every section stacked top to bottom, from the header to the footer): ${what}.`,
-          "Composition: the whole page in one tall picture: the header with the site name and menu, the hero, then the content sections in order, then the footer; one column of desktop-width content on a plain page background; generous but consistent spacing; the page runs to the bottom edge of the frame.",
-          SCREEN,
-          UI_TEXT,
+          `Deliverable: a full-length website landing page mockup, one flat 2D screenshot of a live website, not a poster or concept art, every section stacked top to bottom from the header to the footer: ${what}.`,
+          EDGE_TO_EDGE,
+          MOCKUP_TEXT,
+          ...brandLine(siteName),
         ],
         lines,
         request,
@@ -299,10 +343,10 @@ export function webJobs(request: WebRequest, site: GuiStyle | null): WebJob[] {
     case "mobile":
       return single(
         [
-          `Deliverable: a phone-screen mockup of the site's mobile version: ${what}.`,
-          "Composition: the whole frame is the screen: a narrow single-column mobile page with large touch targets and large readable type, content stacked vertically, one primary action visible; full-bleed, no phone body, no bezel, no status bar.",
-          SCREEN,
-          UI_TEXT,
+          `Deliverable: a mobile website page mockup, one flat 2D screenshot of a live website on a phone screen, not a poster or concept art: ${what}.`,
+          "Layout: one phone screen, portrait, the page filling the full width edge to edge (not a card on a background), a status bar with 9:41 at the top, no device bezel, no perspective; the content stacked vertically in the order the request lists it.",
+          MOCKUP_TEXT,
+          ...brandLine(siteName),
         ],
         lines,
         request,
@@ -314,10 +358,10 @@ export function webJobs(request: WebRequest, site: GuiStyle | null): WebJob[] {
     case "block":
       return single(
         [
-          `Deliverable: a desktop-width mockup of one website section (a hero, pricing, features, testimonials, FAQ, contact or footer, as the request names): ${what}.`,
-          "Composition: only this one section, edge to edge at desktop width, with its real content (headings, cards, columns, buttons) arranged on a clean grid; nothing above or below it.",
-          SCREEN,
-          UI_TEXT,
+          `Deliverable: a website section mockup (a hero, pricing, features, testimonials, FAQ, contact or footer, as the request names), one flat 2D screenshot of a live website, not a poster or concept art: ${what}.`,
+          "Layout: one section at desktop width, edge to edge, its real content (headings, cards, columns) inside the section's own background reaching all four edges; nothing above or below it.",
+          MOCKUP_TEXT,
+          ...brandLine(siteName),
         ],
         lines,
         request,
@@ -353,7 +397,7 @@ export function webJobs(request: WebRequest, site: GuiStyle | null): WebJob[] {
         siteName,
         "1:1",
         "favicon",
-        { kind: "favicon", fill: firstPalette(site) },
+        { kind: "favicon", fill: faviconFill(site) },
       );
     case "og":
       return single(
@@ -373,7 +417,7 @@ export function webJobs(request: WebRequest, site: GuiStyle | null): WebJob[] {
       return single(
         [
           `Deliverable: the first-screen picture of a website homepage: ${what}.`,
-          "Composition: the main scene toward one side and the lower part of the frame, with a calm, uncluttered, lower-contrast area across the rest, where the headline and the call-to-action button go on top; nothing important cropped at the edges.",
+          "Composition: one continuous photograph (or an illustration when the site's style is illustrative) filling the whole frame edge to edge; no interface elements, no controls, no panels, no boxes, no text; the left 40% of the frame is calm and even (a soft wall, sky or table surface) so a headline can sit there later.",
           NO_TEXT,
         ],
         lines,
@@ -387,7 +431,7 @@ export function webJobs(request: WebRequest, site: GuiStyle | null): WebJob[] {
       return single(
         [
           `Deliverable: a cover picture for an article or blog post on the site: ${what}.`,
-          "Composition: one clear concept or scene, the subject centred, working both wide and cropped to a square preview; a simple background so a headline stays readable on top.",
+          "Composition: the request is the topic of an article; draw one clear picture about it; do not write the topic or any title; no text unless the request quotes it.",
           QUOTED_TEXT,
         ],
         lines,
@@ -431,7 +475,7 @@ export function webJobs(request: WebRequest, site: GuiStyle | null): WebJob[] {
       return single(
         [
           `Deliverable: a background picture for a website section: ${what}.`,
-          "Composition: abstract and low-contrast, spread evenly with no focal point, quiet enough that white text and cards on top stay readable; a little darker or flatter toward the middle, where the content sits.",
+          "Composition: an even, low-contrast tone built from the site's background colour with a soft texture or gradient; no central blob, no stain, no focal object; readable under the site's text colour.",
           NO_TEXT,
         ],
         lines,
@@ -445,7 +489,7 @@ export function webJobs(request: WebRequest, site: GuiStyle | null): WebJob[] {
       return single(
         [
           `Deliverable: a seamless tileable background pattern for a website: ${what}.`,
-          "Seen straight from above, flat and evenly lit: no shadows, no highlights, no vignette, no light falloff; the motif spread evenly over the whole square with no single landmark that would show where the tile repeats; the left edge continues into the right and the top into the bottom.",
+          "Composition: small motifs fully inside the tile, none touching or crossing the tile edges, a plain margin of the background around the edges; seen straight from above, flat and evenly lit: no shadows, no highlights, no vignette, no light falloff; the left edge continues into the right and the top into the bottom.",
           NO_TEXT,
         ],
         lines,
@@ -467,27 +511,37 @@ export type WebManifest = {
   section: "web";
   mode: WebMode;
   site: string;
-  files: Array<{ file: string; width: number; height: number; place: string; html?: string }>;
+  files: Array<{ file: string; width: number; height: number; place: string | null; html?: string; note?: string }>;
 };
 
-/** Where each file goes on a site, and the tag that shows it. */
-const PLACES: Record<string, { place: string; html?: string }> = {
-  "mockup.png": { place: "public/mockup.png" },
-  "page.png": { place: "public/page.png" },
-  "mobile.png": { place: "public/mobile.png" },
-  "block.png": { place: "public/block.png" },
-  "logo.png": { place: "public/logo.png", html: `<img src="/logo.png">` },
-  "favicon.ico": { place: "public/favicon.ico", html: `<link rel="icon" href="/favicon.ico" sizes="32x32">` },
-  "favicon-16.png": { place: "public/favicon-16.png", html: `<link rel="icon" href="/favicon-16.png" sizes="16x16" type="image/png">` },
-  "favicon-32.png": { place: "public/favicon-32.png", html: `<link rel="icon" href="/favicon-32.png" sizes="32x32" type="image/png">` },
+const CONCEPT_NOTE = "design reference, not a site asset";
+const imgTag = (file: WebFile): string => `<img src="/${file.file}" alt="" width="${file.width}" height="${file.height}">`;
+
+/**
+ * Where each file goes on a site, and the tag that shows it. Concept mockups are design references: `place` is
+ * null — they are not copied into a site. `html` is built per file so `<img>` tags carry the real size.
+ */
+const PLACES: Record<string, { place: string | null; html?: (file: WebFile) => string; note?: string }> = {
+  "mockup.png": { place: null, note: CONCEPT_NOTE },
+  "page.png": { place: null, note: CONCEPT_NOTE },
+  "mobile.png": { place: null, note: CONCEPT_NOTE },
+  "block.png": { place: null, note: CONCEPT_NOTE },
+  "logo.png": { place: "public/logo.png", html: imgTag },
+  "favicon.ico": { place: "public/favicon.ico", html: () => `<link rel="icon" href="/favicon.ico" sizes="32x32">` },
+  "favicon-16.png": { place: "public/favicon-16.png", html: () => `<link rel="icon" href="/favicon-16.png" sizes="16x16" type="image/png">` },
+  "favicon-32.png": { place: "public/favicon-32.png", html: () => `<link rel="icon" href="/favicon-32.png" sizes="32x32" type="image/png">` },
   "icon-192.png": { place: "public/icon-192.png" },
   "icon-512.png": { place: "public/icon-512.png" },
-  "apple-touch-icon.png": { place: "public/apple-touch-icon.png", html: `<link rel="apple-touch-icon" href="/apple-touch-icon.png">` },
+  "apple-touch-icon.png": { place: "public/apple-touch-icon.png", html: () => `<link rel="apple-touch-icon" href="/apple-touch-icon.png">` },
   "icon-maskable-512.png": { place: "public/icon-maskable-512.png" },
-  "site.webmanifest": { place: "public/site.webmanifest", html: `<link rel="manifest" href="/site.webmanifest">` },
-  "og.png": { place: "public/og.png", html: `<meta property="og:image" content="/og.png">` },
-  "hero.png": { place: "public/hero.png", html: `<img src="/hero.png">` },
-  "cover.png": { place: "public/cover.png", html: `<img src="/cover.png">` },
+  "site.webmanifest": { place: "public/site.webmanifest", html: () => `<link rel="manifest" href="/site.webmanifest">` },
+  "og.png": {
+    place: "public/og.png",
+    html: () => `<meta property="og:image" content="https://YOUR-DOMAIN/og.png">`,
+    note: "og:image needs an absolute URL: replace YOUR-DOMAIN with the site's domain",
+  },
+  "hero.png": { place: "public/hero.png", html: imgTag },
+  "cover.png": { place: "public/cover.png", html: imgTag },
   "background.png": { place: "public/background.png" },
   "pattern.png": { place: "public/pattern.png" },
 };
@@ -500,8 +554,16 @@ export function webManifest(job: Pick<WebJob, "mode" | "site">, files: readonly 
     site: job.site,
     files: files.map((file) => {
       const known = PLACES[file.file];
-      const place = known ?? (file.file.startsWith("parts/") ? { place: `public/img/${file.file.slice("parts/".length)}` } : { place: `public/${file.file}` });
-      return { file: file.file, width: file.width, height: file.height, ...place };
+      const entry: { place: string | null; html?: (file: WebFile) => string; note?: string } =
+        known ?? (file.file.startsWith("parts/") ? { place: `public/img/${file.file.slice("parts/".length)}` } : { place: `public/${file.file}` });
+      return {
+        file: file.file,
+        width: file.width,
+        height: file.height,
+        place: entry.place,
+        ...(entry.html ? { html: entry.html(file) } : {}),
+        ...(entry.note ? { note: entry.note } : {}),
+      };
     }),
   };
 }

@@ -12,13 +12,26 @@ export type FaviconFile =
   | { file: string; bytes: Buffer }
   | { file: string; manifest: Record<string, unknown> };
 
+/** A hex colour for the webmanifest ("#0A141E"); invalid input falls back to white, like the raster fill. */
+function hex(rgb: readonly [number, number, number]): string {
+  return `#${rgb.map((channel) => channel.toString(16).padStart(2, "0")).join("")}`.toUpperCase();
+}
+
 /**
- * The favicon set from the mark cut off the green key: transparent favicon-16/32 and icon-192/512 (fitSquare, margin
- * 0.06), favicon.ico with 16/32/48 PNG entries, opaque apple-touch-icon 180 (mark at 80% of the side) and
- * icon-maskable-512 (the mark inside the central 80%, a 409 px box), both filled with the site's first palette
- * colour, and site.webmanifest pointing at the 192, 512 and maskable icons.
+ * The favicon set from the mark cut off the green key (already keyed and trimmed by the caller): transparent
+ * favicon-16/32 and icon-192/512 (fitSquare, margin 0.06), favicon.ico with 16/32/48 PNG entries, opaque
+ * apple-touch-icon 180 (mark at 80% of the side) and icon-maskable-512 (the mark inside the central 80%, a 409 px
+ * box), both filled with `fill` — the palette's button colour — and site.webmanifest (the site's display name, a
+ * short_name of at most 12 characters, theme_color = fill, background_color = the palette background) pointing at
+ * the 192, 512 and maskable icons.
  */
-export async function faviconSet(mark: Rgba, fill: readonly [number, number, number], siteName = ""): Promise<FaviconFile[]> {
+export async function faviconSet(
+  mark: Rgba,
+  fill: readonly [number, number, number],
+  siteName = "",
+  background: readonly [number, number, number] = [255, 255, 255],
+): Promise<FaviconFile[]> {
+  const fillRgb = fill;
   const square = (size: number): Rgba => fitSquare(mark, size, 0.06);
   const ico = encodeIco(
     await Promise.all([16, 32, 48].map(async (size) => ({ size, png: await encodePng(square(size)) }))),
@@ -29,12 +42,15 @@ export async function faviconSet(mark: Rgba, fill: readonly [number, number, num
     { file: "icon-192.png", image: square(192) },
     { file: "icon-512.png", image: square(512) },
     { file: "favicon.ico", bytes: ico },
-    { file: "apple-touch-icon.png", image: mountOnColor(mark, 180, 144, fill) },
-    { file: "icon-maskable-512.png", image: mountOnColor(mark, 512, 409, fill) },
+    { file: "apple-touch-icon.png", image: mountOnColor(mark, 180, 144, fillRgb) },
+    { file: "icon-maskable-512.png", image: mountOnColor(mark, 512, 409, fillRgb) },
     {
       file: "site.webmanifest",
       manifest: {
         name: siteName,
+        short_name: siteName.slice(0, 12),
+        theme_color: hex(fillRgb),
+        background_color: hex(background),
         icons: [
           { src: "/icon-192.png", sizes: "192x192", type: "image/png" },
           { src: "/icon-512.png", sizes: "512x512", type: "image/png" },
