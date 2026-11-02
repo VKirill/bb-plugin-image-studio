@@ -2,7 +2,7 @@
 title: Image Studio — Web section (site graphics through Muse)
 date: 2026-11-01
 source: owner request in thread thr_7qsw7g5jw5 («сделаем новый раздел… через мьюз… пока без svg»)
-status: dispatched
+status: implemented 2026-11-02 (accepted Lane Pilot tasks shipped through 0.10.3)
 ---
 
 # Plan: Web section
@@ -48,6 +48,20 @@ The palette, theme, notes and approved references of the project go into every p
 After ship: PM runs real Muse generations of every mode on a test site project, looks at them, and dispatches a
 prompt-tuning task (`web-prompts`) with the findings.
 
+## Status (2026-11-02)
+| task | version | status | run |
+|---|---|---|---|
+| web-core | 0.10.0 | done | lprun_f4d6543242eb4137bb61c05032ec28f0 (task web-core.2) |
+| web-skill | 0.10.0 (no own bump) | done | lprun_f4d6543242eb4137bb61c05032ec28f0 (task web-skill-docs) |
+| web-panel | 0.10.1 | done | lprun_f4d6543242eb4137bb61c05032ec28f0 (task web-panel-tab.2) |
+| gui-tab removal + build fix | 0.10.2 | done | lprun_f4d6543242eb4137bb61c05032ec28f0 (task web-bundle-gui-tab) |
+| web-prompts | 0.10.3 | done | lprun_f4d6543242eb4137bb61c05032ec28f0 (task web-prompts-2) |
+
+The standalone GUI tab is removed from the panel (owner request in thr_7qsw7g5jw5): game GUI lives inside its Roblox
+game, site interfaces go to this web section; `image_studio_gui` and `bb image-studio gui` still write into a game
+folder's GUI project. Later items (SVG, reading the style from the site itself, device mockups with a real screenshot,
+ad banner sizes) stay parked.
+
 ## Later (not now)
 - SVG (vtracer / Recraft) for logo and icons.
 - Reading the style from the site itself (DESIGN.md, tailwind config, CSS variables).
@@ -90,3 +104,7 @@ Tab «Сайты»/«Websites» like the Roblox tab (`app.tsx` + new `web-panel.
 
 ### web-skill
 `skills/image-studio/references/web.md`: every mode, its files and sizes, manifest.json, project style commands, CLI, no SVG yet. `SKILL.md`: route website graphics to `image_studio_web` (one short line; front-matter description length unchanged). `PLUGIN_OVERVIEW.md`: one line. Check: `tests/skill-frontmatter.test.ts`.
+
+## History
+### 2026-11-02
+- Accepted Lane Pilot run `lprun_f4d6543242eb4137bb61c05032ec28f0` shipped web-core.2, web-skill-docs, web-panel-tab.2, web-bundle-gui-tab and web-prompts-2 through 0.10.3. The first tries (web-core, web-panel, web-prompts, gui-tab-removal and its rerun) never reached a writer; the accepted task ids carry the `.2` suffix. Prompt tuning follows the real Muse acceptance run and the mockup research (picture modes take colours only, layout modes are edge-to-edge screenshots with the site's own name, ideas differ by layout type); the favicon green-key bug and fal transient failures are fixed. Verified: `tsc --noEmit` clean, 332 tests pass at 0.10.3.
