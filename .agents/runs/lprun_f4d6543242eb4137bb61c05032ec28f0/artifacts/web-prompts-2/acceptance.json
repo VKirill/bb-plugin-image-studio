@@ -1,0 +1,15 @@
+{
+  "schema_version": 2,
+  "task_id": "web-prompts-2",
+  "task_sha256": "0cea1341b73449aa0805fe14589cb801efe14ceb8721f4e8329c883f52a5ebfd",
+  "attempt": 2,
+  "provider_exit": 0,
+  "report": "complete",
+  "report_sha256": "24e314ca217307269efe826307253759adb5331185980c7f2865e471a985f69c",
+  "owns_check": "passed",
+  "verification": "passed",
+  "review": "passed",
+  "accepted": true,
+  "accepted_at": "2026-11-02T22:19:21.952Z",
+  "model": "swe-2-high"
+}

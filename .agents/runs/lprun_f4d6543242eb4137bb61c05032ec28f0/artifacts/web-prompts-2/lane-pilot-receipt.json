@@ -1,0 +1,185 @@
+{
+  "schemaVersion": 1,
+  "status": "accepted",
+  "lanePilotRunId": "lprun_f4d6543242eb4137bb61c05032ec28f0",
+  "lanePilotTaskId": "web-prompts-2",
+  "attemptId": "lpattempt_7c155637fd3c4c06b1bff80eb7000c02",
+  "pmThreadId": "thr_h9t9t78xrx",
+  "writerThreadId": "thr_z7iz375nsp",
+  "ownsPaths": [
+    "src/web.ts",
+    "src/web-favicon.ts",
+    "server.ts",
+    "src/providers.ts",
+    "src/queue.ts",
+    "src/generation.ts",
+    "tests/web-prompts.test.ts",
+    "tests/web.test.ts",
+    "tests/web-panel.test.ts",
+    "tests/gui-tab-removal.test.ts",
+    "skills/image-studio/references/web.md",
+    "package.json"
+  ],
+  "readFirst": [
+    {
+      "path": ".agents/plans/2026-11-01-web-section.md",
+      "windows": []
+    },
+    {
+      "path": "src/web.ts",
+      "windows": []
+    },
+    {
+      "path": "src/web-favicon.ts",
+      "windows": []
+    },
+    {
+      "path": "server.ts",
+      "windows": []
+    },
+    {
+      "path": "src/providers.ts",
+      "windows": []
+    },
+    {
+      "path": "src/gui.ts",
+      "windows": []
+    },
+    {
+      "path": "skills/image-studio/references/muse.md",
+      "windows": []
+    },
+    {
+      "path": "skills/image-studio/references/web.md",
+      "windows": []
+    },
+    {
+      "path": "package.json",
+      "windows": []
+    }
+  ],
+  "output": "Fixed in place. The flagged `assert.deepEqual(favicon.output, { kind: \"favicon\", fill: \"#FFFFFF\" })` line is restored verbatim — `WebOutput` keeps its 0.10.2 shape `{ kind: \"favicon\", fill }`, and the manifest `background_color` now reaches `faviconSet` through its optional 4th arg (the server looks up the site record by `gui.styleId` and passes `hexRgb(faviconBackground(site))`). `faviconSet` keeps its old `(mark, fillRgb, siteName)` signature too, so the original call line in `tests/web.test.ts` is intact, as are the `firstPalette` export/assertions and the `name` deepEqual. The only test lines still replaced are the prompt-text/html pins the contract itself rewrites (sanctioned by plan item 9).\n\nVerification: `npx tsc --noEmit` clean, `node --test --experimental-strip-types tests/web-prompts.test.ts` 9/9, full suite 332/332, `bb plugin build` exits 0, all contract greps pass.\n\nChanged paths:\n\n- `src/web.ts` — mode-kind style lines (layout: theme+presets+labelled palette; picture: theme+`Site colours` plain hex), one `a blend of A and B; where they disagree, follow the site theme` sentence for 2+ presets, new mockup block (`EDGE_TO_EDGE`, `MOCKUP_TEXT`, `brandLine` with the site's display name, mobile `9:41` status bar), `IDEA_LAYOUTS` for the four idea takes, rewritten hero/cover/background/pattern prompts, `gridRule` without \"grid\", `paletteKey` (`accent`→`highlight`), `PALETTE_LABELS.accent`, `faviconFill` (button→highlight→white) and `faviconBackground` (background→white) next to kept `firstPalette`, manifest `place: null`+note for concepts, og `https://YOUR-DOMAIN/og.png` tag, `<img>` with `alt=\"\"` and real size.\n- `src/web-favicon.ts` — `faviconSet(mark, fillRgb, siteName, backgroundRgb)`; `site.webmanifest` gains `short_name` (≤12 chars), `theme_color`, `background_color`.\n- `server.ts` — favicon export does `trimAlpha(keyGreen(image))` and resolves the palette background via `readGuiStyles`/`faviconBackground`; `falGenerate` wrapped in `withFalRetry`; `--palette` accepts `accent` (named in the error).\n- `src/providers.ts` — `withFalRetry` (default delays `[3000, 8000]`, injectable `sleep`, transient = 503 / `downstream_service_unavailable` / `finished without an image URL`).\n- `tests/web-prompts.test.ts` — new suite; `tests/web.test.ts`, `tests/web-panel.test.ts` updated only where the contract pins changed.\n- `skills/image-studio/references/web.md`, `package.json` (0.10.3).\n\n```plan-fact\n[{\"item\":1,\"status\":\"done\",\"evidence\":[\"tests/web-prompts.test.ts:68-96\",\"server.ts:1988-1990\",\"src/web-favicon.ts:44-46\",\"src/web.ts:191-198\",\"cmd:node --test --experimental-strip-types tests/web-prompts.test.ts\"]},{\"item\":2,\"status\":\"done\",\"evidence\":[\"tests/web-prompts.test.ts:98-109\",\"src/web-favicon.ts:47-55\",\"cmd:node --test --experimental-strip-types tests/web-prompts.test.ts\"]},{\"item\":3,\"status\":\"done\",\"evidence\":[\"tests/web-prompts.test.ts:111-122\",\"src/web.ts:217-231\",\"src/web.ts:416-502\",\"cmd:node --test --experimental-strip-types tests/web-prompts.test.ts\"]},{\"item\":4,\"status\":\"done\",\"evidence\":[\"tests/web-prompts.test.ts:124-139\",\"src/web.ts:147-151\",\"src/web.ts:267-274\",\"src/web.ts:301-368\",\"cmd:node --test --experimental-strip-types tests/web-prompts.test.ts\"]},{\"item\":5,\"status\":\"done\",\"evidence\":[\"tests/web-prompts.test.ts:141-203\",\"src/web.ts:215-222\",\"src/web.ts:180-183\",\"src/providers.ts:282-308\",\"src/web.ts:533-550\",\"cmd:node --test --experimental-strip-types tests/web-prompts.test.ts\"]},{\"item\":6,\"status\":\"done\",\"evidence\":[\"skills/image-studio/references/web.md:44-49\",\"cmd:grep -q 'accent' skills/image-studio/references/web.md\"]},{\"item\":7,\"status\":\"done\",\"evidence\":[\"cmd:bb plugin build\",\"src/web-favicon.ts:1-2\",\"tests/gui-tab-removal.test.ts:7-16\"]},{\"item\":8,\"status\":\"done\",\"evidence\":[\"package.json:3\",\"cmd:grep -q '\\\"version\\\": \\\"0.10.3\\\"' package.json\"]}]\n```\n\nAPPROACH: Kept every old assertion that still holds by not changing the shapes they pin — `WebOutput.favicon` stays `{ kind, fill }` and `faviconSet` keeps its rgb-array signature; new data (manifest `background_color`, `theme_color`) flows through additive optional parameters and a server-side style lookup instead of contract-visible shape changes. Only prompt-text/html/version pins that the task contract itself redefines were updated.\n\nLESSON: The acceptance gate treats removing an assertion that could still hold as destroying coverage — when new data must travel, prefer additive fields/optional params and alternate lookup paths over reshaping what existing tests `deepEqual`; update only the assertions the contract itself invalidates.",
+  "verification": [
+    {
+      "command": "node --test --experimental-strip-types tests/web-prompts.test.ts",
+      "exitCode": 0,
+      "stdout": "✔ favicon set from a green-key picture: transparent corners, maskable filled with the palette button colour (62.257959ms)\r\n✔ site.webmanifest carries the site's display name, a short_name of at most 12 chars and theme_color (11.539791ms)\r\n✔ picture prompts: no interface words, each with its rule line (0.565209ms)\r\n✔ layout prompts: edge to edge and the exact site name as the brand (0.105208ms)\r\n✔ ideas: four prompts name four different layout types (0.18325ms)\r\n✔ two style presets become one blend sentence (0.120667ms)\r\n✔ the accent palette key is an alias of highlight (0.071417ms)\r\n✔ withFalRetry retries exactly twice on transient errors, never on others (0.439833ms)\r\n✔ concept manifests mark the files as design references with place null (0.109542ms)\r\nℹ tests 9\r\nℹ suites 0\r\nℹ pass 9\r\nℹ fail 0\r\nℹ cancelled 0\r\nℹ skipped 0\r\nℹ todo 0\r\nℹ duration_ms 235.95575\r\n",
+      "stderr": "",
+      "sandboxBackend": "macos-seatbelt",
+      "policySha256": "08ae83ae40522dc056b4fc339cac44334c07af647afaa39ec21e80e00df1ea9c",
+      "workspacePath": "/Users/vechkasov/.lane-pilot/worktrees/lpattempt_314717a5176f4a319c824516492f9796/bb-plugin-image-studio",
+      "revision": {
+        "head": "684b7acb2e97028d2f57672099a5ef732e7ea60a",
+        "dirty": 9
+      }
+    },
+    {
+      "command": "npx tsc --noEmit && bb plugin build && grep -q 'withFalRetry' src/providers.ts && grep -q 'accent' skills/image-studio/references/web.md && grep -q '\"version\": \"0.10.3\"' package.json",
+      "exitCode": 0,
+      "stdout": "\\\u001b[1G\u001b[0K\u001b[1mnpm\u001b[22m \u001b[96mnotice\u001b[39m\r\n\u001b[1mnpm\u001b[22m \u001b[96mnotice\u001b[39m New \u001b[31mmajor\u001b[39m version of npm available! \u001b[31m11.16.0\u001b[39m -> \u001b[34m12.2.1\u001b[39m\r\n\u001b[1mnpm\u001b[22m \u001b[96mnotice\u001b[39m Changelog: \u001b[34mhttps://github.com/npm/cli/releases/tag/v12.2.1\u001b[39m\r\n\u001b[1mnpm\u001b[22m \u001b[96mnotice\u001b[39m To update run: \u001b[4mnpm install -g npm@12.2.1\u001b[24m\r\n\u001b[1mnpm\u001b[22m \u001b[96mnotice\u001b[39m\r\n\\\u001b[1G\u001b[0KThis plugin pins @get-bb/plugin-sdk 0.4.87; this bb's SDK is 0.6.104 — `bb plugin types` updates the pin.\r\n(node:44740) [DEP0205] DeprecationWarning: `module.register()` is deprecated. Use `module.registerHooks()` instead.\r\n(Use `node --trace-deprecation ...` to show where the warning was created)\r\ndist/server.js\r\ndist/server.js.map\r\ndist/server.meta.json\r\ndist/app.js\r\ndist/app.css\r\ndist/app.meta.json\r\ndist/host.js\r\ndist/host.js.map\r\ndist/host.meta.json\r\n",
+      "stderr": "",
+      "sandboxBackend": "macos-seatbelt",
+      "policySha256": "68114a63e1e1add1a2b103c14f640a5c7fa6a79667e672d39e1dd5c740d1d898",
+      "workspacePath": "/Users/vechkasov/.lane-pilot/worktrees/lpattempt_314717a5176f4a319c824516492f9796/bb-plugin-image-studio",
+      "revision": {
+        "head": "684b7acb2e97028d2f57672099a5ef732e7ea60a",
+        "dirty": 9
+      }
+    }
+  ],
+  "runV2": {
+    "schemaVersion": 1,
+    "pools": {
+      "provider": 15,
+      "verification": 2
+    },
+    "score": 5,
+    "risk": "medium",
+    "sourceRisk": "medium",
+    "scoreAdapter": "task-risk-v1"
+  },
+  "reasoning": [
+    {
+      "planSha256": "2bf9a505dd29bdf222f6fcec59b23698d6cb4d7ecbd88cf87023a22f517a8455",
+      "sentPlanSha256": null,
+      "sourceLength": 6053,
+      "sentLength": null,
+      "jevStatus": "disabled",
+      "jevDecision": null,
+      "requestedReasoningLevel": "high",
+      "effectiveReasoningLevel": "high",
+      "fallbackReason": "jev_disabled;jev_disabled_by_project_setting",
+      "retryEffort": {
+        "enabled": false,
+        "retryIndex": 0,
+        "before": "high",
+        "after": "high",
+        "changed": false
+      },
+      "providerId": "devin",
+      "model": "swe-2-high",
+      "serviceTier": null,
+      "requestedServiceTier": "default",
+      "runId": "lprun_f4d6543242eb4137bb61c05032ec28f0",
+      "attemptId": "lpattempt_7c155637fd3c4c06b1bff80eb7000c02",
+      "threadId": "thr_z7iz375nsp",
+      "effortMode": "manual",
+      "selectionSource": {
+        "providerId": "devin",
+        "model": "swe-2-high",
+        "reasoningLevel": "high",
+        "serviceTier": null,
+        "reasoningLevelSource": "explicit"
+      },
+      "dispatchContext": {
+        "memoryText": "",
+        "memoryPicked": [],
+        "rulesText": "- In a folder without git (live-folder mode), never put a task's expected_outputs or owns_paths under .bb/ (chat folders): the live snapshot skips .bb, so a file written there is never counted as produced and the task blocks as missing expected_outputs. Put task deliverables in a project folder such as docs/ or reports/.",
+        "rulesPicked": {
+          "total": 10,
+          "picked": [
+            "rule_df3e34f2aef5a993"
+          ]
+        },
+        "executionPacket": "Read these before editing; they are the context for this task:\n- .agents/plans/2026-11-01-web-section.md L1-L93 (sha256 aace1479)\n- src/web.ts L1-L508 (sha256 c9dba8d7)",
+        "executionPacketSha256": "7fff82de8150c1ee81d3ea8f25b4b9510dffc6ef2fbc286ab4dc4be6b0cf4ec3",
+        "pmReadContext": "{\"summary\":\"The task 'web-prompts-2' focuses on tuning prompts and output processing for the newly added Web section in bb-plugin-image-studio, addressing findings from real Muse Image acceptance runs and research. The Web section acts as a fifth asset pipeline alongside GUI, Characters, Roblox, and Model, creating website graphics through muse-image without SVG support. It provides 13 modes grouped into concepts (ideas, page, mobile, block), brand (logo, favicon, og), and graphics (hero, cover, illustrations, icons, background, pattern). Output processing manages center-cropping, bounded scaling, transparent green-key sheet splitting, seamless pattern tiling, and complete favicon generation with manifest.json metadata mapping each file to site placements and HTML tags.\\n\\nThe task requires refining prompt builders to enforce a strict separation between UI layouts and photographic/visual assets. Graphic and photographic modes (hero, cover, background, pattern) must be completely stripped of UI instructions (specifically excluding terms such as 'button', 'grid', and 'sans-serif') while incorporating dedicated calm-area, no-text, even-tone, and tile-margin specifications. Conversely, UI mockup modes (page, mobile, block) must explicitly reference 'edge' and inject the exact site name as the brand, while the 'ideas' mode must produce four distinct layout structures rather than superficial variations. Additionally, selecting two style presets must generate a single unified 'blend' sentence rather than concatenating preset strings.\\n\\nIn output generation, the task addresses green-key artifacts in the favicon pipeline (src/web-favicon.ts). Transparent favicon deliverables (favicon-32.png and icon-192.png) cut from green-keyed marks must ensure corner pixels have alpha 0, while icon-maskable-512.png must have its corner color match the palette button color. The generated site.webmanifest must also include the site display name, a short_name of at most 12 characters, and theme_color. Deliverables from concept modes must have their manifest placement set to null. On the provider layer, src/providers.ts must export withFalRetry(run, { delaysMs?, sleep? }), retrying exactly twice on downstream_service_unavailable errors and failing immediately on other errors. The palette configuration must accept 'accent' as an alias for 'highlight'. Finally, documentation in skills/image-studio/references/web.md must describe the 'accent' alias, package.json must be bumped to version 0.10.3, and all verification commands and existing test suites must pass.\",\"keyFacts\":[\"[.agents/plans/2026-11-01-web-section.md] The Web section is the fifth Image Studio section alongside GUI, Characters, Roblox, and Model, generating website graphics through muse-image without SVG support.\",\"[.agents/plans/2026-11-01-web-section.md] Web modes are organized into three categories: concepts (ideas, page, mobile, block), brand (logo, favicon, og), and graphics (hero, cover, illustrations, icons, background, pattern).\",\"[.agents/plans/2026-11-01-web-section.md] Favicon deliverables include transparent icons (favicon-16/32, icon-192/512), favicon.ico (16/32/48 entries via encodeIco), opaque apple-touch-icon.png (180px) and icon-maskable-512.png filled with the first palette color or white, and site.webmanifest.\",\"[.agents/plans/2026-11-01-web-section.md] Defines 9 style presets: minimal, corporate, playful, editorial, brutalist, dark-tech, luxury, flat-illustration, and clay-3d.\",\"[.agents/plans/2026-11-01-web-section.md] Each job directory receives a manifest.json specifying file dimensions, site placement paths (e.g., public/favicon.ico), and corresponding HTML snippet tags.\",\"[.agents/plans/2026-11-01-web-section.md] The plan explicitly schedules a follow-up prompt-tuning task (web-prompts) after evaluating real Muse generations across every mode on a test site project.\",\"[src/web.ts] Defines WEB_MODEL = \\\"muse-image\\\" and enumerates all 13 modes in WEB_MODES, mapped to concepts, brand, or graphics in MODE_CATEGORY.\",\"[src/web.ts] Designates LIST_MODES as [\\\"illustrations\\\", \\\"icons\\\"], with MAX_LIST capping illustrations at 6 and icons at 16 per sheet.\",\"[src/web.ts] Designates 10 single-request modes in VARIANT_MODES with MAX_VARIANTS = 4, whereas ideas independently generates four takes.\",\"[src/web.ts] Contains descriptive style strings for all 9 web presets in WEB_PRESETS, specifying grid, typography, colors, and ornamentation rules.\",\"[src/web.ts] Defines WebOutput union supporting kinds: cover (exact crop), limit (capped longest side), parts (cut transparent squares), favicon (full set), and pattern (seamless tile).\",\"[src/web.ts] Defines standard prompt constraints: GREEN, GREEN_ITEMS, NO_TEXT, QUOTED_TEXT, UI_TEXT, and SCREEN (orthographic, flat, filling frame edge-to-edge).\",\"[src/web.ts] PALETTE_LABELS maps palette keys as { background: \\\"background\\\", button: \\\"buttons\\\", outline: \\\"borders\\\", highlight: \\\"accents\\\", text: \\\"text\\\" }, currently lacking an 'accent' alias.\",\"[src/web.ts] firstPalette retrieves the first non-empty uppercase palette value from site.palette, falling back to \\\"#FFFFFF\\\" when empty.\",\"[src/web.ts] hexRgb parses 6-digit hex codes into [r, g, b] byte arrays, falling back to white [255, 255, 255] on invalid or missing input.\",\"[src/web.ts] siteLines formats prompt context lines including theme, semicolon-separated style presets, palette mapping via PALETTE_LABELS, notes, and numbered image references (Image 1...N).\",\"[src/web.ts] In webJobs, ideas generates 4 jobs: if style is fixed it uses IDEA_TAKES; otherwise, it uses the first 4 presets from WEB_PRESET_IDS.\",\"[src/web.ts] webJobs for page, mobile, and block enforce SCREEN (\\\"filling the whole frame edge to edge\\\") and UI_TEXT, with aspect ratios 9:16 (page/mobile) and 16:9 (block).\",\"[src/web.ts] Excerpt truncates at line 508 during logo prompt construction, omitting downstream modes (favicon, og, hero, cover, illustrations, icons, background, pattern) and webManifest.\",\"[Task Contract] Invariants mandate keeping muse-image for all web pictures, preserving 0.10.2 output sizes and filenames, leaving GUI/Roblox/Characters/Model sections unchanged, and bumping package.json to 0.10.3.\",\"[Task Contract] Requires src/providers.ts to export withFalRetry(run, { delaysMs?, sleep? }), retrying exactly twice on downstream_service_unavailable and not on other errors.\",\"[Task Contract] Requires tests/web-prompts.test.ts to verify favicon-32.png and icon-192.png have alpha 0 in corners, and icon-maskable-512.png corner matches palette button colour.\",\"[Task Contract] Requires site.webmanifest to contain the site display name, a short_name of at most 12 characters, and theme_color.\",\"[Task Contract] Requires hero, cover, background, and pattern prompts to omit 'button', 'grid', and 'sans-serif' and include calm-area, no-text, even-tone, and tile-margin lines.\",\"[Task Contract] Requires page, mobile, and block prompts to include 'edge' and the exact site name as brand, ideas prompts to name four distinct layout types, and concept manifests to have place: null.\",\"[Task Contract] Requires two presets to produce one 'blend' sentence and the palette to accept 'accent' as an alias for highlight.\"],\"openQuestions\":[\"The implementation of src/web-favicon.ts is omitted from excerpts; how faviconSet currently detects green-key boundaries, performs trimming, and paints corner backgrounds for apple-touch-icon.png and icon-maskable-512.png is not visible.\",\"The remainder of src/web.ts (lines 509+) is truncated; existing prompt templates for logo, favicon, og, hero, cover, illustrations, icons, background, pattern, and the webManifest function are not visible.\",\"The implementation of src/providers.ts is omitted from excerpts; how fal API calls are dispatched, how downstream_service_unavailable errors are raised, and what default retry delays are expected are not visible.\",\"The definition of GuiStyle in src/gui.ts is omitted from excerpts; whether site.palette is typed with strict keys or allows dynamic keys determines whether 'accent' requires type updates or just a runtime mapping alias.\",\"The exact sentence structure and template required when blending two presets into a single 'blend' sentence are not specified in the excerpts.\",\"The specific names and prompt phrases for the four distinct layout types required in the 'ideas' mode are not defined in the excerpts.\",\"The exact canonical phrasing for the calm-area, no-text, even-tone, and tile-margin lines required in hero, cover, background, and pattern prompts is not provided in the excerpts.\",\"The specific truncation or derivation rule for converting a long site display name into a short_name of at most 12 characters in site.webmanifest is not detailed in the excerpts.\",\"Which palette field (e.g., button, background, highlight, or firstPalette) supplies theme_color in site.webmanifest when multiple colors are defined is not specified in the excerpts.\",\"The fallback brand name behavior in page, mobile, and block prompts when site.name or site.theme is blank or undefined is not settled by the excerpts.\",\"The implementation of server.ts is omitted from excerpts; how the server registers manifest handling or passes site context to concept jobs where place must be null is not visible.\",\"The contents of skills/image-studio/references/web.md are omitted from excerpts; the exact section where the 'accent' palette key should be documented cannot be verified from the packet.\",\"The contents of package.json are omitted from excerpts; the current version string, dependency declarations, and script definitions cannot be inspected.\"]}",
+        "agent": "Lane Pilot writer",
+        "promptChars": 14136,
+        "helperMode": "roles",
+        "helperRequired": false,
+        "skillPick": {
+          "enabled": true,
+          "skills": [
+            "image-studio"
+          ],
+          "picked": [],
+          "craft": [],
+          "projectFolder": [
+            "image-studio"
+          ],
+          "hints": [],
+          "sources": {
+            "image-studio": "/Users/vechkasov/.bb/plugins/cache/git/github.com/VKirill/bb-plugin-image-studio/684b7acb2e97028d2f57672099a5ef732e7ea60a/skills/image-studio"
+          },
+          "reason": null,
+          "materialized": []
+        },
+        "writerKey": "devin/swe-2-high",
+        "harness": {
+          "id": "hrn_5200154b1414398a",
+          "arm": null,
+          "alwaysOnChars": 0,
+          "skills": [],
+          "checks": [],
+          "materialize": null
+        }
+      }
+    }
+  ],
+  "emergencyFallback": null,
+  "warnings": [
+    "the writer changed tests that existed before the attempt (reference tests): tests/web-panel.test.ts, tests/web.test.ts — the code critic reviews them in gate mode"
+  ],
+  "turns": 2
+}
