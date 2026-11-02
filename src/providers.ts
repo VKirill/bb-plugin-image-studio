@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { parseRetryAfter, retryWhile, type RetryOptions } from "./queue.ts";
 import { falHasPromptExpansion, falSafetyFields, kieHasNsfwChecker } from "./safety.ts";
 
@@ -147,7 +148,8 @@ async function kieUploadReference(
 ): Promise<string> {
   const headers = { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" };
   const uploadPath = "image-studio";
-  const fileName = `ref-${index}.png`;
+  // kie hosts the file under uploadPath/fileName, so a bare index name collides across concurrent jobs.
+  const fileName = `ref-${index}-${randomUUID()}.png`;
   const isData = value.startsWith("data:");
   const url = isData
     ? "https://kieai.redpandaai.co/api/file-base64-upload"

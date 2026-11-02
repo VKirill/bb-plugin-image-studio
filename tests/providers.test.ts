@@ -230,6 +230,35 @@ test("kie createTask: still rate limited after the retries gives a readable erro
   assert.equal(seen.length, 3);
 });
 
+test("concurrent kie jobs upload references under unique names", async () => {
+  const uploads: Array<{ uploadPath?: string; fileName?: string }> = [];
+  const fetchImpl: typeof fetch = async (input, init) => {
+    const url = String(input);
+    if (url.includes("file-base64-upload") || url.includes("file-url-upload")) {
+      uploads.push(JSON.parse(String(init?.body ?? "{}")) as { uploadPath?: string; fileName?: string });
+      return jsonResponse(200, { data: { downloadUrl: "https://hosted/ref.png" } });
+    }
+    return jsonResponse(200, { code: 400, msg: "stop" });
+  };
+  const run = () =>
+    kieGenerate(
+      "k",
+      "nano-banana-2-1",
+      { prompt: "p", referenceDataUris: ["data:image/png;base64,AAAA", "data:image/png;base64,BBBB"] },
+      fetchImpl,
+      undefined,
+      noWait,
+    );
+  await assert.rejects(() => Promise.all([run(), run()]), /stop/);
+  assert.equal(uploads.length, 4);
+  const names = uploads.map((upload) => String(upload.fileName));
+  assert.equal(new Set(names).size, 4);
+  for (const upload of uploads) {
+    assert.ok(String(upload.fileName).endsWith(".png"));
+    assert.equal(upload.uploadPath, "image-studio");
+  }
+});
+
 test("kie reference upload and status polling retry 429 and 5xx", async () => {
   const seen: string[] = [];
   let uploads = 0;
