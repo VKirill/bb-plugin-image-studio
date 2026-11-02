@@ -1,0 +1,160 @@
+{
+  "schemaVersion": 1,
+  "status": "accepted",
+  "lanePilotRunId": "lprun_f4d6543242eb4137bb61c05032ec28f0",
+  "lanePilotTaskId": "kie-ref-unique-names",
+  "attemptId": "lpattempt_865668daf3e94101a7e0539fa91be0ba",
+  "pmThreadId": "thr_h9t9t78xrx",
+  "writerThreadId": "thr_2ugh7ampgj",
+  "ownsPaths": [
+    "src/providers.ts",
+    "tests/providers.test.ts",
+    "package.json"
+  ],
+  "readFirst": [
+    {
+      "path": "src/providers.ts",
+      "windows": []
+    },
+    {
+      "path": "tests/providers.test.ts",
+      "windows": []
+    },
+    {
+      "path": "package.json",
+      "windows": []
+    }
+  ],
+  "output": "All contract checks pass. Done.\n\n**Changed paths:**\n- `src/providers.ts` — `kieUploadReference` now builds `fileName` as `ref-${index}-${randomUUID()}.png` (`randomUUID` imported from `node:crypto`, same as `src/journal.ts`). `uploadPath`, the base64/url endpoint split, retry and error handling untouched; fal path untouched.\n- `tests/providers.test.ts` — new test \"concurrent kie jobs upload references under unique names\": two `Promise.all`-concurrent `kieGenerate` calls with two base64 references each; the fake fetch captures upload bodies and asserts four distinct `.png` names under `uploadPath` \"image-studio\".\n- `package.json` — version `0.10.3` → `0.10.4`.\n\n**Verification:** all three contract commands exit 0; the full `providers.test.ts` suite passes 20/20.\n\n**Heads-up:** `tests/web-panel.test.ts:83` asserts `\"version\": \"0.10.3\"`, so the repo-wide `npm test` fails on that stale assertion after the required bump. It's outside owns_paths — needs a follow-up task or a PM-side allowance.\n\n```plan-fact\n[{\"item\":1,\"status\":\"done\",\"evidence\":[\"tests/providers.test.ts:233-261\",\"src/providers.ts:151-152\",\"cmd:node --test --experimental-strip-types --test-name-pattern='concurrent kie jobs upload references under unique names' tests/providers.test.ts\"]},{\"item\":2,\"status\":\"done\",\"evidence\":[\"package.json:3\",\"cmd:grep -q '\\\"version\\\": \\\"0.10.4\\\"' package.json && npx tsc --noEmit\"]}]\n```\n\nAPPROACH: Replaced the index-only upload name with `ref-${index}-${randomUUID()}.png` inside `kieUploadReference`, matching the existing `node:crypto` pattern in `src/journal.ts`; the new test intercepts upload request bodies instead of URLs, and makes createTask fail fast so the concurrency assertion runs without the poll sleep.\n\nLESSON: A version bump in this repo invalidates `tests/web-panel.test.ts`'s hardcoded version assertion; if the bumped file isn't in owns_paths alongside package.json, the full test suite will fail outside the contract's checks.",
+  "verification": [
+    {
+      "command": "grep -q 'concurrent kie jobs upload references under unique names' tests/providers.test.ts",
+      "exitCode": 0,
+      "stdout": "",
+      "stderr": "",
+      "sandboxBackend": "macos-seatbelt",
+      "policySha256": "c0055c67351ab5ca5b88db970b639da560d2bc8de43c923a4d942f33a7af82fc",
+      "workspacePath": "/Users/vechkasov/.lane-pilot/worktrees/lpattempt_865668daf3e94101a7e0539fa91be0ba/bb-plugin-image-studio",
+      "revision": {
+        "head": "797d46205f6c69ab6f39e4b173766b3c8ec83071",
+        "dirty": 3
+      }
+    },
+    {
+      "command": "node --test --experimental-strip-types --test-name-pattern='concurrent kie jobs upload references under unique names' tests/providers.test.ts",
+      "exitCode": 0,
+      "stdout": "✔ concurrent kie jobs upload references under unique names (20.083416ms)\r\nℹ tests 1\r\nℹ suites 0\r\nℹ pass 1\r\nℹ fail 0\r\nℹ cancelled 0\r\nℹ skipped 0\r\nℹ todo 0\r\nℹ duration_ms 145.995583\r\n",
+      "stderr": "",
+      "sandboxBackend": "macos-seatbelt",
+      "policySha256": "eb2095e5856a1f5ec57b8daa5b44bf301d135bb50a1f2a6a2a74f9a7226afb4e",
+      "workspacePath": "/Users/vechkasov/.lane-pilot/worktrees/lpattempt_865668daf3e94101a7e0539fa91be0ba/bb-plugin-image-studio",
+      "revision": {
+        "head": "797d46205f6c69ab6f39e4b173766b3c8ec83071",
+        "dirty": 3
+      }
+    },
+    {
+      "command": "grep -q '\"version\": \"0.10.4\"' package.json && npx tsc --noEmit",
+      "exitCode": 0,
+      "stdout": "\\\u001b[1G\u001b[0K\u001b[1mnpm\u001b[22m \u001b[96mnotice\u001b[39m\r\n\u001b[1mnpm\u001b[22m \u001b[96mnotice\u001b[39m New \u001b[31mmajor\u001b[39m version of npm available! \u001b[31m11.16.0\u001b[39m -> \u001b[34m12.2.1\u001b[39m\r\n\u001b[1mnpm\u001b[22m \u001b[96mnotice\u001b[39m Changelog: \u001b[34mhttps://github.com/npm/cli/releases/tag/v12.2.1\u001b[39m\r\n\u001b[1mnpm\u001b[22m \u001b[96mnotice\u001b[39m To update run: \u001b[4mnpm install -g npm@12.2.1\u001b[24m\r\n\u001b[1mnpm\u001b[22m \u001b[96mnotice\u001b[39m\r\n\\\u001b[1G\u001b[0K",
+      "stderr": "",
+      "sandboxBackend": "macos-seatbelt",
+      "policySha256": "3c3be4a8c9e3a05d13bcf0d084181ca745bcdc693ee96804a256855a24ab8693",
+      "workspacePath": "/Users/vechkasov/.lane-pilot/worktrees/lpattempt_865668daf3e94101a7e0539fa91be0ba/bb-plugin-image-studio",
+      "revision": {
+        "head": "797d46205f6c69ab6f39e4b173766b3c8ec83071",
+        "dirty": 3
+      }
+    }
+  ],
+  "runV2": {
+    "schemaVersion": 1,
+    "pools": {
+      "provider": 15,
+      "verification": 2
+    },
+    "score": 5,
+    "risk": "medium",
+    "sourceRisk": "medium",
+    "scoreAdapter": "task-risk-v1"
+  },
+  "reasoning": [
+    {
+      "planSha256": "2ebadffe98bb57e0124937305879a3fa29d9bc132003a84c153e02e7914ca8cc",
+      "sentPlanSha256": null,
+      "sourceLength": 1419,
+      "sentLength": null,
+      "jevStatus": "disabled",
+      "jevDecision": null,
+      "requestedReasoningLevel": "high",
+      "effectiveReasoningLevel": "high",
+      "fallbackReason": "jev_disabled;jev_disabled_by_project_setting",
+      "retryEffort": {
+        "enabled": false,
+        "retryIndex": 1,
+        "before": "high",
+        "after": "high",
+        "changed": false
+      },
+      "providerId": "devin",
+      "model": "swe-2-high",
+      "serviceTier": null,
+      "requestedServiceTier": "default",
+      "runId": "lprun_f4d6543242eb4137bb61c05032ec28f0",
+      "attemptId": "lpattempt_865668daf3e94101a7e0539fa91be0ba",
+      "threadId": "thr_2ugh7ampgj",
+      "effortMode": "manual",
+      "selectionSource": {
+        "providerId": "devin",
+        "model": "swe-2-high",
+        "reasoningLevel": "high",
+        "serviceTier": null,
+        "reasoningLevelSource": "explicit"
+      },
+      "dispatchContext": {
+        "memoryText": "",
+        "memoryPicked": [],
+        "rulesText": "- In verification scripts and tests that create temp dirs, use /tmp explicitly (mktemp -d /tmp/x.XXXXXX, or TMPDIR=/tmp): the writer sandbox denies mkdtemp in the system TMPDIR under /var/folders. Keep PM-written check scripts in /tmp/<name>/ (the guard blocks .mjs under .agents/).\n- In a folder without git (live-folder mode), never put a task's expected_outputs or owns_paths under .bb/ (chat folders): the live snapshot skips .bb, so a file written there is never counted as produced and the task blocks as missing expected_outputs. Put task deliverables in a project folder such as docs/ or reports/.",
+        "rulesPicked": {
+          "total": 11,
+          "picked": [
+            "rule_501a857c9b1bd60a",
+            "rule_df3e34f2aef5a993"
+          ]
+        },
+        "executionPacket": "Read these before editing; they are the context for this task:\n- src/providers.ts L1-L438 (sha256 15e93986)\n- tests/providers.test.ts L1-L355 (sha256 c1ad4d8c)",
+        "executionPacketSha256": "ace7e1c2a3d69050ffcd6367862d6ce0b1c1b24a9e594ddafe6f31aedfce0774",
+        "pmReadContext": "This packet covers task 'kie-ref-unique-names' in the bb-plugin-image-studio repository. The objective is to ensure that concurrent kie generation jobs upload reference images under unique filenames so they do not collide or swap references. In src/providers.ts, kieUploadReference currently hardcodes fileName as `ref-${index}.png` within uploadPath 'image-studio'. When multiple kieGenerate calls run concurrently, each job uploads its references using identical index-based names (e.g., ref-0.png, ref-1.png) to https://kieai.redpandaai.co/api/file-base64-upload or file-url-upload, creating race conditions and reference overwrites on the hosting server. Invariants require that uploaded file names retain the '.png' extension, retry/error handling in kieUploadReference remain unchanged, and fal generation/upload paths remain untouched. Acceptance requires adding a passing test in tests/providers.test.ts named 'concurrent kie jobs upload references under unique names' verifying four distinct .png filenames across two concurrent jobs, and bumping package.json to version 0.10.4.",
+        "agent": "Lane Pilot writer",
+        "promptChars": 9986,
+        "helperMode": "roles",
+        "helperRequired": false,
+        "skillPick": {
+          "enabled": true,
+          "skills": [],
+          "picked": [],
+          "craft": [],
+          "projectFolder": [],
+          "hints": [],
+          "sources": {},
+          "reason": "pick_timeout",
+          "materialized": []
+        },
+        "writerKey": "devin/swe-2-high",
+        "harness": {
+          "id": "hrn_b904141b6e344f3b",
+          "arm": null,
+          "alwaysOnChars": 0,
+          "skills": [],
+          "checks": [],
+          "materialize": null
+        }
+      }
+    }
+  ],
+  "emergencyFallback": null,
+  "warnings": [
+    "the writer changed tests that existed before the attempt (reference tests): tests/providers.test.ts — the code critic reviews them in gate mode"
+  ],
+  "turns": 1
+}
